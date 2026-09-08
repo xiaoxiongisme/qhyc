@@ -1,0 +1,85 @@
+# =====================================================
+# §16 跨品种/跨大类传导配置（PRD v1.2）
+# - sectors: 大类分类（覆盖全部目标品种）
+# - chains:  产业链先验链路（方向/时滞档/强度档 0-1/成本占比参考）
+# - index:   大类指数合成方法
+# =====================================================
+
+index:
+  weight_method: volume       # 成交额加权不可行（daily_bar.amount 为空）→ 成交量加权，可配置 equal
+  base_level: 1000            # 指数基期水平
+  momentum_windows: [5, 20]   # 动量窗口（根数）
+  min_members: 3              # 板块成员少于该数不成指数
+
+transmission:
+  topk_upstream: 3            # §16.3 upstream top-k（默认 k=3）
+  corr_window: 60             # sector_corr_regime 窗口
+
+sectors:
+  black:
+    name: 黑色系
+    products: [RB, HC, I, JM, J, SF, SM, SS]
+    roles: { I: upstream, JM: upstream, J: midstream, RB: downstream, HC: downstream, SF: midstream, SM: upstream, SS: downstream }
+  energy_chem:
+    name: 化工能源
+    products: [SC, FU, LU, BU, TA, PX, EG, MA, PP, L, V, EB, SA, FG, UR, RU, NR, SP, SH, PR]
+    roles: { SC: upstream, PX: midstream, TA: downstream, FU: downstream, LU: downstream, BU: downstream, SA: upstream, FG: downstream, MA: midstream, EG: midstream, PP: midstream, L: midstream, V: midstream, EB: midstream, UR: midstream, RU: midstream, NR: midstream, SP: midstream, SH: midstream, PR: downstream }
+  agri:
+    name: 农产品
+    products: [A, B, M, Y, P, RM, OI, C, CS, SR, CF, CY, AP, CJ, PK, LH, JD]
+    roles: { A: upstream, B: upstream, C: upstream, M: midstream, Y: midstream, P: midstream, RM: midstream, OI: midstream, CS: downstream, SR: midstream, CF: upstream, CY: downstream, AP: midstream, CJ: midstream, PK: midstream, LH: downstream, JD: midstream }
+  nonferrous:
+    name: 有色/新能源金属
+    products: [CU, AL, ZN, PB, NI, SN, AO, SI, PS, LC, BC]
+    roles: { CU: midstream, AL: midstream, ZN: midstream, PB: midstream, NI: midstream, SN: midstream, AO: upstream, SI: midstream, PS: downstream, LC: downstream, BC: midstream }
+  precious:
+    name: 贵金属
+    products: [AU, AG]
+    roles: { AU: upstream, AG: midstream }
+  financial:
+    name: 金融期货
+    products: [IF, IH, IC, IM, T, TF, TS, TL]
+    roles: {}
+    predict_enabled: false     # §16.1 默认不纳入本轮预测范围（开关可开）
+
+# 产业链先验链路（§16.2 第 1 层）
+# 每条：src→dst, lag_days(0=当日/1/5), strength(0-1), cost_ratio(成本占比参考，可空)
+# 方向默认 positive（同向传导：成本推动/替代/需求拉动）
+chains:
+  # --- 成本链：原油系 ---
+  - { src: SC, dst: FU, lag_days: 1, strength: 0.80, cost_ratio: 0.60 }
+  - { src: SC, dst: LU, lag_days: 1, strength: 0.75, cost_ratio: 0.60 }
+  - { src: SC, dst: BU, lag_days: 1, strength: 0.70, cost_ratio: 0.50 }
+  - { src: SC, dst: PX, lag_days: 1, strength: 0.60, cost_ratio: 0.60 }
+  - { src: PX, dst: TA, lag_days: 1, strength: 0.70, cost_ratio: 0.70 }
+  - { src: SC, dst: EG, lag_days: 1, strength: 0.40, cost_ratio: 0.40 }
+  - { src: SC, dst: RU, lag_days: 1, strength: 0.35, cost_ratio: 0.30 }
+  - { src: RU, dst: NR, lag_days: 1, strength: 0.80, cost_ratio: 0.80 }
+  # --- 成本链：煤焦钢 ---
+  - { src: JM, dst: J, lag_days: 1, strength: 0.80, cost_ratio: 0.75 }
+  - { src: J, dst: RB, lag_days: 1, strength: 0.45, cost_ratio: 0.30 }
+  - { src: I, dst: RB, lag_days: 1, strength: 0.60, cost_ratio: 0.45 }
+  - { src: I, dst: HC, lag_days: 1, strength: 0.60, cost_ratio: 0.45 }
+  - { src: JM, dst: SF, lag_days: 1, strength: 0.45, cost_ratio: 0.40 }
+  - { src: JM, dst: SM, lag_days: 1, strength: 0.45, cost_ratio: 0.40 }
+  # --- 成本链：纯碱→玻璃（PRD 明确）---
+  - { src: SA, dst: FG, lag_days: 1, strength: 0.70, cost_ratio: 0.30 }
+  - { src: SA, dst: SH, lag_days: 1, strength: 0.40, cost_ratio: 0.30 }
+  # --- 成本链：农产品压榨 ---
+  - { src: B, dst: M, lag_days: 1, strength: 0.60, cost_ratio: 0.80 }
+  - { src: A, dst: M, lag_days: 1, strength: 0.30, cost_ratio: 0.30 }
+  - { src: B, dst: Y, lag_days: 1, strength: 0.45, cost_ratio: 0.60 }
+  - { src: C, dst: CS, lag_days: 1, strength: 0.80, cost_ratio: 0.90 }
+  # --- 替代/互补 ---
+  - { src: M, dst: RM, lag_days: 0, strength: 0.70, cost_ratio: null }
+  - { src: Y, dst: P, lag_days: 0, strength: 0.70, cost_ratio: null }
+  - { src: Y, dst: OI, lag_days: 0, strength: 0.60, cost_ratio: null }
+  - { src: P, dst: OI, lag_days: 0, strength: 0.55, cost_ratio: null }
+  - { src: RB, dst: HC, lag_days: 0, strength: 0.80, cost_ratio: null }
+  - { src: AU, dst: AG, lag_days: 1, strength: 0.80, cost_ratio: null }
+  - { src: CU, dst: AL, lag_days: 1, strength: 0.50, cost_ratio: null }
+  - { src: FG, dst: PR, lag_days: 1, strength: 0.50, cost_ratio: 0.60 }
+  # --- 需求反馈（下游需求 → 上游原料，滞后 5 日档）---
+  - { src: RB, dst: I, lag_days: 5, strength: 0.40, cost_ratio: null }
+  - { src: FG, dst: SA, lag_days: 5, strength: 0.30, cost_ratio: null }
+  - { src: TA, dst: PX, lag_days: 5, strength: 0.30, cost_ratio: null }

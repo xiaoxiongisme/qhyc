@@ -1,0 +1,85 @@
+# =====================================================
+# 期货预测平台 - 本地编排（PRD §9 / §14.1）
+# 三容器：timescaledb + python-api + python-scheduler
+# 云端用 docker-compose.cloud.yml 复用同一镜像，仅替换配置
+# =====================================================
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.17.1-pg16
+    container_name: qhyc-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TS_TUNE_MEMORY: 2
+      TS_TUNE_NUM_CPUS: 2
+    command:
+      - "postgres"
+      - "-cshared_buffers=1GB"
+      - "-cwork_mem=64MB"
+      - "-cmaintenance_work_mem=512MB"
+      - "-cmax_connections=100"
+      - "-cwal_compression=on"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: qhyc-api
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: timescaledb
+      ROLE: api
+    volumes:
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+      - ./config:/app/config:ro   # 配置热更新（改 yaml 免重建）
+      # 本地历史数据：把 E:\QH 挂到容器 /app/imports（PRD §4.5）
+      # 子目录形如 /app/imports/FG/data/FG_daily.json
+      - ${LOCAL_QH_PATH:-./imports}:/app/imports:ro
+    ports:
+      - "${API_PORT:-8000}:8000"
+    command: ["python", "-m", "app.main"]
+
+  scheduler:
+    build: .
+    container_name: qhyc-scheduler
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      api:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: timescaledb
+      ROLE: scheduler
+      RUN_ON_BOOT: "0"   # 数据已就绪，避免每次重启重复全量回补（定时任务照常）
+    volumes:
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+      - ./config:/app/config:ro
+      - ${LOCAL_QH_PATH:-./imports}:/app/imports:ro
+    # scheduler 不监听端口，禁用继承自 Dockerfile 的 HTTP 健康检查
+    healthcheck:
+      disable: true
+    command: ["python", "-m", "app.scheduler"]
+
+networks:
+  default:
+    name: qhyc
