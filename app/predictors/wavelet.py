@@ -48,6 +48,7 @@ class WaveletModel(BaseModel):
             phi = float(np.cov(a, b)[0, 1] / var_a)
             intercept = float(b.mean() - phi * a.mean())
         point = intercept + phi * smooth[-1]
-        resid = b - (intercept + phi * a)
-        # 审计 P1-3：AR(1) 残差经验分位区间
-        return self._from_empirical_resid(self.name, point, resid)
+        # 审计 P1-3 复验修正：平滑序列残差远小于真实收益波动（尺度脱节，
+        # qhit 仅 0.21）→ 区间改用**原始收益无条件经验分位**（天然覆盖 ~90%）
+        lo, hi = np.quantile(x, [0.05, 0.95])
+        return self._from_quantiles(self.name, point, point + lo, point + hi)

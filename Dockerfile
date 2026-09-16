@@ -1,7 +1,20 @@
 # =====================================================
-# 期货预测平台 - Python API 镜像（含 APScheduler）
-# 基础镜像：python:3.11-slim（兼容 akshare/tqsdk）
+# 期货预测平台 - 多阶段构建
+# Stage 1: node 构建 React 看板（M5）
+# Stage 2: python API（含静态托管看板）
 # =====================================================
+
+# ---------- Stage 1: 看板构建 ----------
+FROM node:20-alpine AS webbuilder
+WORKDIR /build
+# 依赖先行（缓存层）；国内网络走 npmmirror，可用 --build-arg 覆盖
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+COPY web/package.json web/package-lock.json* ./
+RUN npm config set registry ${NPM_REGISTRY} && npm install
+COPY web/ ./
+RUN npm run build
+
+# ---------- Stage 2: Python API ----------
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -35,6 +48,8 @@ RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
 COPY app ./app
 COPY scripts ./scripts
 COPY config ./config
+# M5 看板静态文件（Stage 1 构建产物）
+COPY --from=webbuilder /build/dist ./web/dist
 
 # 运行用户（非 root）
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app

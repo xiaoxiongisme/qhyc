@@ -12,15 +12,29 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.logging import logger, setup_logging
 from app.ingest.orchestrator import IngestOrchestrator
 from app.repositories.task_repo import TaskRepository
+from app.core.db import get_engine
+from app.strategies.fusion_signal import (
+    ensure_fusion_table,
+    evaluate_all,
+    get_position,
+    set_push_state,
+    upsert_position,
+    POS_MAP,
+    FusionPosition,
+    FusionPushLog,
+)
+from app.notify import send_notify
 
 
 def _predict_job(session, symbols: list[str], label: str) -> int:
@@ -61,6 +75,20 @@ def _ingest_job(label: str) -> None:
                 f"[scheduler] ingest done label={label} status={status} "
                 f"total={len(reports)} failed={len(failed)}"
             )
+            # ⑪ 收盘后联动：在线小时线采集（akshare 主源 + tqsdk 兜底，幂等 upsert）
+            if label == "close":
+                try:
+                    from app.ingest.hourly_collector import HourlyCollector
+
+                    hc = HourlyCollector(s)
+                    h_stats = hc.collect_all()
+                    h_ok = sum(1 for r in h_stats if "error" not in r)
+                    logger.info(
+                        f"[scheduler] hourly collection done label=close: {h_ok}/{len(h_stats)} symbols"
+                    )
+                except Exception as he:
+                    logger.warning(f"[scheduler] hourly collection failed: {he}")
+
             # §16 大类指数更新（M2 排期）：分类同步 → 指数合成（增量重算）
             try:
                 from app.sectors.builder import build_sector_index, sync_sector_map
@@ -87,6 +115,673 @@ def _ingest_job(label: str) -> None:
     except Exception as e:
         logger.exception(f"[scheduler] ingest job failed label={label}: {e}")
 
+
+def _fusion_action(db: str, eng: str) -> str:
+    if db == "FLAT" and eng == "LONG":
+        return "买（开多）"
+    if db == "FLAT" and eng == "SHORT":
+        return "卖（开空）"
+    if db == "LONG" and eng == "FLAT":
+        return "平（平多）"
+    if db == "SHORT" and eng == "FLAT":
+        return "平（平空）"
+    if db == "LONG" and eng == "SHORT":
+        return "平多+反手开空"
+    if db == "SHORT" and eng == "LONG":
+        return "平空+反手开多"
+    return "状态变化"
+
+
+def _decimals(tick: float) -> int:
+    s = repr(float(tick))
+    return len(s.split(".")[1]) if "." in s else 0
+
+
+# 品种最小变动价位（用于推送价位对齐交易所报价，避免 6420.75 这种不存在的价）
+_TICKS = {
+    "FG": 1, "SA": 1, "SR": 1, "CF": 5, "TA": 2, "MA": 1, "RM": 1, "OI": 1,
+    "AP": 1, "UR": 1, "SH": 1, "PX": 2, "SF": 2, "SM": 2,
+    "CU": 10, "AL": 5, "ZN": 5, "PB": 5, "NI": 10, "SN": 10, "AU": 0.02,
+    "AG": 1, "RB": 1, "SS": 5, "FU": 1, "BU": 1, "RU": 5, "SP": 2, "AO": 1, "HC": 1,
+    "SC": 0.1, "SI": 5, "LC": 20,
+    "A": 1, "B": 1, "M": 1, "Y": 2, "P": 2, "C": 1, "CS": 1, "JD": 1,
+    "L": 1, "V": 1, "PP": 1, "J": 0.5, "JM": 0.5, "I": 0.5, "EG": 1, "EB": 1, "LH": 5,
+}
+_PX_DEC = {k: _decimals(v) for k, v in _TICKS.items()}
+
+
+def _fmt_num(x, nd: int = 1) -> str:
+    if x is None:
+        return "-"
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{v:,.{nd}f}"
+
+
+def _px_of(sym: str, val) -> str:
+    """按品种最小变动价位给价（缺失则退化为 2 位/自适应）。"""
+    if val is None:
+        return "-"
+    try:
+        v = float(val)
+    except (TypeError, ValueError):
+        return "-"
+    nd = _PX_DEC.get(str(sym or "").rstrip("0123456789").upper())
+    if nd is None:
+        nd = 2 if abs(v) < 10000 else 1
+    return f"{v:,.{nd}f}"
+
+
+def _side_tag(side: str) -> str:
+    # 国内习惯：多=红、空=绿
+    return "🔴多" if side == "LONG" else "🟢空"
+
+
+def _nm(sym: str, names: dict[str, str]) -> str:
+    """品种显示名：品种码 + 中文名（如 “FG 玻璃”）。名称缺失时只显示品种码。
+
+    sym 是完整合约码（FG888），展示用去掉尾部数字的品种码（FG）。
+    """
+    code = str(sym or "").rstrip("0123456789")
+    n = (names or {}).get(sym)
+    if n and str(n) != code:
+        return f"{code} {n}"
+    return code or str(sym)
+
+
+def _norm_hm(s: str) -> str:
+    """'9:5' -> '09:05'，统一成两位便于字符串比较。"""
+    h, m = s.strip().split(":")
+    return f"{int(h):02d}:{int(m):02d}"
+
+
+def in_push_window(now: datetime, windows: list[str] | None) -> bool:
+    """当前本地时间是否落在任一推送窗口内。
+
+    windows 形如 ["08:45-12:00", "13:15-15:30", "20:45-23:30"]；
+    空/None 表示不限制（任何时刻都可推）。
+    窗口外整个扫描直接跳过——既不在用户睡觉时推送，也能让"隔夜/跨窗口"的状态变化
+    在下一个窗口首次扫描时被合并成一条推出去，而不是被静默记录后又无声吞掉。
+    """
+    if not windows:
+        return True
+    hm = now.strftime("%H:%M")
+    for w in windows:
+        try:
+            a, b = str(w).split("-")
+            a, b = _norm_hm(a), _norm_hm(b)
+        except (ValueError, AttributeError):
+            continue
+        if a <= hm <= b:
+            return True
+    return False
+
+
+def _is_at(now: datetime, times: list[str] | None, tol_min: int = 7) -> bool:
+    """当前时刻是否命中给定时刻表（用于盘前三档强制推送）。"""
+    if not times:
+        return False
+    for t in times:
+        try:
+            h, m = _norm_hm(t).split(":")
+            anchor = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+        except (ValueError, AttributeError):
+            continue
+        if abs((now - anchor).total_seconds()) <= tol_min * 60:
+            return True
+    return False
+
+
+# -----------------------------------------------------
+# 交易日日历（节假日不推送；用 akshare 交易日历，缓存到 runtime/）
+# -----------------------------------------------------
+_CAL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "runtime",
+                         "trade_calendar.json")
+
+
+def _load_trade_calendar(max_age_days: int = 7) -> set[str]:
+    """读取交易日历（'YYYY-MM-DD' 集合）。优先本地缓存，超过 max_age_days 则刷新。
+
+    任何网络/解析失败都退化为空集合 —— 此时只靠「周末判断」兜底，不影响主流程。
+    """
+    import json
+
+    cached: set[str] = set()
+    try:
+        if os.path.exists(_CAL_PATH):
+            with open(_CAL_PATH, "r", encoding="utf-8") as f:
+                blob = json.load(f)
+            cached = set(blob.get("dates") or [])
+            ts = float(blob.get("ts") or 0)
+            if cached and (time.time() - ts) < max_age_days * 86400:
+                return cached
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[fusion] 交易日历缓存读取失败: {e}")
+    try:
+        import akshare as ak
+
+        df = ak.tool_trade_date_hist_sina()
+        dates = {str(d)[:10] for d in df["trade_date"].tolist()}
+        if dates:
+            os.makedirs(os.path.dirname(_CAL_PATH), exist_ok=True)
+            with open(_CAL_PATH, "w", encoding="utf-8") as f:
+                json.dump({"ts": time.time(), "dates": sorted(dates)}, f)
+            logger.info(f"[fusion] 交易日历已刷新：{len(dates)} 个交易日")
+        return dates
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[fusion] 交易日历获取失败（退化为仅周末判断）: {e}")
+        return cached
+
+
+def is_trading_day(now: datetime) -> bool:
+    """是否交易日。周末直接否；有日历则查日历，无日历则视为交易日（仅周末过滤）。"""
+    if now.weekday() >= 5:
+        return False
+    cal = _load_trade_calendar()
+    if cal:
+        return now.strftime("%Y-%m-%d") in cal
+    return True
+
+
+
+def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
+                    stale_minutes: int) -> list[dict]:
+    """从评估结果里挑出「非空仓 且 数据新鲜」的品种，算好止损/保本位。
+
+    数据新鲜=最新小时K距今 <= stale_minutes；常规播报用 90 分钟把休市时段排除；
+    盘前播报（08:45 等）用放宽阈值，否则夜盘 23:00 收盘到早盘 585 分钟的间隔
+    会把所有持仓都过滤光。
+    """
+    rows = []
+    for r in results:
+        if r.get("error") or r.get("state") in (0, None):
+            continue
+        latest = r.get("latest_dt")
+        if latest is None:
+            continue
+        lt = latest.replace(tzinfo=None) if getattr(latest, "tzinfo", None) else latest
+        age_min = (now - lt).total_seconds() / 60.0
+        if age_min > stale_minutes:
+            continue
+        sym = r["symbol"]
+        side = POS_MAP.get(r["state"], "FLAT")
+        entry = r.get("entry_px")
+        px = r.get("latest_close")
+        pnl = None
+        if entry and px:
+            pnl = (px - entry) / entry if side == "LONG" else (entry - px) / entry
+        rows.append({
+            "symbol": sym,
+            "name": names.get(sym, sym),
+            "label": _nm(sym, names),          # “FG 玻璃”
+            "icon": "🔴" if side == "LONG" else "🟢",
+            "side": side,
+            "entry": entry,
+            "px": px,
+            "pnl": pnl,
+            "stop": r.get("cur_stop"),
+            "be_trigger": r.get("be_trigger"),
+            "be_done": bool(r.get("be_done")),
+            "atr": r.get("entry_atr"),
+            "risk_px": (abs(float(entry) - float(r["init_stop"]))
+                        if (entry is not None and r.get("init_stop") is not None)
+                        else None),
+            "risk_atr": 2.0,
+            "age_min": age_min,
+            "latest_dt": lt,
+        })
+    return rows
+
+
+def _row_line(r: dict, show_levels: bool) -> str:
+    """持仓一览的一行（紧凑）：方向 + 代码 名称 + 入场→现价 + 浮盈% [+ 止损/保本]。
+
+    单根K超过 1 天（隔夜/周末/长假）时在行尾标注数据时间，避免误以为是最新价。
+    """
+    sym = r["symbol"]
+    pnl = f"{r['pnl']:+.1%}" if r["pnl"] is not None else "-"
+    line = (f"{r['icon']} {r['label']} "
+            f"{_px_of(sym, r['entry'])}→{_px_of(sym, r['px'])} {pnl}")
+    if show_levels:
+        if r["stop"] is not None:
+            line += f" ｜⛔{_px_of(sym, r['stop'])}"
+        if r["be_done"]:
+            line += " 🎯✅"
+        elif r["be_trigger"] is not None:
+            line += f" 🎯{_px_of(sym, r['be_trigger'])}"
+    if (r.get("age_min") or 0) > 1440:
+        line += f" ⏱{r['latest_dt']:%m-%d %H:%M}"
+    return line
+
+
+def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
+                 pending: list[dict], now: datetime, *, kind: str, max_rows: int,
+                 show_levels: bool, data_asof: str | None = None) -> tuple[str, str]:
+    """渲染推送正文（不发送）。返回 (title, content)。
+
+    三段式，按"越靠上越需要动作"排序；无内容的段自动省略：
+      ① 🚨 新信号   —— 开/平/反手，附 ⛔止损 / 🎯保本触发
+      ② ⚠️ 止损变动 —— 吊灯止损上移、首次触发保本（可选推项）
+      ③ 📋 持仓一览 —— 一行一个品种（代码 + 中文名）
+    另加 ⏳ 待执行：近 signal_repeat_min 分钟内的开仓信号复提（防漏看）。
+    kind: presession / signal / heartbeat
+    """
+    n_long = sum(1 for r in rows if r["side"] == "LONG")
+    n_short = len(rows) - n_long
+    if kind == "presession":
+        head = "🌅 盘前持仓"
+    elif signals:
+        head = "🚨 融合策略信号"
+    else:
+        head = "📊 持仓简报"
+    lines = [f"## {head} {now:%m-%d %H:%M}", ""]
+    if rows:
+        seg = f"持仓 **{len(rows)}** 个（多{n_long} 空{n_short}）"
+        if data_asof:
+            seg += f" ｜ 数据截至 {data_asof}"
+        lines.append(seg)
+        lines.append("")
+
+    if signals:
+        opens = [x for x in signals if x.get("to") and x["to"] != "FLAT"]
+        closes = [x for x in signals if x.get("action", "").startswith("平")]
+        others = [x for x in signals if x not in opens and x not in closes]
+        for title, group in (("开仓", opens), ("平仓", closes), ("其他", others)):
+            if not group:
+                continue
+            lines.append(f"### 🚨 {title} {len(group)} 个")
+            for sig in group:
+                sym = sig["symbol"]
+                a = sig["action"]
+                icon = "🔴" if "开多" in a else ("🟢" if "开空" in a else "🟡")
+                entry_px = sig.get("new_entry") or sig.get("close")
+                line = f"{icon} {sig['label']}　{a} @ {_px_of(sym, entry_px)}"
+                lines.append(line)
+                if sig.get("levels"):
+                    lv = sig["levels"]
+                    lines.append(
+                        f"　　⛔ 止损 {_px_of(sym, lv['stop'])} ｜ 🎯 保本 {_px_of(sym, lv['be_trigger'])}"
+                    )
+            lines.append("")
+
+    if changes:
+        lines.append(f"### ⚠️ 止损变动 {len(changes)} 个")
+        for c in changes:
+            sym = c["symbol"]
+            if c["kind"] == "be":
+                lines.append(f"✅ {c['label']}　已挂保本 · 止损提到 {_px_of(sym, c['new'])}")
+            else:
+                lines.append(
+                    f"↑ {c['label']}　止损 {_px_of(sym, c['old'])} → **{_px_of(sym, c['new'])}**"
+                )
+        lines.append("")
+
+    if pending:
+        lines.append(f"### ⏳ 待执行（{len(pending)} 个）")
+        for p in pending:
+            icon = "🔴" if p["side"] == "LONG" else "🟢"
+            verb = "开多" if p["side"] == "LONG" else "开空"
+            lines.append(
+                f"{icon} {p['label']}　{verb} @ {_px_of(p['symbol'], p['entry'])}"
+                f"（{p['at']:%H:%M} 推送，如已执行请忽略）"
+            )
+        lines.append("")
+
+    if rows:
+        shown = sorted(rows, key=lambda x: (0 if x["side"] == "LONG" else 1, x["symbol"]))
+        if len(shown) > max_rows:
+            shown = shown[:max_rows]
+        lines.append("### 📋 持仓一览")
+        for r in shown:
+            lines.append(_row_line(r, show_levels))
+        if len(rows) > max_rows:
+            lines.append(f"…另有 {len(rows) - max_rows} 个未列")
+        lines.append("")
+        lines.append("> ⛔止损=入场∓2×ATR 与吊灯止损取更紧者；🎯触发保本后止损提到成本价。")
+    elif not signals and not changes:
+        lines.append("当前无持仓、无信号。")
+
+    content = "\n".join(lines).rstrip()
+    parts = [now.strftime("%H:%M")]
+    if signals:
+        parts.append(f"信号{len(signals)}")
+    if changes:
+        parts.append(f"止损{len(changes)}")
+    if rows:
+        parts.append(f"持仓{len(rows)}")
+    title = "融合策略 " + "·".join(parts)
+    return title, content
+
+
+def _deliver(s, title: str, content: str, now: datetime, *, kind: str,
+             n_signals: int, n_rows: int, settings) -> bool:
+    """发送（主通道→备用通道）+ 推送留痕。返回是否送达。"""
+    ok, via = send_notify(title, content, settings.fusion.fallback_webhook)
+    if not ok:
+        logger.warning(f"[fusion] 推送未送达: {title}")
+    if settings.fusion.push_log:
+        try:
+            s.add(FusionPushLog(
+                pushed_at=datetime.now(timezone.utc),
+                kind=kind, title=title, content=content,
+                n_signals=n_signals, n_rows=n_rows,
+                delivered=bool(ok), via=via,
+            ))
+            s.flush()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[fusion] 推送留痕失败: {e}")
+    return ok
+
+
+def _push_startup_notice(s, n_symbols: int, now: datetime, settings) -> None:
+    """冷启动：只发一条极简上线通知（不列方向清单，避免与'新信号'混淆）"""
+    f = settings.fusion
+    content = "\n".join([
+        "## 融合策略监控已启动",
+        f"时间：{now:%Y-%m-%d %H:%M}",
+        f"已记录 **{n_symbols}** 个品种的当前持仓基准。",
+        "",
+        "> 推送形态：**开/平/反手信号**即时推（附 ⛔止损 / 🎯保本位），"
+        "**吊灯止损上移**≥0.5×ATR 补推，**盘前**（" + " / ".join(f.pre_session_times) + "）"
+        "与盘中每 30 分钟各一份持仓清单。",
+        "> 推送时段：" + " ｜ ".join(f.push_windows) + "；非交易日静默。",
+        "> 同一笔开仓信号会在 2 小时内的每份简报里重复置顶，直到出现平仓/反手，避免你漏看。",
+        "> 之前已持有的仓位属于历史信号，不会重复提醒。",
+    ])
+    _deliver(s, f"融合策略已启动 {now:%H:%M}", content, now, kind="startup",
+             n_signals=0, n_rows=n_symbols, settings=settings)
+
+
+
+def _collect_hourly_settled(s, f) -> None:
+    """采集小时线，并对「刚收盘的那根K」做定稿复核（防用未定稿收盘价推信号）。
+
+    起因（2026-09-15 JD 案例）：09:00-10:00 这根K在 10:00:00 收盘，而我们在 10:00:20
+    就采集了 —— 数据源（新浪分钟线）此时还没定稿，返回 close=3814；1~2 分钟后被改写为 3810。
+    后果：推送的入场价 3814 / 止损 3870 / 保本 3800 全套平移 4 点，用户在盘面上"找不到这个价"
+    （他自己看的是定稿后的 3810），方向虽未变，但价位全部对不上。
+
+    对策：若库中最新的小时K距当前时间不足 settle_delay_sec 秒，说明它可能尚未定稿
+    —— 等够该秒数后再重采一次，用重采值覆盖。并在值确实被改写时留下告警日志，
+    便于长期观测这个"数据源定稿漂移"的规模。
+    """
+    from app.ingest.hourly_collector import HourlyCollector
+
+    hc = HourlyCollector(s)
+    hc.collect_all(data_length=800)
+
+    settle = int(getattr(f, "settle_delay_sec", 0) or 0)
+    if settle <= 0:
+        return
+    mx = s.execute(text("select max(trade_datetime) from hourly_bar")).scalar()
+    if mx is None:
+        return
+    mxt = mx.replace(tzinfo=None) if getattr(mx, "tzinfo", None) else mx
+    age = (datetime.now() - mxt).total_seconds()
+    if not (0 <= age < settle):
+        return
+
+    # 定稿指纹：同一时刻所有品种的 (根数, close 总和)
+    fp = lambda: s.execute(  # noqa: E731
+        text("select count(*), coalesce(sum(close),0) from hourly_bar where trade_datetime = :d"),
+        {"d": mx},
+    ).one()
+    fp1 = fp()
+    wait = settle - age + 3
+    logger.info(f"[fusion] 最新K({mxt:%Y-%m-%d %H:%M}) 刚收盘 {age:.0f}s，等 {wait:.0f}s 定稿后重采")
+    time.sleep(wait)
+    try:
+        hc.collect_all(data_length=800)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[fusion] 定稿重采失败（沿用首采值）: {e}")
+        return
+    fp2 = fp()
+    if fp1 != fp2:
+        logger.warning(
+            f"[fusion] ⚠ 定稿复核：{mxt:%Y-%m-%d %H:%M} 这根K的值被数据源改写了 "
+            f"(根数/收盘和 {fp1} → {fp2})，首采值已覆盖为定稿值"
+        )
+    else:
+        logger.info(f"[fusion] 定稿复核通过：{mxt:%Y-%m-%d %H:%M} 首采值即为定稿值")
+
+
+def _fusion_scan_job() -> None:
+    """融合策略扫描（每 15 分钟一次，与每日三次 ingest 并行，互不影响）。
+
+    推送形态（2026-09-15 定稿）：
+      - 🚨 新信号：开仓 / 平仓 / 反手即时推，附 ⛔止损位 / 🎯保本触发价
+      - ⚠️ 止损变动：吊灯止损朝有利方向移动 ≥ trail_push_atr×ATR 时补推
+      - 🌅 盘前预播报：08:45 / 13:15 / 20:45 强制推，带完整止损/保本位
+      - 📊 定时简报：交易时段内每 heartbeat_interval_min 分钟一档（对齐 :00 / :30）
+      - ⏳ 待执行复提：开仓信号在 signal_repeat_min 分钟内每轮重复置顶，防漏看
+    非交易日 / 非推送窗口整轮冻结（不采集、不评估、不更新状态）。
+    """
+    logger.info("[scheduler] fusion scan start")
+    try:
+        settings = get_settings()
+        f = settings.fusion
+        if not f.enabled:
+            return
+        now = datetime.now()
+        now_utc = datetime.now(timezone.utc)
+        names = {x.symbol: x.name for x in settings.main_contracts}
+        with session_scope() as s:
+            ensure_fusion_table(get_engine())
+            # 0) 闸门：非交易日 / 非推送窗口 → 整轮跳过。
+            #    冷启动是例外——表为空时无论几点都要把基线建起来，否则永远建不了基线。
+            is_cold_probe = s.query(FusionPosition).count() == 0
+            if not is_cold_probe:
+                if not is_trading_day(now):
+                    logger.info(f"[scheduler] fusion scan {now:%m-%d %H:%M} 非交易日，跳过")
+                    return
+                if not in_push_window(now, f.push_windows):
+                    logger.info(f"[scheduler] fusion scan {now:%H:%M} 非推送时段，跳过")
+                    return
+            # 1) 拉最新小时线（akshare 新浪60分钟线免费；失败则 tqsdk 兜底，再失败沿用已有数据）
+            #    只取尾部 ~800 根：足够覆盖 max_bars(400) + min_bars(160)，
+            #    避免每 15 分钟都做一次 8000 根的全历史回填（那是分钟级耗时）
+            try:
+                _collect_hourly_settled(s, f)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[scheduler] hourly collect failed (沿用已有数据): {e}")
+            # 2) 评估全部品种（含入场价/入场ATR/止损位等明细）
+            results = evaluate_all(s, settings.main_contracts, f)
+            is_cold = s.query(FusionPosition).count() == 0
+            is_pre = _is_at(now, f.pre_session_times)
+
+            signals: list[dict] = []
+            changes: list[dict] = []
+            for r in results:
+                if r.get("error"):
+                    continue
+                sym = r["symbol"]
+                label = _nm(sym, names)
+                eng = POS_MAP.get(r["state"], "FLAT")
+                # 冷启动：无条件以引擎当前状态建立基线（即便数据陈旧），否则基线永远建不起来
+                if is_cold:
+                    upsert_position(
+                        s, sym, eng,
+                        entry_price=r.get("entry_px") or r.get("latest_close"),
+                        entry_at=now,
+                    )
+                    set_push_state(
+                        s, sym,
+                        last_stop=(r.get("cur_stop") if eng != "FLAT" else None),
+                        last_be_done=(bool(r.get("be_done")) if eng != "FLAT" else False),
+                        signal_at=None, pushed_at=None,
+                    )
+                    continue
+                old = s.get(FusionPosition, sym)
+                db = old.position if old is not None else "FLAT"
+                db_entry = (float(old.entry_price)
+                            if (old is not None and old.entry_price is not None) else None)
+                # 数据新鲜度：陈旧K不产生任何信号/价位（防用过期数据触发）
+                latest = r.get("latest_dt")
+                age_min = None
+                if latest is not None:
+                    lt = latest.replace(tzinfo=None) if latest.tzinfo else latest
+                    age_min = (now - lt).total_seconds() / 60.0
+                fresh = (age_min is None) or (age_min <= f.stale_minutes)
+
+                if db != eng:
+                    # ---------- 状态变化 → 信号 ----------
+                    if not fresh:
+                        logger.info(f"[fusion] {sym} 数据陈旧({age_min:.0f}分钟)，抑制状态变化")
+                        continue
+                    px = r.get("latest_close")
+                    pnl = None
+                    if db_entry and px:
+                        if db == "LONG":
+                            pnl = (px - db_entry) / db_entry
+                        elif db == "SHORT":
+                            pnl = (db_entry - px) / db_entry
+                    new_entry = r.get("entry_px") if eng != "FLAT" else None
+                    upsert_position(s, sym, eng, entry_price=new_entry or px, entry_at=now)
+                    sig = {
+                        "symbol": sym,
+                        "name": names.get(sym, sym),
+                        "label": label,
+                        "action": _fusion_action(db, eng),
+                        "close": px,
+                        "entry": db_entry,
+                        "new_entry": new_entry,
+                        "pnl": pnl,
+                        "to": eng,
+                    }
+                    if (f.push_stop_levels and eng != "FLAT"
+                            and r.get("init_stop") is not None and new_entry):
+                        sig["levels"] = {
+                            "stop": r.get("cur_stop"),
+                            "be_trigger": r.get("be_trigger"),
+                            "be_done": bool(r.get("be_done")),
+                            "risk_px": abs(float(new_entry) - float(r["init_stop"])),
+                            "risk_atr": f.sl_atr,
+                            "atr": r.get("entry_atr"),
+                        }
+                    signals.append(sig)
+                    set_push_state(
+                        s, sym,
+                        last_stop=(r.get("cur_stop") if eng != "FLAT" else None),
+                        last_be_done=(bool(r.get("be_done")) if eng != "FLAT" else False),
+                        signal_at=(now_utc if eng != "FLAT" else None),
+                        pushed_at=now_utc,
+                    )
+                    continue
+
+                # ---------- 状态未变：吊灯止损上移 / 首次触发保本 ----------
+                if eng == "FLAT" or old is None or not fresh:
+                    continue
+                cur = r.get("cur_stop")
+                prev_stop = float(old.last_stop) if old.last_stop is not None else None
+                atr = r.get("entry_atr")
+                be_now = bool(r.get("be_done"))
+                be_prev = bool(old.last_be_done)
+                sign = 1.0 if eng == "LONG" else -1.0
+                thr = (f.trail_push_atr * float(atr)) if (atr and f.trail_push_atr > 0) else None
+                moved = None
+                if (cur is not None and prev_stop is not None and thr is not None
+                        and (float(cur) - prev_stop) * sign >= thr):
+                    moved = (prev_stop, float(cur))
+                be_flip = bool(be_now and not be_prev)
+                if prev_stop is None or (moved is None and not be_flip):
+                    # 首次记录基准 / 变动未达阈值 → 只静默更新基准
+                    set_push_state(s, sym,
+                                   last_stop=(float(cur) if cur is not None else prev_stop),
+                                   last_be_done=be_now)
+                    continue
+                if be_flip:
+                    changes.append({"symbol": sym, "label": label, "kind": "be",
+                                    "old": prev_stop,
+                                    "new": (float(cur) if cur is not None else None)})
+                else:
+                    changes.append({"symbol": sym, "label": label, "kind": "trail",
+                                    "old": moved[0], "new": moved[1]})
+                set_push_state(s, sym,
+                               last_stop=(float(cur) if cur is not None else prev_stop),
+                               last_be_done=be_now, pushed_at=now_utc)
+
+            if is_cold:
+                n_ok = sum(1 for r in results if not r.get("error"))
+                _push_startup_notice(s, n_ok, now, settings)
+                logger.info(f"[scheduler] fusion scan 冷启动：已建 {n_ok} 品种基线，已推送上线通知")
+                return
+
+            # 3) 持仓一览（用「展示阈值」而非「信号阈值」：夜盘→早盘的 585 分钟空档、
+            #    周末、长假都不该让持仓从清单里消失；信号仍受 stale_minutes 约束）
+            rows = _heartbeat_rows(
+                results, names, now, f.display_max_age_min,
+            ) if (f.heartbeat or is_pre or signals or changes) else []
+
+            # 4) 未确认开仓信号复提（防漏看：同一笔在 repeat 窗口内每轮置顶）
+            pending: list[dict] = []
+            if f.signal_repeat_min > 0 and rows:
+                cutoff = now_utc - timedelta(minutes=f.signal_repeat_min)
+                sig_syms = {x["symbol"] for x in signals}
+                for r in results:
+                    if r.get("error") or r.get("state") in (0, None):
+                        continue
+                    sym = r["symbol"]
+                    if sym in sig_syms:
+                        continue
+                    o = s.get(FusionPosition, sym)
+                    if o is None or o.signal_at is None:
+                        continue
+                    sa = o.signal_at
+                    if sa.tzinfo is None:
+                        sa = sa.replace(tzinfo=timezone.utc)
+                    if sa >= cutoff:
+                        stored_entry = (float(o.entry_price)
+                                        if (o is not None and o.entry_price is not None)
+                                        else r.get("entry_px"))
+                        pending.append({
+                            "symbol": sym,
+                            "label": _nm(sym, names),
+                            "side": POS_MAP.get(r["state"]),
+                            "entry": stored_entry,
+                            "at": sa.astimezone().replace(tzinfo=None),
+                        })
+
+            # 5) 推送决策：信号 > 盘前 > 止损变动 / 定时简报
+            last_push = s.execute(select(func.max(FusionPushLog.pushed_at))).scalar()
+            gap_ok = True
+            if last_push is not None:
+                lp = last_push if last_push.tzinfo else last_push.replace(tzinfo=timezone.utc)
+                gap_ok = (now_utc - lp).total_seconds() >= f.heartbeat_interval_min * 60
+            interval = max(1, int(f.heartbeat_interval_min))
+            due_heartbeat = bool(f.heartbeat and rows
+                                 and (now.minute % interval) == 0 and gap_ok)
+            if signals:
+                kind = "signal"
+            elif is_pre:
+                kind = "presession"
+            elif changes or due_heartbeat:
+                kind = "heartbeat"
+            else:
+                kind = None
+
+            if kind is None:
+                logger.info("[scheduler] fusion scan done, 本轮无需推送")
+                return
+            data_asof = None
+            if is_pre and rows:
+                data_asof = max(r["latest_dt"] for r in rows).strftime("%m-%d %H:%M")
+            title, content = _format_push(
+                rows, signals, changes, pending, now,
+                kind=kind, max_rows=f.heartbeat_max_rows,
+                show_levels=f.push_stop_levels, data_asof=data_asof,
+            )
+            ok = _deliver(s, title, content, now, kind=kind,
+                          n_signals=len(signals), n_rows=len(rows), settings=settings)
+            for r in rows:
+                set_push_state(s, r["symbol"], pushed_at=now_utc)
+            logger.info(
+                f"[scheduler] fusion scan done kind={kind} 信号{len(signals)} "
+                f"止损变动{len(changes)} 待执行{len(pending)} 持仓{len(rows)} 送达={ok}"
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] fusion scan failed: {e}")
 
 def _build_scheduler() -> BlockingScheduler:
     settings = get_settings()
@@ -151,6 +846,19 @@ def _build_scheduler() -> BlockingScheduler:
         coalesce=True,
     )
     logger.info("[scheduler] registered cron day1 06:30 (weights_monthly_update)")
+
+    # 融合策略实时信号扫描：每15分钟（与每日三次 ingest 并行，互不影响）
+    if settings.fusion.enabled:
+        sched.add_job(
+            _fusion_scan_job,
+            trigger=CronTrigger(minute="*/15", timezone=settings.env.TZ),
+            id="fusion_scan",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("[scheduler] registered fusion_scan every 15min")
+
     return sched
 
 

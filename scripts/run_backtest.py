@@ -23,6 +23,8 @@ def main():
     ap.add_argument("--test-days", type=int, default=60)
     ap.add_argument("--step", type=int, default=3)
     ap.add_argument("--update-weights", action="store_true", help="回测后立即更新模型权重")
+    ap.add_argument("--run-id", type=str, default=None, help="指定 run_id（断点续跑用）")
+    ap.add_argument("--resume", action="store_true", help="跳过 run 内已完成品种（断点续跑）")
     args = ap.parse_args()
 
     from app.backtest.engine import BacktestParams, backtest_symbols
@@ -36,7 +38,10 @@ def main():
 
     with session_scope() as s:
         params = BacktestParams(test_days=args.test_days, step=args.step)
-        out = backtest_symbols(s, symbols=symbols, params=params)
+        out = backtest_symbols(
+            s, symbols=symbols, params=params,
+            run_id=args.run_id, skip_existing=args.resume,
+        )
         for r in out:
             if "metrics" in r:
                 best = sorted(

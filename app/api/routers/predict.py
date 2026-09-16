@@ -143,6 +143,7 @@ def list_predictions(
             "confidence": float(r.confidence) if r.confidence is not None else None,
             "state": r.state,
             "participated_models": r.participated_models,
+            "caliber": getattr(r, "caliber", "close"),  # §17：口径声明
         }
         for r in rows
     ]

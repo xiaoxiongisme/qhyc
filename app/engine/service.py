@@ -62,13 +62,15 @@ def _ensemble(
     session: Session | None,
 ) -> dict:
     """加权投票 + 分位融合 → §5.3 契约"""
-    if not outputs:
+    # §18.2（v1.3）：未发信号模型（如 reversal 门控内）不参与投票与幅度融合
+    active = [o for o in outputs if o.signaled]
+    if not active:
         raise ValueError(f"{symbol} 无可用模型输出: {model_errors}")
 
     # 方向加权投票（⑫ 涨/跌二分类）
     up_w = 0.0
     total_w = 0.0
-    for o in outputs:
+    for o in active:
         w = float(weights.get(o.name, 1.0))
         total_w += w
         up_w += w * (o.prob if o.direction == "up" else 1 - o.prob)
@@ -76,13 +78,25 @@ def _ensemble(
     direction = "up" if p_up >= 0.5 else "down"
     direction_prob = p_up if direction == "up" else 1 - p_up
 
-    # 幅度分位融合：中位数点估计 + 中位数 P5/P95
-    points = sorted(o.ret_point for o in outputs)
-    lows = sorted(o.ret_low for o in outputs)
-    highs = sorted(o.ret_high for o in outputs)
+    # 幅度分位融合：中位数点估计 + 中位数 P5/P95（仅 signaled 模型）
+    points = sorted(o.ret_point for o in active)
+    lows = sorted(o.ret_low for o in active)
+    highs = sorted(o.ret_high for o in active)
     ret_point = points[len(points) // 2]
     ret_low = lows[len(lows) // 2]
     ret_high = highs[len(highs) // 2]
+
+    # §18.7（v1.3.2）M6c：波动率三件套——取有 vol_forecast 的模型中位数
+    vols = [o for o in active if o.vol_forecast is not None]
+    vol_point = vol_low = vol_high = None
+    if vols:
+        vol_point = float(sorted(o.vol_forecast for o in vols)[len(vols) // 2])
+        vol_low = float(sorted(o.vol_low for o in vols if o.vol_low is not None)[
+            max(0, len([o for o in vols if o.vol_low is not None]) // 2)
+        ]) if any(o.vol_low is not None for o in vols) else None
+        vol_high = float(sorted(o.vol_high for o in vols if o.vol_high is not None)[
+            max(0, len([o for o in vols if o.vol_high is not None]) // 2)
+        ]) if any(o.vol_high is not None for o in vols) else None
 
     # 置信度：方向概率 + 样本熵修正（低熵更可信，M3 完整化）
     base_conf = (direction_prob - 0.5) * 2  # [0,1]
@@ -99,13 +113,19 @@ def _ensemble(
         "target_date": target_date.isoformat(),
         "as_of": as_of_ts.isoformat(),
         "run_id": run_id,
+        "caliber": get_settings().yaml.backtest.label_metric,  # §17 工单①：口径声明
         "direction": direction,
         "direction_prob": round(float(direction_prob), 4),
         "ret_point": round(float(ret_point), 4),
         "ret_low": round(float(ret_low), 4),
         "ret_high": round(float(ret_high), 4),
         "confidence": confidence,
-        "participated_models": [o.name for o in outputs],
+        # §18.7（v1.3.2）M6c：波动率预测（σ_t + |ret| P5/P95）；无 GARCH 时为 null
+        "vol_point": round(vol_point, 4) if vol_point is not None else None,
+        "vol_low": round(vol_low, 4) if vol_low is not None else None,
+        "vol_high": round(vol_high, 4) if vol_high is not None else None,
+        "participated_models": [o.name for o in active],
+        "signaled": {o.name: o.signaled for o in outputs if not o.signaled},  # §18.2 门控留痕
         "state": state,
         # 附加诊断（非契约字段，便于看板/排查）
         "_meta": {
@@ -133,9 +153,13 @@ def _ensemble(
             "ret_low": round(ret_low, 4),
             "ret_high": round(ret_high, 4),
             "confidence": confidence,
+            "vol_point": round(vol_point, 4) if vol_point is not None else None,   # §18.7
+            "vol_low": round(vol_low, 4) if vol_low is not None else None,
+            "vol_high": round(vol_high, 4) if vol_high is not None else None,
             "state": state,
             "participated_models": [o.name for o in outputs],
             "schema_version": 1,
+            "caliber": get_settings().yaml.backtest.label_metric,  # §17 工单①
         }
         stmt = pg_insert(PredictionResult).values(**values)
         # run_id 含秒级时间戳：同 as_of 多次运行生成新 run_id，天然可追溯不冲突
@@ -153,6 +177,7 @@ def _run_models(
     dates=None,
     extra=None,
     eval_date=None,
+    doi: float | None = None,
 ) -> tuple[list[ModelOutput], list[str]]:
     """按门控启用子集跑模型；单模型失败降级跳过"""
     enabled = gate_models.get(state) or list(MODEL_REGISTRY.keys())
@@ -172,6 +197,8 @@ def _run_models(
                 m._eval_date = eval_date  # 审计 P1：回测按 train_until<=评估日 选快照
             elif name in ("rf", "xgb", "gpr"):
                 m._dates = dates        # sklearn 系特征集统一加入传导特征（§16.4）
+            elif name == "reversal":
+                m._doi = doi  # §18.2 Δoi 软上调（可 None）
             outputs.append(m.predict(rets, extra=extra))
         except Exception as e:
             errors.append(f"{name}: {e}")
@@ -181,19 +208,21 @@ def _run_models(
 
 def _ensemble_output(outputs: list[ModelOutput], weights: dict[str, float]) -> ModelOutput | None:
     """融合策略输出（与 §5.3 集成同规则），供回测作为 ensemble 基准"""
-    if not outputs:
+    # §18.2（v1.3）：仅 signaled 模型参与（reversal 门控内"无观点"被排除）
+    active = [o for o in outputs if o.signaled]
+    if not active:
         return None
     up_w = total_w = 0.0
-    for o in outputs:
+    for o in active:
         w = float(weights.get(o.name, 1.0))
         total_w += w
         up_w += w * (o.prob if o.direction == "up" else 1 - o.prob)
     p_up = up_w / total_w if total_w > 0 else 0.5
     direction = "up" if p_up >= 0.5 else "down"
     prob = p_up if direction == "up" else 1 - p_up
-    points = sorted(o.ret_point for o in outputs)
-    lows = sorted(o.ret_low for o in outputs)
-    highs = sorted(o.ret_high for o in outputs)
+    points = sorted(o.ret_point for o in active)
+    lows = sorted(o.ret_low for o in active)
+    highs = sorted(o.ret_high for o in active)
     return ModelOutput(
         name="ensemble",
         direction=direction,
@@ -244,7 +273,7 @@ def predict_symbol(
 
     outputs, errors = _run_models(
         symbol, snap.state, snap.rets, weights, cfg.gate_models,
-        dates=snap.dates, extra=tframe,
+        dates=snap.dates, extra=tframe, doi=snap.doi,
     )
     result = _ensemble(
         symbol=symbol,

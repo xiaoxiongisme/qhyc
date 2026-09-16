@@ -69,3 +69,22 @@ pgdata/
 # M1 数据导入临时文件（FG/SA 历史数据）
 # =====================================================
 imports/working/
+
+# =====================================================
+# 构建 / 审查临时产物（根目录，CB/WB 调试残留，勿入库）
+# =====================================================
+_build*.flag
+_build*.log
+_compile*.txt
+_mem*.txt
+_chk*.log
+_cmp_*.log
+_dump_*.log
+_diag_*.log
+_restart*.log
+_tz.log
+_wtest.log
+_docschk.txt
+qc
+query
+qhyc_review_tmp/

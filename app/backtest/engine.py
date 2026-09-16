@@ -73,11 +73,27 @@ def backtest_symbol(
     symbol: str,
     params: BacktestParams | None = None,
     run_id: str | None = None,
+    skip_existing: bool = False,
 ) -> dict:
-    """单品种回测：滚动评估门控内全部模型 + ensemble"""
+    """单品种回测：滚动评估门控内全部模型 + ensemble
+
+    skip_existing（M6b 新增）：断点续跑——同 run_id+symbol 已有记录则跳过
+    （配合 run_backtest.py --run-id 复用原 run 续跑剩余品种）
+    """
     p = params or BacktestParams()
     cfg = get_settings().yaml.predict
     cfg_bt = get_settings().yaml.backtest
+
+    if skip_existing and run_id:
+        from sqlalchemy import select as _sel
+
+        exists = session.execute(
+            _sel(BacktestResult.model).where(
+                BacktestResult.run_id == run_id, BacktestResult.symbol == symbol
+            ).limit(1)
+        ).first()
+        if exists:
+            return {"symbol": symbol, "skipped": "already in run (resume)"}
 
     # P2 权重来源统一：与线上一致（model_weights 表优先，回落 config）
     weights = dict(cfg.weights)
@@ -208,6 +224,13 @@ def backtest_symbol(
                     "high": vals[2],
                     "actual": actual,
                     "actual_dir": actual_dir,
+                    # §18.2（v1.3）：信号门控留痕（未发信号不计入命中统计）
+                    "signaled": bool(o.signaled),
+                    "gate_reason": o.gate_reason,
+                    # §18.7（v1.3.2）：波动率三件套（仅 GARCH 填充）
+                    "vol_point": float(o.vol_forecast) if o.vol_forecast is not None else None,
+                    "vol_low": float(o.vol_low) if o.vol_low is not None else None,
+                    "vol_high": float(o.vol_high) if o.vol_high is not None else None,
                 }
             )
 
@@ -219,26 +242,112 @@ def backtest_symbol(
             if np.isfinite(r["point"]) and np.isfinite(r["actual"])
             and np.isfinite(r["low"]) and np.isfinite(r["high"])
         ]
-        n = len(rows)
-        if n == 0:
+        n_all = len(rows)
+        if n_all == 0:
             return {}
-        hits = [r["pred_dir"] == ("up" if r["actual_dir"] else "down") for r in rows]
-        errs = [r["point"] - r["actual"] for r in rows]
-        inrange = [r["low"] <= r["actual"] <= r["high"] for r in rows]
+        # §18.2（v1.3）：未发信号行不计入命中统计分母（"无观点"不是错误观点）
+        sig_rows = [r for r in rows if r["signaled"]]
+        n = len(sig_rows)
         out = {
-            "sample_n": n,
-            "dir_acc": round(sum(hits) / n, 4),
-            "mae": round(float(np.mean(np.abs(errs))), 4),
-            "rmse": round(float(np.sqrt(np.mean(np.square(errs)))), 4),
-            "quantile_hit": round(sum(inrange) / n, 4),
+            "sample_n": n_all,
+            "signaled_n": n,
+            "coverage": round(n / n_all, 4) if n_all else None,  # §18.2 门控覆盖率
         }
+        if n == 0:
+            out["by_state"] = {}
+            return out
+        hits = [r["pred_dir"] == ("up" if r["actual_dir"] else "down") for r in sig_rows]
+        errs = [r["point"] - r["actual"] for r in sig_rows]
+        inrange = [r["low"] <= r["actual"] <= r["high"] for r in sig_rows]
+        dir_acc = sum(hits) / n
+        out.update(
+            {
+                "dir_acc": round(dir_acc, 4),
+                "mae": round(float(np.mean(np.abs(errs))), 4),
+                "rmse": round(float(np.sqrt(np.mean(np.square(errs)))), 4),
+                "quantile_hit": round(sum(inrange) / n, 4),
+            }
+        )
         # 近 60 评估点准确率（⑳ 权重月更输入）
         recent = hits[-60:]
         out["recent60_dir_acc"] = round(sum(recent) / len(recent), 4) if recent else None
+
+        # ---- §18.3（v1.3）指标升级 ----
+        # 按幅度加权准确率：|实际涨跌| 越大权重越高（du Plessis 式）
+        w_abs = np.array([abs(r["actual"]) for r in sig_rows], dtype=float)
+        h_arr = np.array(hits, dtype=float)
+        out["dir_acc_weighted"] = (
+            round(float((h_arr * w_abs).sum() / w_abs.sum()), 4) if w_abs.sum() > 0 else None
+        )
+        # IC / rank IC（point 与 actual 的相关性）
+        pts = np.array([r["point"] for r in sig_rows], dtype=float)
+        acts = np.array([r["actual"] for r in sig_rows], dtype=float)
+        if np.std(pts) > 0 and np.std(acts) > 0:
+            out["ic"] = round(float(np.corrcoef(pts, acts)[0, 1]), 4)
+            from scipy.stats import spearmanr
+
+            out["rank_ic"] = round(float(spearmanr(pts, acts).statistic), 4)
+        else:
+            out["ic"] = out["rank_ic"] = None
+        # ICIR：按时间等分 5 段，段内 IC 均值/标准差
+        if out.get("ic") is not None and n >= 20:
+            k = 5
+            seg = max(1, n // k)
+            seg_ics = []
+            for i in range(k):
+                lo_i, hi_i = i * seg, (i + 1) * seg if i < k - 1 else n
+                if hi_i - lo_i >= 5 and np.std(pts[lo_i:hi_i]) > 0 and np.std(acts[lo_i:hi_i]) > 0:
+                    seg_ics.append(float(np.corrcoef(pts[lo_i:hi_i], acts[lo_i:hi_i])[0, 1]))
+            if len(seg_ics) >= 2:
+                m_ics = float(np.mean(seg_ics))
+                s_ics = float(np.std(seg_ics, ddof=1))
+                out["icir"] = round(m_ics / s_ics, 4) if s_ics > 0 else None
+            else:
+                out["icir"] = None
+        else:
+            out["icir"] = None
+        # 覆盖率-准确率曲线（threshold sweep：按 |point| 分位取 top x% 样本）
+        grid = get_settings().yaml.backtest.coverage_grid
+        order = np.argsort(-np.abs(pts))  # |point| 降序
+        curve = []
+        for g in grid:
+            m = max(5, int(n * g))
+            m = min(m, n)
+            idx = order[:m]
+            curve.append(
+                {
+                    "top_frac": g,
+                    "n": m,
+                    "dir_acc": round(float(h_arr[idx].mean()), 4),
+                }
+            )
+        out["coverage_curve"] = curve
+        # 净 P&L 模拟（§18.11③：成本可配置；双向开平，每笔扣 2×cost）
+        cost = get_settings().yaml.backtest.cost_pct
+        sign = np.array([1.0 if r["pred_dir"] == "up" else -1.0 for r in sig_rows])
+        pnl = sign * acts - 2 * cost
+        out["net_pnl_mean"] = round(float(pnl.mean()), 4)      # 平均每笔净收益 %
+        out["net_pnl_total"] = round(float(pnl.sum()), 4)      # 累计净收益 %
+        out["win_rate_pnl"] = round(float((pnl > 0).mean()), 4)
+
+        # ---- §18.7（v1.3.2）M6c：波动率预测准度 ----
+        vol_rows = [r for r in sig_rows if r.get("vol_point") is not None]
+        if vol_rows:
+            # vol_hit：|actual| ∈ [vol_low, vol_high]（P5-P95 理论覆盖 90%）
+            hits_v = [
+                (r["vol_low"] or 0) <= abs(r["actual"]) <= (r["vol_high"] or 1e9)
+                for r in vol_rows
+            ]
+            out["vol_hit"] = round(sum(hits_v) / len(hits_v), 4)
+            # vol_rmse：σ_t vs |actual|（条件波动率估计误差）
+            errs_v = [r["vol_point"] - abs(r["actual"]) for r in vol_rows]
+            out["vol_rmse"] = round(float(np.sqrt(np.mean(np.square(errs_v)))), 4)
+            out["vol_n"] = len(vol_rows)
+
         # Hurst 分层（§6）
         by_state: dict[str, dict] = {}
         for st in ("trend", "neutral", "mean_revert"):
-            sub_rows = [r for r in rows if r["state"] == st]
+            sub_rows = [r for r in sig_rows if r["state"] == st]
             if sub_rows:
                 sh = [r["pred_dir"] == ("up" if r["actual_dir"] else "down") for r in sub_rows]
                 by_state[st] = {"n": len(sub_rows), "dir_acc": round(sum(sh) / len(sub_rows), 4)}
@@ -288,9 +397,26 @@ def backtest_symbol(
             rmse=_clean(m.get("rmse")),
             quantile_hit=_clean(m.get("quantile_hit")),
             sample_n=m.get("sample_n"),
+            caliber=cfg_bt.label_metric,        # §17 工单①：口径声明
             by_state={
                 "states": m.get("by_state", {}),
                 "recent60_dir_acc": _clean(m.get("recent60_dir_acc")),
+                # §18.3（v1.3）指标升级
+                "dir_acc_weighted": _clean(m.get("dir_acc_weighted")),
+                "ic": _clean(m.get("ic")),
+                "rank_ic": _clean(m.get("rank_ic")),
+                "icir": _clean(m.get("icir")),
+                "coverage": _clean(m.get("coverage")),
+                "signaled_n": m.get("signaled_n"),
+                "coverage_curve": m.get("coverage_curve"),
+                "net_pnl_mean": _clean(m.get("net_pnl_mean")),
+                "net_pnl_total": _clean(m.get("net_pnl_total")),
+                "win_rate_pnl": _clean(m.get("win_rate_pnl")),
+                # §18.7（v1.3.2）波动率准度（仅 GARCH）
+                "vol_hit": _clean(m.get("vol_hit")),
+                "vol_rmse": _clean(m.get("vol_rmse")),
+                "vol_n": m.get("vol_n"),
+                "cost_pct": get_settings().yaml.backtest.cost_pct,
                 "gate_dist": gate_dist,
                 "source": source,
                 "error_counts": error_counts,   # P1-4：模型失败可见
@@ -327,10 +453,19 @@ def backtest_symbol(
                     "low": round(r["low"], 4),
                     "high": round(r["high"], 4),
                     "actual": round(r["actual"], 4),
+                    "caliber": cfg_bt.label_metric,  # §17 工单①
+                    "signaled": r["signaled"],       # §18.2（v1.3）门控留痕
+                    "gate_reason": r["gate_reason"] or None,
                 }
             )
     if detail_rows:
-        session.execute(pg_insert(BacktestDetail).values(detail_rows))
+        session.execute(
+            pg_insert(BacktestDetail)
+            .values(detail_rows)
+            .on_conflict_do_nothing(
+                index_elements=["run_id", "symbol", "model", "eval_date"]
+            )  # M5.5 修复：同 run 重跑幂等（此前 UniqueViolation）
+        )
     session.commit()
 
     summary = {
@@ -354,8 +489,9 @@ def backtest_symbols(
     symbols: list[str] | None = None,
     params: BacktestParams | None = None,
     run_id: str | None = None,
+    skip_existing: bool = False,
 ) -> list[dict]:
-    """多品种回测"""
+    """多品种回测（skip_existing：断点续跑，跳过 run 内已完成品种）"""
     settings = get_settings()
     if not symbols:
         symbols = [s.symbol for s in settings.main_contracts]
@@ -363,7 +499,11 @@ def backtest_symbols(
     results = []
     for sym in symbols:
         try:
-            results.append(backtest_symbol(session, sym, params=params, run_id=run_id))
+            results.append(
+                backtest_symbol(
+                    session, sym, params=params, run_id=run_id, skip_existing=skip_existing
+                )
+            )
         except Exception as e:
             logger.warning(f"[backtest] {sym} 失败: {e}")
             results.append({"symbol": sym, "error": str(e)})

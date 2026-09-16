@@ -1,4 +1,4 @@
-# 期货预测平台 qhyc（M1 数据层 + M2/M3 预测引擎 + §16 跨品种传导）
+# 期货预测平台 qhyc（M1 数据层 + M2/M3 预测引擎 + M4 回测 + M5 看板 + §16 传导）
 
 > 工程根目录：`E:\Docker\qhyc`
 > 数据模板源：`E:\QH\<PRODUCT>\data\`
@@ -37,8 +37,9 @@ qhyc/
 │   ├── import_local.py         # CLI：本地历史导入
 │   └── ingest_now.py           # CLI：手动触发 ingest
 ├── docs/PRD_期货预测平台_v1.1.md
+├── start.ps1 / start.bat       # 一键启动脚本（含 Docker 自动拉起）
 ├── docker-compose.yml          # 三容器编排
-├── Dockerfile                  # python-api/scheduler 镜像
+├── Dockerfile                  # 多阶段：node 构建看板 → python API 镜像
 ├── requirements.txt
 ├── .env.example                # 环境变量模板（提交）
 └── .env                        # 真实密钥（不入库）
@@ -46,16 +47,20 @@ qhyc/
 
 ## 启动步骤（本地）
 
-> **前置条件**：本机需安装 Docker Desktop（含 WSL2 后端）。
-> 当前开发机未安装 Docker 时，可先运行不依赖 Docker 的验证：
->
-> ```powershell
-> # §4.5 模板解析 dry-run（直读 E:\QH 真实数据，不落库）
-> python scripts/dryrun_import_check.py
-> # 预期输出：FG/SA 各 5 类文件 rows/range/ohlc_bad=0，末行 "全部通过"
-> ```
+### 一键启动（推荐）
 
-### 1. 准备 `.env`
+```powershell
+cd E:\Docker\qhyc
+.\start.ps1                # 启动全部服务（Docker 未运行会自动拉起 Docker Desktop）
+.\start.ps1 -Build         # 代码变更后重建镜像并启动
+.\start.ps1 -Action stop   # 停止（数据保留）
+.\start.ps1 -Action status # 查看容器与健康状态
+```
+
+双击 `start.bat` 等效。脚本流程：拉起 Docker Desktop → `docker compose up -d`
+→ 等待容器健康 → API/数据就绪自检 → 自动打开看板。
+
+### 手动启动
 
 ```powershell
 # 在工程根目录 E:\Docker\qhyc
@@ -225,8 +230,19 @@ Invoke-RestMethod 'http://127.0.0.1:8000/predict?symbol=FG888&limit=10'
 - API：`POST /backtest`（async）、`GET /backtest`（最新 run 结果排名）、`POST /backtest/update-weights`
 - 调度：周六 07:00 周度回测；每月 1 日 06:30 权重月更；CLI `scripts/run_backtest.py`
 
+## M5 React 看板（已上线：http://localhost:8000/）
+
+- 技术栈：Vite + React 18 多阶段构建（node 构建 → FastAPI 静态托管，无新增容器）
+- 5 页签：品种总览（板块分组 + 最新预测）/ 预测详情（§16.6 传导卡片）/ 大类热力图
+  （板块强弱排名 + 成员热力）/ 回测面板（跨品种聚合 + Wilson 95% CI + 未校准标注）/
+  数据质量（就绪门控 + 日历模式 + 回补进度 + 异常工单）
+- 展示规范（复验报告）：全部涨跌标收盘价口径徽标；dir_acc 带 Wilson 区间与样本量；
+  ensemble 措辞"未显著优于随机"；rf/xgb/wavelet 区间标"未校准"
+- 聚合 API：`/dashboard/overview|sectors|backtest-summary|quality` +
+  `/dashboard/backtest/{run_id}/detail`（逐点下钻）
+
 ## 下一步
 
-- M5 看板：品种总览 / 预测详情（传导卡片）/ 大类热力图 / 回测面板（dir_acc 带 Wilson 区间
-  与样本量；rf/xgb/wavelet 区间标注"未校准"；ensemble 措辞"未显著优于随机"）/ 数据质量
-- M7 云端部署
+- §13 简报引擎对接（/integrations/*，caliber 契约已就绪）
+- M6 小时级特征（hourly_bar 与连续聚合已就绪）
+- M7 云端部署（cloud.yaml 就绪，Dockerfile 多阶段构建云端可用）

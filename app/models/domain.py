@@ -131,6 +131,28 @@ class MainContinuous(Base):
 
 
 # -----------------------------------------------------
+# 期货行情统一 K 线（futures-data-fetch 技能适配层，M6 扩展）
+# freq(kind,symbol,dt) 三类型：continuous/contract/cont_adj
+# -----------------------------------------------------
+class FutKline(Base):
+    __tablename__ = "fut_kline"
+
+    freq: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    symbol: Mapped[str] = mapped_column(Text, primary_key=True)
+    trade_datetime: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    open: Mapped[Decimal | None] = mapped_column(Numeric20)
+    high: Mapped[Decimal | None] = mapped_column(Numeric20)
+    low: Mapped[Decimal | None] = mapped_column(Numeric20)
+    close: Mapped[Decimal | None] = mapped_column(Numeric20)
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    oi: Mapped[int | None] = mapped_column(BigInteger)
+    adj: Mapped[Decimal | None] = mapped_column(Numeric20, default=Decimal("0"))
+
+
+# -----------------------------------------------------
 # 小时线（超表，M6 启用）
 # -----------------------------------------------------
 class HourlyBar(Base):
@@ -187,9 +209,14 @@ class PredictionResult(Base):
     ret_low: Mapped[Decimal | None] = mapped_column(Numeric12)
     ret_high: Mapped[Decimal | None] = mapped_column(Numeric12)
     confidence: Mapped[Decimal | None] = mapped_column(Numeric6)
+    # §18.7（v1.3.2）M6c 波动率产品化：σ_t 预测 + |ret| P5/P95 区间
+    vol_point: Mapped[Decimal | None] = mapped_column(Numeric12)
+    vol_low: Mapped[Decimal | None] = mapped_column(Numeric12)
+    vol_high: Mapped[Decimal | None] = mapped_column(Numeric12)
     state: Mapped[str | None] = mapped_column(Text)
     participated_models: Mapped[list | None] = mapped_column(JSON)
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    caliber: Mapped[str] = mapped_column(Text, nullable=False, default="close")  # §17 工单①
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -214,6 +241,7 @@ class BacktestResult(Base):
     quantile_hit: Mapped[Decimal | None] = mapped_column(Numeric6)
     sample_n: Mapped[int | None] = mapped_column(Integer)
     by_state: Mapped[dict | None] = mapped_column(JSON)
+    caliber: Mapped[str] = mapped_column(Text, nullable=False, default="close")  # §17 工单①
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -236,6 +264,10 @@ class BacktestDetail(Base):
     low: Mapped[Decimal | None] = mapped_column(Numeric12)
     high: Mapped[Decimal | None] = mapped_column(Numeric12)
     actual: Mapped[Decimal | None] = mapped_column(Numeric12)
+    caliber: Mapped[str] = mapped_column(Text, nullable=False, default="close")  # §17 工单①
+    # §18.2（v1.3）M5.5：信号门控（reversal 等条件模型未触发时记 False + 原因）
+    signaled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    gate_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -276,7 +308,103 @@ class BriefingSignal(Base):
     direction: Mapped[str | None] = mapped_column(Text)
     score: Mapped[Decimal | None] = mapped_column(Numeric6)
     note: Mapped[str | None] = mapped_column(Text)
+    caliber: Mapped[str] = mapped_column(Text, nullable=False, default="close")  # §17 工单②
     received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# -----------------------------------------------------
+# §18.4 M6a 会员持仓排名（龙虎榜）
+# -----------------------------------------------------
+class MemberPositionRank(Base):
+    __tablename__ = "member_position_rank"
+
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    exchange: Mapped[str] = mapped_column(Text, primary_key=True)
+    symbol: Mapped[str] = mapped_column(Text, primary_key=True)
+    member: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[str] = mapped_column(Text, primary_key=True, default="v1.0")
+    rank: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    long_pos: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    short_pos: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    long_chg: Mapped[int | None] = mapped_column(BigInteger)
+    short_chg: Mapped[int | None] = mapped_column(BigInteger)
+    vol_pos: Mapped[int | None] = mapped_column(BigInteger)
+    src: Mapped[str] = mapped_column(Text, nullable=False, default="akshare")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# -----------------------------------------------------
+# §18.5 M6a 库存 / 仓单
+# -----------------------------------------------------
+class Inventory(Base):
+    __tablename__ = "inventory"
+
+    report_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    exchange: Mapped[str] = mapped_column(Text, primary_key=True)
+    symbol: Mapped[str] = mapped_column(Text, primary_key=True)
+    warehouse: Mapped[str] = mapped_column(Text, primary_key=True, default="")
+    version: Mapped[str] = mapped_column(Text, primary_key=True, default="v1.0")
+    inventory_qty: Mapped[int | None] = mapped_column(BigInteger)
+    receipt_qty: Mapped[int | None] = mapped_column(BigInteger)
+    unit: Mapped[str | None] = mapped_column(Text)
+    change_qty: Mapped[int | None] = mapped_column(BigInteger)
+    src: Mapped[str] = mapped_column(Text, nullable=False, default="akshare")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# -----------------------------------------------------
+# §18.5（v1.3.2）M6a：基差因子（spot_basis）
+# -----------------------------------------------------
+class SpotBasis(Base):
+    __tablename__ = "spot_basis"
+
+    report_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    symbol: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[str] = mapped_column(Text, primary_key=True, default="v1.0")
+    exchange: Mapped[str] = mapped_column(Text, nullable=False, default="auto")
+    spot_price: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
+    near_contract: Mapped[str | None] = mapped_column(Text)
+    near_contract_price: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
+    dominant_contract: Mapped[str | None] = mapped_column(Text)
+    dominant_contract_price: Mapped[Decimal | None] = mapped_column(Numeric(16, 4))
+    near_month: Mapped[str | None] = mapped_column(Text)
+    dominant_month: Mapped[str | None] = mapped_column(Text)
+    near_basis: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    dom_basis: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    near_basis_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    dom_basis_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    src: Mapped[str] = mapped_column(Text, nullable=False, default="akshare")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# -----------------------------------------------------
+# §18.6（v1.3.2）M6b：合约级日线（carry 数据基础）
+# -----------------------------------------------------
+class ContractDaily(Base):
+    __tablename__ = "contract_daily"
+
+    symbol: Mapped[str] = mapped_column(Text, primary_key=True)   # 合约代码（大写）
+    trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    version: Mapped[str] = mapped_column(Text, primary_key=True, default="v1.0")
+    product: Mapped[str] = mapped_column(Text, nullable=False)
+    exchange: Mapped[str] = mapped_column(Text, nullable=False)
+    open: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    high: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    low: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    close: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    settle: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    oi: Mapped[int | None] = mapped_column(BigInteger)
+    src: Mapped[str] = mapped_column(Text, nullable=False, default="akshare")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 

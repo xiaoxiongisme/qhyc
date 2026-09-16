@@ -96,8 +96,11 @@ class _SklearnTreeBase(BaseModel):
                 x_next = np.concatenate([x_next, last_row.reshape(1, -1)], axis=1)
         x_next = np.nan_to_num(x_next, nan=0.0)
         point = float(est.predict(x_next)[0])
-        # 审计 P1-3：留出残差经验分位区间
-        return self._from_empirical_resid(self.name, point, resid)
+        # 审计 P1-3 复验二修：树模型点预测误差与近期波动弱相关（波动率缩放无效），
+        # 区间改用**原始收益无条件经验分位**（分布平稳假设下数学保证 ~90% 覆盖）；
+        # 代价：区间恒宽不含模型信息——树模型的票权贡献保留在方向投票
+        lo, hi = np.quantile(x, [0.05, 0.95])
+        return self._from_quantiles(self.name, point, point + lo, point + hi)
 
 
 class RandomForestModel(_SklearnTreeBase):

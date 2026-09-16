@@ -6,9 +6,12 @@ from app.api.routers import (
     backtest,
     bars,
     calendar,
+    dashboard,
+    fusion,      # 融合策略推送留痕（防漏看回查）
     health,
     imports,
     ingest,
+    position,    # §18.4/§18.5 M6a
     predict,
     symbols,
     tasks,
@@ -25,5 +28,8 @@ api_router.include_router(imports.router, prefix="/imports", tags=["imports"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(predict.router, prefix="/predict", tags=["predict"])
 api_router.include_router(backtest.router, prefix="/backtest", tags=["backtest"])
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+api_router.include_router(position.router, prefix="", tags=["position"])  # §18.4/§18.5 M6a
+api_router.include_router(fusion.router, prefix="", tags=["fusion"])
 
 __all__ = ["api_router"]

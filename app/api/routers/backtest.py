@@ -97,6 +97,11 @@ def list_backtests(limit: int = 20, run_id: str | None = None):
                 "by_state": bs.get("states"),
                 "gate_dist": bs.get("gate_dist"),
                 "source": bs.get("source"),
+                # M5 看板标注依据（审计 P1-3 遗留）：区间未校准的模型需显式提示
+                "interval_calibrated": bs.get(
+                    "interval_calibrated", r.model not in ("rf", "xgb", "wavelet")
+                ),
+                "caliber": getattr(r, "caliber", "close"),  # §17：口径声明
             }
         )
     return {"run_id": run_id, "count": len(out), "results": sorted(out, key=lambda x: -(x["dir_acc"] or 0))}

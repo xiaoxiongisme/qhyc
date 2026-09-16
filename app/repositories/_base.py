@@ -94,12 +94,44 @@ def upsert_main_continuous(session: Session, rows: Sequence[dict]) -> int:
     return len(rows)
 
 
+def _bar_row_is_valid(row: dict) -> bool:
+    """剔除脏行：tqsdk 回填时未填充的槽位会给出 1970-01-01 时间戳 / NaN 价。"""
+    dt = row.get("trade_datetime")
+    if dt is None or getattr(dt, "year", 9999) <= 1970:
+        return False
+    for k in ("open", "high", "low", "close"):
+        v = row.get(k)
+        if v is None:
+            return False
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return False
+        if fv != fv or fv in (float("inf"), float("-inf")):   # NaN / ±Inf
+            return False
+    return True
+
+
 def upsert_hourly_bars(session: Session, rows: Sequence[dict]) -> int:
-    """upsert hourly_bar（按主键 (symbol, trade_datetime)），自动分块"""
+    """upsert hourly_bar（按主键 (symbol, trade_datetime)），自动分块。
+
+    同一批 rows 内可能含重复主键（tqsdk 回填的未填充槽位大量落在同一时间戳），
+    而 `INSERT ... ON CONFLICT DO UPDATE` 不允许同一命令里重复命中同一行
+    （psycopg `CardinalityViolation: cannot affect row a second time`）——
+    故先按主键去重（后出现的覆盖先出现的），并剔除 1970/NaN 脏行。
+    """
     if not rows:
         return 0
+    dedup: dict[tuple, dict] = {}
+    for r in rows:
+        if not _bar_row_is_valid(r):
+            continue
+        dedup[(r.get("symbol"), r.get("trade_datetime"))] = r
+    clean = list(dedup.values())
+    if not clean:
+        return 0
     ncols = 9
-    for chunk in _chunked(rows, ncols):
+    for chunk in _chunked(clean, ncols):
         stmt = pg_insert(HourlyBar).values(chunk)
         stmt = stmt.on_conflict_do_update(
             index_elements=["symbol", "trade_datetime"],
@@ -113,7 +145,7 @@ def upsert_hourly_bars(session: Session, rows: Sequence[dict]) -> int:
             },
         )
         session.execute(stmt)
-    return len(rows)
+    return len(clean)
 
 
 def fetch_existing_keys(session: Session, model, key_columns: Sequence[str]) -> set[tuple]:

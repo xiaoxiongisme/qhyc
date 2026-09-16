@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import fastapi_db_dep
 from app.repositories.daily_repo import DailyBarRepository
 from app.repositories.main_continuous_repo import MainContinuousRepository
@@ -21,12 +22,15 @@ def get_daily_bars(
     start: date | None = Query(None),
     end: date | None = Query(None),
     limit: int = Query(500, le=5000),
+    response: Response = None,
     db: Session = Depends(fastapi_db_dep),
 ):
     if freq != "daily":
         from fastapi import HTTPException
 
         raise HTTPException(501, f"freq={freq} not implemented in M1")
+    # §17 工单④：看板涨跌展示口径标注（收盘价口径）
+    response.headers["X-Caliber"] = get_settings().yaml.backtest.label_metric
     rows = DailyBarRepository(db).query(symbol, start, end, limit=limit)
     return [_to_out(r) for r in rows]
 

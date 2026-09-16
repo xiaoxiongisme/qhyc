@@ -121,18 +121,32 @@ def main() -> None:
             w(f"- task_run 查询失败（跳过）：{str(e)[:160]}")
     w()
 
-    # P0 判定
+    # P0 判定（v3 修正：取"最新全品种整批 run"而非"最新任意 run"，
+    # 避免手动单品种/子集 run 触发误报——复验报告曾因此误判 P0 回归）
+    BATCH_MIN_SYMBOLS = 50  # 整批 run 门槛（目标 73 品种，容忍新品种/差异）
     if run_ids:
-        latest_run = run_ids[-1]
-        latest_rows = [r for r in all_rows if r.run_id == latest_run]
-        latest_syms = {r.symbol for r in latest_rows}
-        per_sym_models = {sym: sum(1 for r in latest_rows if r.symbol == sym) for sym in latest_syms}
-        if len(latest_syms) >= 10 and min(per_sym_models.values()) >= len(models) - 3:
-            add("FIXED", "P0 已修复：run 含全部品种且每品种模型齐全",
-                f"最新 run `{latest_run}` 含 {len(latest_syms)} 品种 × {len(models)} 模型，"
-                f"总 {n_rows} 行，覆盖问题消除。")
+        batch_runs = []
+        for rid in run_ids:
+            syms = {r.symbol for r in all_rows if r.run_id == rid}
+            batch_runs.append((rid, len(syms)))
+        full_runs = [x for x in batch_runs if x[1] >= BATCH_MIN_SYMBOLS]
+        if full_runs:
+            latest_run, latest_n_syms = full_runs[-1]
+            latest_rows = [r for r in all_rows if r.run_id == latest_run]
+            latest_syms = {r.symbol for r in latest_rows}
+            per_sym_models = {sym: sum(1 for r in latest_rows if r.symbol == sym) for sym in latest_syms}
+            if len(latest_syms) >= 10 and min(per_sym_models.values()) >= len(models) - 3:
+                add("FIXED", "P0 已修复：最新整批 run 含全部品种且每品种模型齐全",
+                    f"整批 run `{latest_run}` 含 {len(latest_syms)} 品种 × {len(models)} 模型，"
+                    f"总 {n_rows} 行，覆盖问题消除。"
+                    f"（非整批 run {len(run_ids) - len(full_runs)} 个已正确忽略，不参与 P0 判定）")
+            else:
+                add("P0", "覆盖异常仍存在（整批 run）",
+                    f"最新整批 run 仅 {len(latest_syms)} 品种：{sorted(latest_syms)[:10]}")
         else:
-            add("P0", "覆盖异常仍存在", f"最新 run 仅 {len(latest_syms)} 品种：{sorted(latest_syms)[:10]}")
+            add("P0", "无整批 run",
+                f"全部 {len(run_ids)} 个 run 的品种数均 < {BATCH_MIN_SYMBOLS}，"
+                f"需先执行一次全品种回测再复验。各 run 品种数：{batch_runs[-6:]}")
 
     # ---------- B. 标签口径核验 ----------
     w("## B. 标签口径（label_metric 与明细核验）")

@@ -39,8 +39,19 @@ class FeatureSnapshot:
     high: pd.Series = None
     low: pd.Series = None
     volume: pd.Series = None
+    oi: pd.Series = None              # §18.2（v1.3）持仓量序列（可 None）
     last_date: date | None = None
     features: dict = field(default_factory=dict)
+
+    @property
+    def doi(self) -> float | None:
+        """当日持仓量环比 Δoi（§18.2 reversal 软上调用）"""
+        if self.oi is None or len(self.oi) < 2:
+            return None
+        s = self.oi.dropna().astype(float)
+        if len(s) < 2 or s.iloc[-2] in (0, None) or pd.isna(s.iloc[-2]):
+            return None
+        return float((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2])
     hurst: float | None = None
     sample_entropy: float | None = None
     state: str = "neutral"
@@ -66,14 +77,16 @@ def load_canonical_series(session: Session, symbol: str) -> tuple[pd.DataFrame, 
                 DailyBar.high,
                 DailyBar.low,
                 DailyBar.volume,
+                DailyBar.oi,
             )
             .where(DailyBar.symbol == symbol)
             .order_by(DailyBar.trade_date)
         ).all()
-        return pd.DataFrame(
+        df = pd.DataFrame(
             [r for r in rows if r[1] is not None],
-            columns=["trade_date", "close", "high", "low", "volume"],
+            columns=["trade_date", "close", "high", "low", "volume", "oi"],
         ).set_index("trade_date")
+        return df
 
     # 1. CSV 平滑主连
     rows = session.execute(
@@ -83,6 +96,7 @@ def load_canonical_series(session: Session, symbol: str) -> tuple[pd.DataFrame, 
             MainContinuous.adj_high,
             MainContinuous.adj_low,
             MainContinuous.adj_volume,
+            MainContinuous.adj_oi,
         )
         .where(MainContinuous.product == product)
         .order_by(MainContinuous.trade_date)
@@ -90,7 +104,7 @@ def load_canonical_series(session: Session, symbol: str) -> tuple[pd.DataFrame, 
     if rows:
         df_csv = pd.DataFrame(
             [r for r in rows if r[1] is not None],
-            columns=["trade_date", "close", "high", "low", "volume"],
+            columns=["trade_date", "close", "high", "low", "volume", "oi"],
         ).set_index("trade_date")
         if len(df_csv) >= settings.yaml.predict.min_bars:
             last_daily = session.execute(
@@ -133,6 +147,7 @@ def features_from_series(symbol: str, df: pd.DataFrame, source: str) -> FeatureS
         high=high,
         low=low,
         volume=volume,
+        oi=df["oi"] if "oi" in df.columns else None,
         last_date=close.index[-1],
     )
 

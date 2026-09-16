@@ -22,6 +22,16 @@ class ModelOutput:
     ret_point: float          # 点估计 %
     ret_low: float            # P5 %
     ret_high: float           # P95 %
+    # §18.2（v1.3）M5.5 信号门控：False=该模型本点"无观点"，
+    # 不参与集成投票、回测不计入 dir_acc 分母（记 gate_reason）
+    signaled: bool = True
+    gate_reason: str = ""
+    # §18.7（v1.3.2）M6c 波动率产品化：σ_t 条件波动率预测（%）；
+    # 仅 GARCH 等波动率专长模型填充，None=该模型不输出。
+    # vol_low/vol_high 为 |收益| 的 P5/P95（半正态分位），与 ret_low/high（带符号）语义不同
+    vol_forecast: float | None = None
+    vol_low: float | None = None
+    vol_high: float | None = None
 
 
 class BaseModel(ABC):
@@ -80,20 +90,23 @@ class BaseModel(ABC):
 
     @staticmethod
     def _from_empirical_resid(
-        name: str, point: float, resid: np.ndarray
+        name: str, point: float, resid: np.ndarray, vol_scale: float = 1.0
     ) -> ModelOutput:
         """审计 P1-3 区间校准：用训练残差的**经验分位**构造 P5/P95
 
         替代正态假设 σ（正态假设下实际越界率远超 10%，覆盖失效）。
-        resid 为模型在训练集上的残差（同分布假设下，预测 + 残差分位 ≈ 预测区间）。
+        resid 为模型在留出集上的残差（同分布假设下，预测 + 残差分位 ≈ 预测区间）。
+        vol_scale：波动率缩放（复验修正）——留出期波动 ≠ 预测期波动时按
+        current_vol/resid_vol 比例放大区间，修正波动率聚集导致的覆盖失效。
         """
         r = np.asarray(resid, dtype=float)
         r = r[~np.isnan(r)]
+        scale = min(max(float(vol_scale), 0.5), 3.0)
         if r.size < 30:
             # 样本不足退回正态
-            return BaseModel._from_point_dist(name, point, float(np.std(r)) if r.size > 1 else 1.0)
-        lo = point + float(np.quantile(r, 0.05))
-        hi = point + float(np.quantile(r, 0.95))
+            return BaseModel._from_point_dist(name, point, float(np.std(r) if r.size > 1 else 1.0) * scale)
+        lo = point + float(np.quantile(r, 0.05)) * scale
+        hi = point + float(np.quantile(r, 0.95)) * scale
         if lo > hi:
             lo, hi = hi, lo
         direction = "up" if point >= 0 else "down"
