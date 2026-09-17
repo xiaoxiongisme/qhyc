@@ -157,6 +157,54 @@ def _build_adjusted_hourly(frames, raw_main_df, reliable_oi=BC.RELIABLE_OI):
 _spec_tq = None
 
 
+def _frames_stale(frames, threshold_days=400):
+    """contract 帧是否过旧（最新一根距今天数超过阈值）。
+
+    免费档取不到近期合约时，某品种逐合约帧只覆盖历史某段（如橡胶 RU、或其他低活跃/远月品种），
+    据此复权只得到一段废数据；此时应回退到连续主连兜底（见决策 6：本兜底对所有品种通用，不限于 RU）。
+    """
+    if not frames:
+        return True
+    latest = max(f.index[-1] for f in frames.values())
+    now = pd.Timestamp.now("UTC") if latest.tzinfo else pd.Timestamp.now()
+    return (now - latest).days > threshold_days
+
+
+def _clear_adjusted(freq, symbol):
+    """兜底写入前，清掉该 symbol 已有 cont_adj，避免新旧两段时间共存。"""
+    from app.core.db import get_engine
+    from sqlalchemy import text
+    eng = get_engine()
+    with eng.begin() as c:
+        c.execute(text(
+            "DELETE FROM fut_kline WHERE freq=:f AND kind='cont_adj' AND symbol=:s"
+        ), {"f": freq, "s": symbol})
+
+
+def _fallback_from_continuous(cont, raw_code):
+    """兜底：无逐合约帧时，直接用连续主连作为复权主连（通用机制，决策 6）。
+
+    场景：免费档 tqsdk 取不到该品种近期逐合约历史（任何商品期货都可能，如 SHFE.ru 橡胶
+    仅是其中一例），无法做换月复权。天勤连续主连 KQ.m@ 本身已是前复权主连，直接落库即可
+    （oi 置 0，全部标记为未复权区间）。本兜底对所有品种通用，不限 RU。
+    """
+    rows = []
+    for _, r in cont.iterrows():
+        rows.append({
+            "date": r["date"],
+            "open": round(float(r["open"]), 2),
+            "high": round(float(r["high"]), 2),
+            "low": round(float(r["low"]), 2),
+            "close": round(float(r["close"]), 2),
+            "volume": int(r["volume"]) if not pd.isna(r["volume"]) else 0,
+            "oi": 0,
+            "adj": False,
+        })
+    out = pd.DataFrame(rows)
+    print(f"  [兜底] 连续主连 {raw_code} 直接作为复权主连：{len(out)} 根（未做换月平移）")
+    return out
+
+
 def spec_tq_cont():
     return _spec_tq
 
@@ -170,8 +218,16 @@ def run(symbol, freq="hourly"):
     cont = _load_continuous(spec, freq)
     print(f"  未复权主连：{len(cont)} 根，{cont['date'].iloc[0]} ~ {cont['date'].iloc[-1]}")
     frames = D.load_contract_frames(freq, spec["exchange"], spec["code"], spec["code_digits"])
-    if not frames:
-        raise RuntimeError(f"contract 表读不到 {spec['key']} 的具体合约（{freq}），请先跑 fetch_fdf")
+    if _frames_stale(frames, 400):
+        # 兜底（通用，决策 6）：免费档取不到该品种近期逐合约历史（如 SHFE.ru，亦适用于其他
+        # 低活跃/远月品种），帧只覆盖陈旧段，据此复权只得到一段废数据。
+        # 直接用连续主连作为复权主连（天勤连续主连本身已前复权），与逐合约复权无缝共存于 cont_adj。
+        print(f"  [兜底] {spec['key']} 逐合约帧缺失/过旧（免费档取不到），用连续主连 {spec['tq_cont']} 直接作为复权主连")
+        _clear_adjusted(freq, spec["tq_cont"])
+        adj = _fallback_from_continuous(cont, spec["tq_cont"])
+        n = D.save_adjusted(freq, spec["tq_cont"], adj)
+        print(f"  写入 cont_adj 表：{n} 根（兜底，未做换月平移）")
+        return adj
     print(f"  具体合约 frames：{len(frames)} 个合约，"
           f"覆盖 {min(f.index[0] for f in frames.values()).date()} ~ "
           f"{max(f.index[-1] for f in frames.values()).date()}")

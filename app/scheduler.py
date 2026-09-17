@@ -1,6 +1,8 @@
 """
 APScheduler 调度（M1，§4.2）
-- 每日三次：12:00 / 16:00 / 08:00（次日，含夜盘）
+- 日线每日三档（决策 7）：早盘前 08:00 / 午盘时 12:30 / 夜盘前 20:00
+- 小时线每小时自动更新（决策 7）：整点触发一次全品种小时线增量采集
+- 龙虎榜（新浪）每日 17:30 入库；库存（周频周五）与基差（日频）自动调度（决策 2）
 - 触发后：
   1. 采集 + 校准（akshare → tqsdk 补缺 + 比对）
   2. 入库完成后 → M1 阶段占位（预测待 M2 接入）
@@ -75,19 +77,6 @@ def _ingest_job(label: str) -> None:
                 f"[scheduler] ingest done label={label} status={status} "
                 f"total={len(reports)} failed={len(failed)}"
             )
-            # ⑪ 收盘后联动：在线小时线采集（akshare 主源 + tqsdk 兜底，幂等 upsert）
-            if label == "close":
-                try:
-                    from app.ingest.hourly_collector import HourlyCollector
-
-                    hc = HourlyCollector(s)
-                    h_stats = hc.collect_all()
-                    h_ok = sum(1 for r in h_stats if "error" not in r)
-                    logger.info(
-                        f"[scheduler] hourly collection done label=close: {h_ok}/{len(h_stats)} symbols"
-                    )
-                except Exception as he:
-                    logger.warning(f"[scheduler] hourly collection failed: {he}")
 
             # §16 大类指数更新（M2 排期）：分类同步 → 指数合成（增量重算）
             try:
@@ -871,6 +860,63 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info("[scheduler] registered cron 02:30 (adjust_cont_adj)")
 
+    # 会员持仓排名（龙虎榜）每日收盘后入库（交易所官方 CSV）
+    rp = settings.yaml.rank_position
+    sched.add_job(
+        _rank_job,
+        trigger=CronTrigger(hour=rp.run_hour, minute=rp.run_minute, timezone=settings.env.TZ),
+        id="rank_position",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info(f"[scheduler] registered cron {rp.run_hour:02d}:{rp.run_minute:02d} (rank_position)")
+
+    # 小时线每小时自动更新（决策 7）：整点触发一次全品种增量采集
+    hcfg = settings.hourly_config
+    if hcfg.enabled:
+        sched.add_job(
+            _hourly_job,
+            trigger=CronTrigger(minute=hcfg.minute, hour="*", timezone=settings.env.TZ),
+            id="hourly_collect",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info(f"[scheduler] registered hourly collect every :{hcfg.minute:02d}")
+    else:
+        logger.info("[scheduler] hourly collect disabled (config)")
+
+    # 库存 / 仓单（决策 2，周频周五）
+    inv = settings.inventory_config
+    if inv.enabled:
+        sched.add_job(
+            _inventory_job,
+            trigger=CronTrigger(day_of_week=inv.run_day, hour=inv.run_hour,
+                               minute=inv.run_minute, timezone=settings.env.TZ),
+            id="inventory_weekly",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info(f"[scheduler] registered inventory weekly dow={inv.run_day} "
+                    f"{inv.run_hour:02d}:{inv.run_minute:02d}")
+
+    # 基差 / 现货（决策 2，日频）
+    sbc = settings.spot_basis_config
+    if sbc.enabled:
+        sched.add_job(
+            _spot_basis_job,
+            trigger=CronTrigger(hour=sbc.run_hour, minute=sbc.run_minute,
+                               timezone=settings.env.TZ),
+            id="spot_basis_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info(f"[scheduler] registered spot_basis daily "
+                    f"{sbc.run_hour:02d}:{sbc.run_minute:02d}")
+
     return sched
 
 
@@ -978,6 +1024,91 @@ def _lstm_weekly_job() -> None:
         logger.exception(f"[scheduler] lstm weekly job error: {e}")
 
 
+def _rank_job() -> None:
+    """每日收盘后入库会员持仓排名（龙虎榜）。交易所官方 CSV，单所失败不影响其他所。"""
+    logger.info("[scheduler] rank_position start")
+    try:
+        settings = get_settings()
+        cfg = settings.yaml.rank_position
+        if not cfg.enabled:
+            logger.info("[scheduler] rank_position disabled, skip")
+            return
+        from app.ingest import rank_position as RP
+        summary = RP.run(exchanges=cfg.exchanges)
+        logger.info(f"[scheduler] rank_position done: {summary}")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] rank_position job error: {e}")
+
+
+def _hourly_job() -> None:
+    """小时线每小时自动更新（决策 7）：整点触发一次全品种小时线增量采集。
+
+    与主连日线三档调度解耦；融合信号扫描在交易时段内另有 15 分钟尾部刷新兜底。
+    """
+    logger.info("[scheduler] hourly collect start")
+    try:
+        with session_scope() as s:
+            from app.ingest.hourly_collector import HourlyCollector
+
+            hc = HourlyCollector(s)
+            h_stats = hc.collect_all()
+            h_ok = sum(1 for r in h_stats if "error" not in r)
+            logger.info(f"[scheduler] hourly collect done: {h_ok}/{len(h_stats)} symbols")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] hourly collect failed: {e}")
+
+
+def _inventory_job() -> None:
+    """库存 / 仓单自动采集（决策 2，周频周五，akshare futures_inventory_em）。
+
+    覆盖全部主连品种；单品种失败隔离，不阻塞其余。
+    """
+    logger.info("[scheduler] inventory collect start")
+    try:
+        from app.ingest import inventory as INV
+
+        settings = get_settings()
+        products = [spec.product for spec in settings.main_contracts]
+        with session_scope() as s:
+            repo = TaskRepository(s)
+            run = repo.start("inventory", label="weekly")
+            try:
+                stats = INV.collect_inventory_em(s, products)
+                repo.finish(run, "success", str(stats))
+                logger.info(f"[scheduler] inventory done: {stats}")
+            except Exception as e:  # noqa: BLE001
+                repo.finish(run, "failed", str(e))
+                logger.exception("[scheduler] inventory failed")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] inventory job error: {e}")
+
+
+def _spot_basis_job() -> None:
+    """基差 / 现货自动采集（决策 2，日频，akshare futures_spot_price_daily）。
+
+    每轮回填空品种最近 window_days 天增量窗口；products=None 拉全品种。
+    """
+    logger.info("[scheduler] spot_basis collect start")
+    try:
+        from app.ingest import spot_basis as SB
+
+        settings = get_settings()
+        end = _dt.date.today()
+        start = end - _dt.timedelta(days=settings.spot_basis_config.window_days)
+        with session_scope() as s:
+            repo = TaskRepository(s)
+            run = repo.start("spot_basis", label="daily")
+            try:
+                stats = SB.collect_spot_basis(s, start, end, products=None)
+                repo.finish(run, "success", str(stats))
+                logger.info(f"[scheduler] spot_basis done: {stats}")
+            except Exception as e:  # noqa: BLE001
+                repo.finish(run, "failed", str(e))
+                logger.exception("[scheduler] spot_basis failed")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] spot_basis job error: {e}")
+
+
 def _adjust_job() -> None:
     """每日（含夜盘）收盘后重算所有主品种复权主连（hourly + daily），幂等 upsert。
 
@@ -1013,6 +1144,28 @@ def _adjust_job() -> None:
         logger.exception(f"[scheduler] adjust job error: {e}")
 
 
+def _ensure_hourly_uniq_index() -> None:
+    """G5：为 hourly_bar 补 (symbol, trade_datetime, src) 唯一约束（幂等、失败不阻断启动）。
+
+    单表混存 csv/akshare/tqsdk 三 src，靠 src 过滤隔离；若历史已存在同主键重复行，
+    建索引会失败——此时跳过并告警（重复行需先清洗），不阻断调度启动。
+    """
+    from sqlalchemy import text
+
+    from app.core.db import get_engine
+
+    ddl = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS hourly_bar_uniq "
+        "ON hourly_bar (symbol, trade_datetime, src)"
+    )
+    try:
+        with get_engine().begin() as conn:
+            conn.execute(text(ddl))
+        logger.info("[scheduler] hourly_bar unique index ensured")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[scheduler] hourly_bar unique index skipped (可能已存在重复行，需清洗): {e}")
+
+
 def main() -> None:
     setup_logging()
     settings = get_settings()
@@ -1034,6 +1187,7 @@ def main() -> None:
     # 启动时立刻执行一次（方便调试），由 RUN_ON_BOOT=0 关闭
     if os.getenv("RUN_ON_BOOT", "1") == "1":
         time.sleep(3)  # 等 DB ready
+        _ensure_hourly_uniq_index()
         _ingest_job("boot")
 
     try:

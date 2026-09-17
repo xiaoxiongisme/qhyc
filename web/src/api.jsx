@@ -12,6 +12,23 @@ export async function getJSON(path) {
   return res.json();
 }
 
+export async function postJSON(path, body = {}) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = await res.json();
+      detail = j.detail || detail;
+    } catch {}
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
 export function fmtPct(v, digits = 2) {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return `${Number(v).toFixed(digits)}%`;

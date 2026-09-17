@@ -49,9 +49,9 @@ class EnvSettings(BaseSettings):
     PUSHPLUS_TOKEN: str = ""
 
     # 采集/校准
-    INGEST_CRON_1: str = "12:00"
-    INGEST_CRON_2: str = "16:00"
-    INGEST_CRON_3: str = "08:00"
+    INGEST_CRON_1: str = "08:00"     # 早盘前（决策 7）
+    INGEST_CRON_2: str = "12:30"     # 午盘时
+    INGEST_CRON_3: str = "20:00"     # 夜盘前
     TQSDK_PRICE_DIFF_THRESHOLD_PCT: float = 0.5
     TQSDK_TIMEOUT_SEC: int = 15
     TQSDK_MAX_RETRIES: int = 2
@@ -185,8 +185,34 @@ class CronSpec(BaseModel):
     label: str
 
 
+class HourlyConfig(BaseModel):
+    """小时线每小时自动更新（决策 7）。"""
+    enabled: bool = True
+    minute: int = 0                # 每小时该分钟触发（配合 hour='*'）
+    run_hour: str = "all"          # 'all' = 全天 24 次；或指定小时列表
+
+
 class SchedulerConfig(BaseModel):
     cron: list[CronSpec] = Field(default_factory=list)
+    hourly: HourlyConfig = Field(default_factory=HourlyConfig)
+
+
+class InventoryConfig(BaseModel):
+    """库存 / 仓单自动采集（决策 2）。数据源 akshare futures_inventory_em。"""
+    enabled: bool = False
+    freq: str = "weekly"           # weekly / daily
+    run_day: int = 5               # 周频：周几（0=周一 … 6=周日）
+    run_hour: int = 17
+    run_minute: int = 0
+
+
+class SpotBasisConfig(BaseModel):
+    """基差 / 现货自动采集（决策 2）。数据源 akshare futures_spot_price_daily。"""
+    enabled: bool = False
+    freq: str = "daily"
+    run_hour: int = 17
+    run_minute: int = 10
+    window_days: int = 5           # 每次增量回填最近 N 天
 
 
 class ImportsConfig(BaseModel):
@@ -265,17 +291,33 @@ class FusionConfig(BaseModel):
     hourly_src: str = "akshare"
 
 
+class RankPositionConfig(BaseModel):
+    """会员持仓排名（龙虎榜）每日入库。
+
+    数据源：新浪财经期货成交持仓（akshare futures_hold_pos_sina + match_main_contract，
+    见 app/ingest/rank_position.py）。仅商品期货；金融期货（CFFEX）不纳入、不补（决策 3）。
+    exchanges：走新浪 match_main_contract 的商品期货交易所列表。
+    """
+    enabled: bool = False
+    exchanges: list[str] = Field(default_factory=lambda: ["CZCE", "SHFE", "DCE", "GFEX", "INE"])
+    run_hour: int = 17
+    run_minute: int = 30
+
+
 class YamlConfig(BaseModel):
     app: AppYAML = Field(default_factory=AppYAML)
     database: DbYAML = Field(default_factory=DbYAML)
     ingest: IngestConfig = Field(default_factory=IngestConfig)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
+    inventory: InventoryConfig = Field(default_factory=InventoryConfig)
+    spot_basis: SpotBasisConfig = Field(default_factory=SpotBasisConfig)
     imports: ImportsConfig = Field(default_factory=ImportsConfig)
     readiness: ReadinessConfig = Field(default_factory=ReadinessConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     predict: PredictConfig = Field(default_factory=PredictConfig)
     fusion: FusionConfig = Field(default_factory=FusionConfig)
+    rank_position: RankPositionConfig = Field(default_factory=RankPositionConfig)
 
 
 @lru_cache(maxsize=1)
@@ -333,6 +375,18 @@ class Settings(BaseModel):
     @property
     def cron_specs(self) -> list[CronSpec]:
         return self.yaml.scheduler.cron
+
+    @property
+    def hourly_config(self) -> HourlyConfig:
+        return self.yaml.scheduler.hourly
+
+    @property
+    def inventory_config(self) -> InventoryConfig:
+        return self.yaml.inventory
+
+    @property
+    def spot_basis_config(self) -> SpotBasisConfig:
+        return self.yaml.spot_basis
 
     @property
     def fusion(self) -> FusionConfig:

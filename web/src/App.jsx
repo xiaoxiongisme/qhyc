@@ -6,6 +6,7 @@ import Backtest from "./pages/Backtest.jsx";
 import Quality from "./pages/Quality.jsx";
 import Volatility from "./pages/Volatility.jsx";
 import Fusion from "./pages/Fusion.jsx";
+import FusionBacktest from "./pages/FusionBacktest.jsx";
 
 const TABS = [
   { key: "overview", label: "品种总览", comp: Overview },
@@ -15,6 +16,7 @@ const TABS = [
   { key: "backtest", label: "回测面板", comp: Backtest },
   { key: "quality", label: "数据质量", comp: Quality },
   { key: "fusion", label: "融合信号", comp: Fusion },
+  { key: "fusion_bt", label: "融合回测", comp: FusionBacktest },
 ];
 
 export default function App() {

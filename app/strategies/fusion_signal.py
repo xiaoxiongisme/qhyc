@@ -67,26 +67,19 @@ def fusion_state(o, h, l, c, htf_dir, p) -> int:
     return fusion_state_detail(o, h, l, c, htf_dir, p)["state"]
 
 
-def fusion_state_detail(o, h, l, c, htf_dir, p) -> dict:
-    """融合策略主循环，返回最后一根已收盘K之后的持仓**明细**。
+def walk_fusion_states(o, h, l, c, htf_dir, p):
+    """逐根生成融合策略持仓明细（**单一真源**，与 `fusion_state_detail` 同一套循环）。
 
-    返回 dict：
-      state      : 0=FLAT / 1=LONG / 2=SHORT
-      entry_i    : 开仓那根K的索引（-1 表示空仓）
-      entry_px   : 引擎入场价（= 开仓根收盘价，close-only）
-      entry_atr  : 开仓当时的 ATR14（风险单位）
-      peak/trough: 持仓期间收盘价的顺势极值（吊灯止损基准）
-      be_done    : 是否已触发保本（止损已上移到成本价）
-      be_trigger : 保本触发价 = entry_px ± be_r×ATR（到达即挂保本）
-      init_stop  : 初始止损 = entry_px ∓ sl_atr×ATR
-      trail_stop : 吊灯止损 = peak/trough ∓ trail_atr×ATR
-      cur_stop   : 当前生效止损 = 三者中最紧的一个（多取max / 空取min）
+    在每根已收盘 bar `i` 上，只使用 `≤ i` 的数据推断该 bar 收盘后的持仓状态——
+    天然 walk-forward、无前视（回测可直接逐帧消费，O(n) 一次成型）。
+
+    Yields:
+        dict（与 `fusion_state_detail` 返回结构完全一致）：
+          state/entry_i/entry_px/entry_atr/peak/trough/be_done/be_trigger/init_stop/trail_stop/cur_stop
     """
     n = len(c)
     if n < 40:
-        return {"state": 0, "entry_i": -1, "entry_px": None, "entry_atr": None,
-                "peak": None, "trough": None, "be_done": False, "be_trigger": None,
-                "init_stop": None, "trail_stop": None, "cur_stop": None}
+        return
     ma20 = ema(c, p.ma_n)
     atr_arr = atr14(h, l, c, p.atr_n)
     ok_l = htf_dir >= 0
@@ -188,18 +181,45 @@ def fusion_state_detail(o, h, l, c, htf_dir, p) -> dict:
                 trough = c[i]
                 be_done = False
 
-    # ---------------- 汇总持仓价位（多空镜像） ----------------
-    lv = _levels(state, entry_px, e_atr, peak, trough, be_done, p)
-    return {
-        "state": state,
-        "entry_i": entry_i if state != 0 else -1,
-        "entry_px": entry_px if state != 0 else None,
-        "entry_atr": e_atr if state != 0 else None,
-        "peak": peak if state == 1 else None,
-        "trough": trough if state == 2 else None,
-        "be_done": bool(be_done) if state != 0 else False,
-        **lv,
+        # ---------------- 汇总持仓价位（多空镜像） ----------------
+        lv = _levels(state, entry_px, e_atr, peak, trough, be_done, p)
+        yield {
+            "state": state,
+            "entry_i": entry_i if state != 0 else -1,
+            "entry_px": entry_px if state != 0 else None,
+            "entry_atr": e_atr if state != 0 else None,
+            "peak": peak if state == 1 else None,
+            "trough": trough if state == 2 else None,
+            "be_done": bool(be_done) if state != 0 else False,
+            **lv,
+        }
+
+
+def fusion_state_detail(o, h, l, c, htf_dir, p) -> dict:
+    """融合策略主循环，返回最后一根已收盘K之后的持仓**明细**（单一真源）。
+
+    返回 dict：
+      state      : 0=FLAT / 1=LONG / 2=SHORT
+      entry_i    : 开仓那根K的索引（-1 表示空仓）
+      entry_px   : 引擎入场价（= 开仓根收盘价，close-only）
+      entry_atr  : 开仓当时的 ATR14（风险单位）
+      peak/trough: 持仓期间收盘价的顺势极值（吊灯止损基准）
+      be_done    : 是否已触发保本（止损已上移到成本价）
+      be_trigger : 保本触发价 = entry_px ± be_r×ATR（到达即挂保本）
+      init_stop  : 初始止损 = entry_px ∓ sl_atr×ATR
+      trail_stop : 吊灯止损 = peak/trough ∓ trail_atr×ATR
+      cur_stop   : 当前生效止损 = 三者中最紧的一个（多取max / 空取min）
+
+    实现说明：直接消费 `walk_fusion_states` 的最后一帧，与回测共享同一套循环（单一真源，无口径分叉）。
+    """
+    last = {
+        "state": 0, "entry_i": -1, "entry_px": None, "entry_atr": None,
+        "peak": None, "trough": None, "be_done": False,
+        "be_trigger": None, "init_stop": None, "trail_stop": None, "cur_stop": None,
     }
+    for d in walk_fusion_states(o, h, l, c, htf_dir, p):
+        last = d
+    return last
 
 
 def _levels(state: int, entry_px: float, e_atr: float, peak: float, trough: float,
@@ -510,6 +530,7 @@ __all__ = [
     "evaluate_all",
     "fusion_state",
     "fusion_state_detail",
+    "walk_fusion_states",
     "get_position",
     "upsert_position",
     "set_push_state",

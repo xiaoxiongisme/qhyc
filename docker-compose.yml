@@ -48,9 +48,13 @@ services:
       - ./logs:/app/logs
       - ./runtime:/app/runtime
       - ./config:/app/config:ro   # 配置热更新（改 yaml 免重建）
-      # 本地历史数据：把 E:\QH 挂到容器 /app/imports（PRD §4.5）
+      # 本地历史数据：把 E:\Docker\qhyc\imports 挂到容器 /app/imports（PRD §4.5）
       # 子目录形如 /app/imports/FG/data/FG_daily.json
       - ${LOCAL_QH_PATH:-./imports}:/app/imports:ro
+      # 源码/脚本/前端本地挂载：docker 仅提供运行环境，代码改动免重建（重启容器即生效）
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./web/dist:/app/web/dist:ro
     ports:
       - "${API_PORT:-8000}:8000"
     command: ["python", "-m", "app.main"]
@@ -75,6 +79,9 @@ services:
       - ./runtime:/app/runtime
       - ./config:/app/config:ro
       - ${LOCAL_QH_PATH:-./imports}:/app/imports:ro
+      # 源码/脚本本地挂载：docker 仅提供运行环境，代码改动免重建（重启容器即生效）
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
     # scheduler 不监听端口，禁用继承自 Dockerfile 的 HTTP 健康检查
     healthcheck:
       disable: true

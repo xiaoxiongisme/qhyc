@@ -1,7 +1,7 @@
 """
 本地历史数据导入器（§4.5，M1）
 
-数据源目录：容器内 /app/imports （由 docker compose bind 挂载 E:\\QH）
+数据源目录：容器内 /app/imports （由 docker compose bind 挂载 E:/Docker/qhyc/imports） E:\\QH）
 文件命名规范：
 - {PRODUCT}_daily.json                  → main_continuous.raw_*
 - {PRODUCT}_cont_adj.json               → main_continuous.adj_*
@@ -9,7 +9,7 @@
 - {PRODUCT}_rolls.csv                   → main_contract_map（换月+delta）
 - {PRODUCT}_contracts.json              → daily_bar（全合约，⑧）
 
-示例：E:\\QH\\FG\\data\\FG_daily.json → product="FG"
+示例：E:\\QH\\FG\\data\\E:/Docker/qhyc/imports/FG/data/FG_daily.json → product="FG"
 """
 from __future__ import annotations
 

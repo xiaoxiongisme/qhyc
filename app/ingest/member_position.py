@@ -46,12 +46,14 @@ def _build_exchange_coverage() -> dict[str, dict]:
             "known_issue": None,
         },
         "CFFEX": {
-            "active": True,
+            # 决策 3：金融期货不纳入、CFFEX 不补 → 关闭（active=False + 标注 K5）
+            "active": False,
             "func": ak.get_cffex_rank_table,
             "args": lambda d, syms: {"date": d.strftime("%Y%m%d"), "vars_list": syms},
             "symbols": ["IF", "IC", "IM", "IH", "T", "TF", "TS", "TL"],
             "parser": "_parse_cffex_one",
-            "known_issue": None,
+            "known_issue": "K5",
+            "reason": "金融期货（CFFEX）不纳入本项目（决策 3），不补龙虎榜",
         },
         "GFEX": {  # §18.13 v1.3.2 新增
             "active": True,

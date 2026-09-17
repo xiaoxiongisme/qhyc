@@ -1,0 +1,22 @@
+# 构建上下文排除：避免宿主机的 Windows 产物污染镜像，并减小上下文体积
+web/node_modules
+web/dist
+web/package-lock.json
+
+# Python 无关产物
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+
+# 版本控制与本地配置
+.git
+.gitignore
+**/.DS_Store
+*.md
+
+# 运行时/数据目录（由 volume 挂载，不进镜像）
+logs
+runtime
+imports
+pgdata

@@ -1,8 +1,8 @@
-# 期货预测平台 qhyc（M1 数据层 + M2/M3 预测引擎 + M4 回测 + M5 看板 + §16 传导）
+# 期货预测平台 qhyc（M1 数据层 + M2/M3 预测引擎 + M4 回测 + M5 看板 + M8 融合策略回测 + §16 传导）
 
 > 工程根目录：`E:\Docker\qhyc`
-> 数据模板源：`E:\QH\<PRODUCT>\data\`
-> 完整需求见 [`docs/PRD_期货预测平台_v1.1.md`](docs/PRD_期货预测平台_v1.1.md)
+> 数据模板源：`E:\Docker\qhyc\imports\<PRODUCT>\data\`
+> 完整需求见 [`docs/期货预测平台需求文档_PRD.md`](docs/期货预测平台需求文档_PRD.md)
 
 ## M1 目标（§10）
 
@@ -36,7 +36,7 @@ qhyc/
 │   ├── smoke_test.py           # M1 验收
 │   ├── import_local.py         # CLI：本地历史导入
 │   └── ingest_now.py           # CLI：手动触发 ingest
-├── docs/PRD_期货预测平台_v1.1.md
+├── docs/期货预测平台需求文档_PRD.md
 ├── start.ps1 / start.bat       # 一键启动脚本（含 Docker 自动拉起）
 ├── docker-compose.yml          # 三容器编排
 ├── Dockerfile                  # 多阶段：node 构建看板 → python API 镜像
@@ -144,11 +144,11 @@ docker compose exec api python scripts/ingest_now.py --symbol FG888
 
 ## 本地数据挂载（§4.5）
 
-`docker-compose.yml` 把 `${LOCAL_QH_PATH}`（默认 `E:/QH`）挂到容器内 `/app/imports`。
+`docker-compose.yml` 把 `${LOCAL_QH_PATH}`（默认 `E:/Docker/qhyc/imports`）挂到容器内 `/app/imports`。
 导入器按**文件名前缀**扫描（`**/data/{P}_*.{json,csv}`），兼容两种布局：
 
 ```
-E:\QH\
+E:\Docker\qhyc\imports\
 ├── FG\data\            # 实际布局：FG 与 SA 文件混放于此
 │   ├── FG_daily.json
 │   ├── ...
@@ -164,7 +164,7 @@ E:\QH\
 | FG | 1605 行（2020-01-02~2026-08-17） | 1602 行 | 20 次换月 | 21 合约 / 5311 行 | 9076 行 |
 | SA | 1623 行（2019-12-06~2026-08-17） | 1622 行 | 17 次换月 | 18 合约 / 4336 行 | 8260 行 |
 
-注意：`E:\QH` 下还有 `SX`、`TS`、`tqsdk` 等无关目录，导入器只认
+注意：`E:\Docker\qhyc\imports` 下还有 `SX`、`TS`、`tqsdk` 等无关目录，导入器只认
 `data/` 目录内 `{PROD}_daily.json` / `{PROD}_rolls.csv` 前缀文件，不会误导入。
 
 ## 调度（§4.2）

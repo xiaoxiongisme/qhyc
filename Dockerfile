@@ -5,12 +5,16 @@
 # =====================================================
 
 # ---------- Stage 1: 看板构建 ----------
+# 说明：前端默认在宿主机本地构建（node 环境齐全），再由 docker-compose
+# 把 ./web/dist 挂载进容器。此阶段仅作为“干净从零构建”的兜底。
 FROM node:20-alpine AS webbuilder
 WORKDIR /build
 # 依赖先行（缓存层）；国内网络走 npmmirror，可用 --build-arg 覆盖
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-COPY web/package.json web/package-lock.json* ./
-RUN npm config set registry ${NPM_REGISTRY} && npm install
+COPY web/package.json ./
+# 不复制 Windows 生成的 package-lock.json：否则 npm 会据此生成指向
+# node.exe 的 bin 链接，在 alpine 下报 “node.exe: not found”
+RUN npm config set registry ${NPM_REGISTRY} && npm install --no-package-lock
 COPY web/ ./
 RUN npm run build
 

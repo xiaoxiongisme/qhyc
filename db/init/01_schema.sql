@@ -118,7 +118,10 @@ CREATE TABLE IF NOT EXISTS hourly_bar (
     ret             NUMERIC(12,6),
     src             TEXT         NOT NULL DEFAULT 'akshare',
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (symbol, trade_datetime)
+    -- G5：同表混存多 src（csv/akshare/tqsdk），靠 src 过滤隔离；主键纳入 src 杜绝「同一根 K 被
+    -- 双源各写一次」导致的口径污染（§14 #2）。既有库若已存在重复，用运行时 ensure 的
+    -- CREATE UNIQUE INDEX IF NOT EXISTS 兜底（重复行会跳过并告警，不阻断启动）。
+    PRIMARY KEY (symbol, trade_datetime, src)
 );
 SELECT create_hypertable(
     'hourly_bar', 'trade_datetime',
