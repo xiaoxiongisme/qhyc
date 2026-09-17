@@ -28,8 +28,29 @@ import numpy as np
 from app.ingest.fdf.tqhelper import read_config, out_path, current_symbol  # noqa
 
 ROLL_CONFIRM = 3          # 新合约持仓量需连续领先的天数
-RELIABLE_OI = 100_000     # 主力合约持仓量门槛（手）
+RELIABLE_OI = 100_000     # 主力合约持仓量门槛（手，默认；高流动性品种用此值）
 RELIABLE_HOLD = 20        # 需连续达标的交易日数
+
+# 低持仓量品种：单合约持仓量长期低于 100_000 手，用统一门槛会"识别不出可靠主力区间"
+# 而永远无法复权。按品种给更低门槛（依据库内实测主力持仓峰值）：
+#   SC 原油 峰值 ~6.1万 / SN 锡 ~7.7万 / PB 铅 ~13.7万 / RU 橡胶 ~19万（但 RU 合约符号异常，见下）
+# 注意：RU 的 hourly contract 表只有一个被合并的符号 SHFE.ru2001，单降门槛会产出错误序列，
+# 需先修数据再复权，故此处不下调 RU 门槛。
+RELIABLE_OI_MAP = {
+    "SC": 20_000,
+    "SN": 25_000,
+    "PB": 40_000,
+}
+
+
+def reliable_oi(product: str) -> int:
+    """按品种返回主力持仓量门槛；未知/空品种回落默认 100_000。
+
+    保证：对已经能正常复权的 47 个高流动性品种（不在 MAP 中）完全不改行为。
+    """
+    if not product:
+        return RELIABLE_OI
+    return RELIABLE_OI_MAP.get(str(product).upper(), RELIABLE_OI)
 
 
 def _load_contracts_wide(contract_df):
@@ -62,11 +83,12 @@ def _load_contracts_wide(contract_df):
     return frames, close_wide, oi_wide
 
 
-def build_adjusted_from_frames(frames, raw_main_df=None):
+def build_adjusted_from_frames(frames, raw_main_df=None, product: str = ""):
     """核心复权（与原始版 main() 逐字节对齐）。
 
     frames       : {合约: DataFrame[date,open,high,low,close,volume,oi]}，已切好早期残段
     raw_main_df  : 可选，天勤原始主连（前段下架合约区平移接上用）
+    product      : 品种代码（如 "SC"），用于按品种取 OI 门槛；空则回落默认 100_000
     """
     if not frames:
         raise ValueError("具体合约数据为空，无法推断主力（复权锚点）")
@@ -120,7 +142,8 @@ def build_adjusted_from_frames(frames, raw_main_df=None):
             adj = adj.iloc[:-1]
             C = C.iloc[:-1]
 
-    ok = adj["oi"] >= RELIABLE_OI
+    thr = reliable_oi(product)
+    ok = adj["oi"] >= thr
     roll_ok = ok.rolling(RELIABLE_HOLD).sum()
     good = roll_ok[roll_ok >= RELIABLE_HOLD]
     if len(good) == 0:
@@ -128,7 +151,7 @@ def build_adjusted_from_frames(frames, raw_main_df=None):
         raise RuntimeError("没有任何区间的主力持仓量达标，无法复权")
     start = adj.index[adj.index.get_loc(good.index[0]) - RELIABLE_HOLD + 1]
     dropped = int((adj.index < start).sum())
-    print(f"  主力持仓量达标（≥{RELIABLE_OI:,}手 连续{RELIABLE_HOLD}日）起点：{start.date()}"
+    print(f"  主力持仓量达标（≥{thr:,}手 连续{RELIABLE_HOLD}日）起点：{start.date()}"
           f"，丢弃此前 {dropped} 根（真主力已下架，识别不可信）")
     adj = adj.loc[start:]
 
@@ -203,7 +226,7 @@ def pick_dominant(oi):
 
 
 def build_adjusted(cont_df=None, contract_df=None, oi_df=None, raw_main_df=None,
-                   sym_col_map=None, frames=None):
+                   sym_col_map=None, frames=None, product: str = ""):
     """用未复权主连 + 具体合约两张表，算出复权主连 DataFrame（加法平移前复权）。
 
     两种调用方式：
@@ -217,7 +240,7 @@ def build_adjusted(cont_df=None, contract_df=None, oi_df=None, raw_main_df=None,
           adj 为布尔：前段未复权区 False，已复权区 True。
     """
     if frames is not None and frames:
-        return build_adjusted_from_frames(frames, raw_main_df=raw_main_df)
+        return build_adjusted_from_frames(frames, raw_main_df=raw_main_df, product=product)
 
     # 退化路径：只有 close/oi 宽表
     if contract_df is None or len(contract_df) == 0:

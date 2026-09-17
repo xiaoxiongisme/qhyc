@@ -33,8 +33,11 @@ def _load_continuous(spec, freq):
     return out[["date", "open", "high", "low", "close", "volume"]]
 
 
-def _build_adjusted_hourly(frames, raw_main_df):
-    """子日线（小时/15min）复权：与日线相同的加法平移前复权，主力判定按交易日聚合 OI。"""
+def _build_adjusted_hourly(frames, raw_main_df, reliable_oi=BC.RELIABLE_OI):
+    """子日线（小时/15min）复权：与日线相同的加法平移前复权，主力判定按交易日聚合 OI。
+
+    reliable_oi: 按品种的主持仓量门槛（低流动性品种用更低值，见 build_continuous.reliable_oi）。
+    """
     oi = pd.DataFrame({s: f["oi"] for s, f in frames.items()}).sort_index()
     oi_daily = oi.groupby(oi.index.floor("D")).last()
     dom = BC.pick_dominant(oi_daily).dropna()
@@ -84,7 +87,7 @@ def _build_adjusted_hourly(frames, raw_main_df):
             adj = adj.iloc[:-1]
             C = C.iloc[:-1]
 
-    ok = adj["oi"] >= BC.RELIABLE_OI
+    ok = adj["oi"] >= reliable_oi
     roll_ok = ok.rolling(BC.RELIABLE_HOLD).sum()
     good = roll_ok[roll_ok >= BC.RELIABLE_HOLD]
     if len(good) == 0:
@@ -174,9 +177,9 @@ def run(symbol, freq="hourly"):
           f"{max(f.index[-1] for f in frames.values()).date()}")
 
     if freq == "daily":
-        adj = BC.build_adjusted(frames=frames, raw_main_df=cont)
+        adj = BC.build_adjusted(frames=frames, raw_main_df=cont, product=spec["code"])
     else:
-        adj = _build_adjusted_hourly(frames, cont)
+        adj = _build_adjusted_hourly(frames, cont, reliable_oi=BC.reliable_oi(spec["code"]))
     n = D.save_adjusted(freq, spec["tq_cont"], adj)
     print(f"  写入 cont_adj 表：{n} 根，复权方式=forward（加法平移，对齐原始版）")
     return adj

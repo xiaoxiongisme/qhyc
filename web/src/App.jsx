@@ -5,6 +5,7 @@ import Sectors from "./pages/Sectors.jsx";
 import Backtest from "./pages/Backtest.jsx";
 import Quality from "./pages/Quality.jsx";
 import Volatility from "./pages/Volatility.jsx";
+import Fusion from "./pages/Fusion.jsx";
 
 const TABS = [
   { key: "overview", label: "品种总览", comp: Overview },
@@ -13,6 +14,7 @@ const TABS = [
   { key: "volatility", label: "波动率", comp: Volatility },
   { key: "backtest", label: "回测面板", comp: Backtest },
   { key: "quality", label: "数据质量", comp: Quality },
+  { key: "fusion", label: "融合信号", comp: Fusion },
 ];
 
 export default function App() {

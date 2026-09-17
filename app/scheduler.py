@@ -859,6 +859,18 @@ def _build_scheduler() -> BlockingScheduler:
         )
         logger.info("[scheduler] registered fusion_scan every 15min")
 
+    # 复权主连每日重算（凌晨 02:30，此时日盘+夜盘均已收盘并定稿）
+    # 幂等：每次全量重算并 upsert cont_adj；单品种异常隔离，不中断整体
+    sched.add_job(
+        _adjust_job,
+        trigger=CronTrigger(hour=2, minute=30, timezone=settings.env.TZ),
+        id="adjust_cont_adj",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("[scheduler] registered cron 02:30 (adjust_cont_adj)")
+
     return sched
 
 
@@ -964,6 +976,41 @@ def _lstm_weekly_job() -> None:
                 logger.exception(f"[scheduler] lstm weekly retrain failed: {e}")
     except Exception as e:
         logger.exception(f"[scheduler] lstm weekly job error: {e}")
+
+
+def _adjust_job() -> None:
+    """每日（含夜盘）收盘后重算所有主品种复权主连（hourly + daily），幂等 upsert。
+
+    单品种异常隔离：任一品种失败仅记日志，不影响其余品种与外層调度。
+    耗时较长（50+ 品种 × 2 周期），故排在 02:30 空闲时段。
+    """
+    logger.info("[scheduler] adjust cont_adj start")
+    try:
+        settings = get_settings()
+        with session_scope() as s:
+            repo = TaskRepository(s)
+            run = repo.start("adjust", label="nightly")
+            try:
+                from app.ingest.fdf import adjust_fdf
+            except Exception as imp_e:  # noqa: BLE001
+                repo.finish(run, "failed", f"import failed: {imp_e}")
+                logger.exception("[scheduler] adjust import failed")
+                return
+            ok = fail = 0
+            for spec in settings.main_contracts:
+                key = f"{spec.exchange}.{spec.product.lower()}"
+                for freq in ("hourly", "daily"):
+                    try:
+                        adjust_fdf.run(key, freq)
+                        ok += 1
+                    except Exception as e:  # noqa: BLE001
+                        fail += 1
+                        logger.warning(f"[scheduler] adjust {key} {freq} failed: {e}")
+            status = "success" if fail == 0 else "partial"
+            repo.finish(run, status, f"ok={ok} fail={fail}")
+            logger.info(f"[scheduler] adjust done ok={ok} fail={fail}")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] adjust job error: {e}")
 
 
 def main() -> None:

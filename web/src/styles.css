@@ -78,3 +78,13 @@ tr:hover td { background: var(--panel2); }
 .small { font-size: 12px; color: var(--muted); }
 .err { color: var(--warn); }
 .loading { color: var(--muted); padding: 30px; text-align: center; }
+
+.dir-up { color: var(--up); font-weight: 700; }
+.dir-down { color: var(--down); font-weight: 700; }
+.pushbody {
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; margin-top: 6px;
+  font-size: 12px; line-height: 1.5;
+}
+.tablewrap { overflow-x: auto; }
