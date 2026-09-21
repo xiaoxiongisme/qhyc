@@ -1,4 +1,14 @@
-"""§18.4/§18.5（v1.3.2）M6a：持仓/库存/基差 查询 API + 手动采集"""
+"""§18.4/§18.5（v1.3.2）M6a：持仓/库存/基差 查询 API + 手动采集
+
+symbol 口径
+-----------
+* ``member_position_rank.symbol`` = **合约标准码**（4 位大写，如 ``AP2701`` / ``CU2611``）；
+* ``inventory.symbol`` / ``spot_basis.symbol`` = **品种码**（大写，如 ``RB``）。
+
+查询参数做了**容错归一**：传入郑商所原生 3 位码（``AP701``）、小写码（``cu2611``）
+或新浪写法（``AP2701``）都会被换算成标准码；同时保留原写法一并匹配，
+兼容历史行。换算规则见 ``app.core.symbol_code``。
+"""
 from __future__ import annotations
 
 from datetime import date
@@ -8,10 +18,30 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.core import symbol_code as SC
 from app.core.db import fastapi_db_dep
 from app.models import Inventory, MemberPositionRank, SpotBasis
 
 router = APIRouter()
+
+
+def _contract_candidates(value: Optional[str], exchange: Optional[str] = None) -> Optional[list[str]]:
+    """把用户传入的合约码展开成「可能的库内写法」集合。
+
+    ``AP701`` → ``{'AP701', 'AP2701'}``；``cu2611`` → ``{'CU2611'}``。
+    这样无论库内是历史写法还是标准码都能命中，且不依赖调用方知道口径。
+    """
+    if not value:
+        return None
+    raw = value.strip()
+    return sorted({raw.upper(), SC.to_std(raw, exchange=exchange)})
+
+
+def _product(value: Optional[str]) -> Optional[str]:
+    """品种码（无月份）统一大写；若误传合约码则退化为其品种码。"""
+    if not value:
+        return None
+    return SC.product_of(value) or value.strip().upper()
 
 
 @router.get("/positions/latest")
@@ -42,8 +72,9 @@ def positions_latest(
     )
     if exchange:
         stmt = stmt.where(MemberPositionRank.exchange == exchange.upper())
-    if symbol:
-        stmt = stmt.where(MemberPositionRank.symbol == symbol.upper())
+    cands = _contract_candidates(symbol, exchange)
+    if cands:
+        stmt = stmt.where(MemberPositionRank.symbol.in_(cands))
     rows = db.execute(stmt).scalars().all()
     return {
         "trade_date": td.isoformat(),
@@ -87,7 +118,7 @@ def inventory_latest(
     if exchange:
         stmt = stmt.where(Inventory.exchange == exchange.upper())
     if symbol:
-        stmt = stmt.where(Inventory.symbol == symbol.upper())
+        stmt = stmt.where(Inventory.symbol == _product(symbol))
     rows = db.execute(stmt).all()
     return {
         "rows": [
@@ -170,7 +201,7 @@ def basis_latest(
     """最新基差（按品种）"""
     stmt = select(SpotBasis).order_by(SpotBasis.report_date.desc(), SpotBasis.symbol).limit(limit)
     if symbol:
-        stmt = stmt.where(SpotBasis.symbol == symbol.upper())
+        stmt = stmt.where(SpotBasis.symbol == _product(symbol))
     rows = db.execute(stmt).scalars().all()
     return {
         "rows": [

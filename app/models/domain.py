@@ -410,6 +410,42 @@ class ContractDaily(Base):
 
 
 # -----------------------------------------------------
+# 合约代码对照表（全库统一 4 位标准码的单一真源）
+# -----------------------------------------------------
+class ContractCodeMap(Base):
+    """合约代码对照表（DDL: db/init/14_contract_code.sql）。
+
+    ``std_symbol`` 是**全库统一口径**：品种码大写 + YYMM 四位（``AP2701``）。
+    各数据源的原生写法在 ``official_symbol`` / ``sina_symbol`` / ``tqsdk_symbol``，
+    派生规则见 ``app.core.symbol_code``。
+    """
+
+    __tablename__ = "contract_code_map"
+
+    exchange: Mapped[str] = mapped_column(Text, primary_key=True)
+    std_symbol: Mapped[str] = mapped_column(Text, primary_key=True)
+    version: Mapped[str] = mapped_column(Text, primary_key=True, default="v1.0")
+    product: Mapped[str] = mapped_column(Text, nullable=False)
+    month_code: Mapped[str] = mapped_column(Text, nullable=False)
+    deliv_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    deliv_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    official_symbol: Mapped[str | None] = mapped_column(Text)
+    sina_symbol: Mapped[str | None] = mapped_column(Text)
+    tqsdk_symbol: Mapped[str | None] = mapped_column(Text)
+    observed_native: Mapped[str | None] = mapped_column(Text)
+    sources: Mapped[str | None] = mapped_column(Text)
+    name: Mapped[str | None] = mapped_column(Text)
+    first_seen: Mapped[date | None] = mapped_column(Date)
+    last_seen: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# -----------------------------------------------------
 # 任务流水
 # -----------------------------------------------------
 class TaskRun(Base):

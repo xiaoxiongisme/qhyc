@@ -13,6 +13,14 @@ load_bars / load_contract_frames / latest_date / list_symbols，
   open/high/low/close: NUMERIC(20,4)
   volume/oi: BIGINT
   adj : NUMERIC(20,4)  —— 仅 cont_adj 有意义（前复权因子，已复权区=1/True 区）
+
+symbol 口径说明（2026-09-20）
+----------------------------
+``fut_kline.symbol`` 存的是**数据源原生码**，**刻意不参与**全库 4 位标准码归一：
+  · 主连 ``KQ.m@CZCE.FG``（``m`` 大小写敏感）
+  · 合约 ``CZCE.FG609`` —— **郑商所仍是 3 位**，天勤按此订阅，改了取数就断
+各源原生码 ↔ 标准码（4 位）的对应关系登记在 ``contract_code_map``
+（``tqsdk_symbol`` 列），需要跨表 join 时用 ``std_symbol``。
 """
 from __future__ import annotations
 
@@ -221,15 +229,28 @@ def load_bars(freq, kind, symbol, start=None, end=None):
     return df
 
 
-def _contract_window(code, product, code_digits):
+def _contract_window(code, product, code_digits, ref=None):
     """由合约代码解析其真实交易窗口，剔除行情源填入的占位 phantom 行情。
 
-    CZCE 用 3 位码（FG609 -> 2026-09），其他所用 4 位（rb2605 -> 2026-05）。
-    年份：3 位为 2020+个位数，4 位为 2000+两位数；月取末两位。
+    CZCE 用 3 位码（``FG609`` → 2026-09），其他所用 4 位（``rb2605`` → 2026-05）。
+
+    ⚠️ 3 位码的「年」只有**个位**（十年一循环），必须锚定参考日才能定出完整年份。
+    原实现硬编码 ``2020 + 个位``，跨到 2030 年代会整体错十年 ——
+    现改为由 ``ref`` 推出「不早于 ref 的最小匹配年份」，``ref`` 取
+    该合约行情自身的最后一天（见 ``_filter_contract``）。
+    4 位码无歧义（两位年 + 两位月），不受影响。
     """
     suffix = code[len(product):]
-    yr = (2020 + int(suffix[:-2])) if code_digits == 3 else (2000 + int(suffix[:-2]))
     mo = int(suffix[-2:])
+    if code_digits == 3:
+        d = int(suffix[0])
+        r = pd.Timestamp(ref) if ref is not None else pd.Timestamp.now(tz="UTC")
+        ref_ym = r.year * 100 + r.month
+        yr = r.year - 1
+        while not (yr % 10 == d and yr * 100 + mo >= ref_ym):
+            yr += 1
+    else:
+        yr = 2000 + int(suffix[:-2])
     cd = pd.Timestamp(yr, mo, 1, tz="UTC")
     start = cd - pd.DateOffset(years=2)
     end = cd + pd.DateOffset(years=1, months=1)
@@ -239,7 +260,8 @@ def _contract_window(code, product, code_digits):
 def _filter_contract(df, code, product, code_digits):
     if len(df) == 0:
         return df
-    start, end = _contract_window(code, product, code_digits)
+    # 参考日取该合约行情自身的最后一天：只用来定 3 位码所属的十年，不影响筛选语义
+    start, end = _contract_window(code, product, code_digits, ref=df.index.max())
     return df[(df.index >= start) & (df.index <= end)]
 
 

@@ -190,6 +190,11 @@ def contract_codes(sym, years=range(10), from_year=None):
     这里把可能的年份全列出来，不存在或已下市的合约在抓取时会被跳过，
     所以宁可多列，不要漏。
 
+    ⚠️ 本函数产出的是**天勤原生码**（``CZCE.FG601``），不是全库统一的 4 位标准码
+    —— 天勤按原生码订阅，故这里**必须保持 3 位**。
+    需要与业务表（standard 4 位）对齐时用 ``app.core.symbol_code.to_std``；
+    反向（标准码 → 天勤码）用 ``symbol_code.to_tqsdk``。
+
     from_year：可选，只枚举该年份（含）之后的合约。取数脚本会据此尊重
     config.json 的 start —— 从 start 的前一年起取（多取一年是为了让 start
     那年年初的换月也能对上复权锚点），避免无谓地去请求天勤早已下架的远古合约

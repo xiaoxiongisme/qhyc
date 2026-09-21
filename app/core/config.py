@@ -248,6 +248,26 @@ class FusionConfig(BaseModel):
     thr: float = 0.03               # 行情分级斜率阈值（实际未用于门控）
     entry_mode: str = "both_nm"     # 回踩 + 突破（去 MACD）
     cooldown_bars: int = 3          # 离场后冷却根数
+    # ---- V3.1 门控（2026-09-20；默认值 = V3.4 定稿口径，见 PRD §6.7/§15.4）----
+    # ADX 趋势强度门控：小时线 ADX(adx_n) < adx_min 则放弃本根入场（用上一根判定，无前视）。
+    #   0 = 关闭；V3.1 验证最优阈值为 15（阈值 >=20 起转亏，勿抬）。
+    adx_n: int = 14                 # ADX 周期（小时线）
+    adx_min: float = 15.0           # ADX 入场门控阈值（V3.1 启用）
+    # 回踩支路是否要求「收强/收弱」（收在中值之上的阳线 / 之下的阴线）。
+    #   V3.1 起取消该条件（False）；true=V3.0 旧行为回退开关。
+    use_sbull: bool = False
+    # ---- V3.2 斐波汇流 + P1 加码（2026-09-20；默认值 = V3.4 定稿口径）----
+    # P0 斐波那契·汇流：把「回踩极值是否落在斐波位附近」作为回踩支路的入场质量门控。
+    #   仅回踩支路生效；不动 EMA20 体系、不影响突破支路。
+    fib_confl: bool = True          # V3.2 引入并默认启用（false 回退 V3.1）
+    fib_ratios: list[float] = Field(default_factory=lambda: [0.382, 0.5, 0.618])
+    fib_tol_atr: float = 0.5        # 容差 = fib_tol_atr × ATR
+    # P1 利弗莫尔·阶梯加码（**开仓恒为 1 手**）：V3.4 由「浮盈门槛」门控——
+    #   加码条件 = 收盘创入场以来新高/新低 且 浮盈 >= lots × add_thr_atr × ATR（金字塔）。
+    #   V3.2 的「吊灯已推进到加码后均价之上」结构保本约束自 V3.4 停用（实测损失 19.6% 收益）。
+    add_max_lots: int = 2           # 最大手数（1 = 不加码，回到 P0 固定1手）
+    add_thr_atr: float = 1.0        # V3.4 新增：加码浮盈门槛（×ATR，随手数线性抬升）
+    add_guard_atr: float = 0.0      # V3.2 结构保本放宽量；V3.4 停用（保留字段兼容旧配置）
     min_bars: int = 160             # 最少历史根数（需 >= ema_k + 缓冲）
     stale_minutes: int = 90         # 「信号新鲜度」上限（分钟）：最新K超过此值则抑制状态变化信号
     display_max_age_min: int = 14400  # 「播报展示」上限（分钟，默认10天）

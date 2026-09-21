@@ -20,8 +20,34 @@ from typing import Any
 
 import pandas as pd
 
+from app.core import symbol_code as SC
 from app.core.logging import logger
 from app.models import SpotBasis
+
+
+def _norm_contract(v, ref: date) -> str | None:
+    """近月 / 主力合约码 → **标准码**（品种大写 + YYMM 四位）。
+
+    ``futures_spot_price_daily`` 各所写法不一（2026-09-20 实测）：
+      · 上期 / 大商 / 上期能源：**小写** 4 位 —— ``rb2609`` / ``j2609``
+      · 广期：大写 4 位 —— ``SI2610``
+      · 郑商：大写 **3 位** —— ``PF610`` / ``TA610``
+    统一到标准码后，``contract_bars`` 等下游才能把这些代码喂给行情接口
+    （喂之前再用 ``symbol_code.to_native`` / ``to_sina`` 转回各源原生写法）。
+    """
+    s = _to_str(v)
+    if not s:
+        return None
+    return SC.to_std(s, ref_date=ref) or None
+
+
+def _norm_month(contract: str | None, raw, ref: date) -> str | None:
+    """月份码 → ``YYMM``（4 位）。优先由已归一的标准码反推，反推不到再用原始值。"""
+    if contract:
+        yr, mo = SC.delivery_ym(contract, ref_date=ref)
+        if yr is not None and mo is not None:
+            return f"{yr % 100:02d}{mo:02d}"
+    return _to_str(raw)
 
 
 def _to_date(s) -> date | None:
@@ -79,18 +105,20 @@ def fetch_spot_basis(
         sym = _to_str(r.get("symbol"))
         if not sym:
             continue
+        near_c = _norm_contract(r.get("near_contract"), d)
+        dom_c = _norm_contract(r.get("dominant_contract"), d)
         rows.append(
             {
                 "report_date": d,
                 "exchange": "auto",
                 "symbol": sym.upper(),
                 "spot_price": _to_dec(r.get("spot_price")),
-                "near_contract": _to_str(r.get("near_contract")),
+                "near_contract": near_c,
                 "near_contract_price": _to_dec(r.get("near_contract_price")),
-                "dominant_contract": _to_str(r.get("dominant_contract")),
+                "dominant_contract": dom_c,
                 "dominant_contract_price": _to_dec(r.get("dominant_contract_price")),
-                "near_month": _to_str(r.get("near_month")),
-                "dominant_month": _to_str(r.get("dominant_month")),
+                "near_month": _norm_month(near_c, r.get("near_month"), d),
+                "dominant_month": _norm_month(dom_c, r.get("dominant_month"), d),
                 "near_basis": _to_dec(r.get("near_basis")),
                 "dom_basis": _to_dec(r.get("dom_basis")),
                 "near_basis_rate": _to_dec(r.get("near_basis_rate")),

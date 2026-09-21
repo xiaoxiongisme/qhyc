@@ -1,10 +1,12 @@
 """
 融合策略实时信号引擎（每15分钟扫描用）
 
-与已验证回测口径逐位一致（额外执行口径）：
+与已验证回测口径逐位一致（额外执行口径，V3.4 定稿 2026-09-21）：
   - 方向层：小时线 EMA140，门控多/空（用前一根方向对齐，无前视）
-  - 入场：MA20 回踩重启 + 10根突破（both_nm，去 MACD）
+  - 门控：ADX(14)≥15（用上一根判定）+ 斐波汇流（仅回踩支路，V3.2 起）
+  - 入场：MA20 回踩重启（无收强要求）+ 10根突破（both_nm，去 MACD）
   - 离场：2×ATR 初始止损 + 2×ATR 吊灯移动止损 + 0.5×ATR 保本
+  - 加码：P1 利弗莫尔阶梯加码至 add_max_lots 手（V3.4 由浮盈门槛 lots×add_thr_atr×ATR 门控）
   - 执行：收盘价判定（close-only），与回测"只看收盘价"完全一致
 
 口径说明（2026-09-14 修正）：
@@ -58,6 +60,35 @@ def atr14(h, l, c, n: int = 14):
     return out
 
 
+def adx14(h, l, c, n: int = 14):
+    """Wilder ADX(n)：小时线趋势强度（只量强弱、不量方向）。
+
+    与回测 `_fusion_adx_filter.adx14` 同式（ewm(adjust=False) 等价 Wilder RMA）。
+    用途（V3.1）：入场门控——方向对但「根本没趋势」的震荡市假信号应当放弃。
+    前 2n 根置 0，而入场要求 i>=30，故不会被误门控。
+    """
+    h = np.asarray(h, float)
+    l = np.asarray(l, float)
+    c = np.asarray(c, float)
+    cprev = np.concatenate([[c[0]], c[:-1]])
+    hprev = np.concatenate([[h[0]], h[:-1]])
+    lprev = np.concatenate([[l[0]], l[:-1]])
+    tr = np.maximum.reduce([h - l, np.abs(h - cprev), np.abs(l - cprev)])
+    up = h - hprev
+    dn = lprev - l
+    pdm = np.where((up > dn) & (up > 0), up, 0.0)
+    mdm = np.where((dn > up) & (dn > 0), dn, 0.0)
+    atr_ = pd.Series(tr).ewm(span=n, adjust=False).mean().to_numpy()
+    pp = pd.Series(pdm).ewm(span=n, adjust=False).mean().to_numpy()
+    mm = pd.Series(mdm).ewm(span=n, adjust=False).mean().to_numpy()
+    pdi = 100 * pp / (atr_ + 1e-9)
+    mdi = 100 * mm / (atr_ + 1e-9)
+    dx = 100 * np.abs(pdi - mdi) / (pdi + mdi + 1e-9)
+    ad = pd.Series(dx).ewm(span=n, adjust=False).mean().to_numpy().copy()
+    ad[:2 * n] = 0.0
+    return ad
+
+
 # -----------------------------------------------------
 # 融合策略主循环：返回最后一根K收盘后的 state（0/1/2）
 # 逻辑逐位复刻 mtf_engine_intrabar.run_symbol_intrabar（both_nm / close-only）
@@ -85,10 +116,31 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
     ok_l = htf_dir >= 0
     ok_s = htf_dir <= 0
 
+    # ---- V3.1 可选项（默认关闭 = 与旧行为逐位一致）----
+    # adx_min > 0 时启用「趋势强度门控」：小时线 ADX(adx_n) 低于阈值则放弃本根入场。
+    # use_sbull = False 时取消回踩支路的「收强/收弱」要求（V3.1 验证为有效改进）。
+    adx_arr = adx14(h, l, c, int(getattr(p, "adx_n", 14)))
+    adx_min = float(getattr(p, "adx_min", 0.0) or 0.0)
+    use_sbull = bool(getattr(p, "use_sbull", True))
+
+    # ---- V3.2 可选项（默认关闭 = 与 V3.1 逐位一致）----
+    # P0 斐波那契·汇流：回踩极值须落在斐波位 ± tol×ATR 内（只作用于回踩支路，不动 EMA20 体系）。
+    fib_confl = bool(getattr(p, "fib_confl", False))
+    fib_ratios = tuple(getattr(p, "fib_ratios", (0.382, 0.5, 0.618)) or (0.382, 0.5, 0.618))
+    fib_tol_atr = float(getattr(p, "fib_tol_atr", 0.5) or 0.5)
+    # P1 利弗莫尔·阶梯加码：允许多手；V3.4 起由「浮盈门槛」门控——
+    #   门槛 = lots × add_thr_atr × ATR（金字塔式随手数线性抬升）。
+    #   V3.2 的「吊灯已推进到加码后均价之上」结构保本约束（add_guard_atr）自 V3.4 停用。
+    add_max_lots = int(getattr(p, "add_max_lots", 1) or 1)
+    add_guard_atr = float(getattr(p, "add_guard_atr", 0.0) or 0.0)  # V3.4 停用（保留字段兼容旧配置）
+    add_thr_atr = float(getattr(p, "add_thr_atr", 1.0) or 1.0)
+
     ph: list[int] = []
     pl: list[int] = []
     state = 0
-    entry_px = 0.0
+    entry_px = 0.0           # 首次买入价（= 加权均价在 lots==1 时相同）
+    avg_px = 0.0             # 加权均价（加码后上移）
+    lots = 1.0
     entry_i = -1
     cooldown = 0
     e_atr = 0.0
@@ -109,10 +161,11 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
             cooldown -= 1
 
         # ---------------- 离场（多空镜像，close-only） ----------------
+        # 成本基准用加权均价 avg_px（未加码时 == entry_px，与 V3.1 逐位一致）。
         if state == 1:
             if c[i] > peak:
                 peak = c[i]
-            st = entry_px - p.sl_atr * e_atr
+            st = avg_px - p.sl_atr * e_atr
             if p.trail_atr > 0:
                 t = peak - p.trail_atr * e_atr
                 if t > st:
@@ -125,10 +178,12 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
                 state = 0
                 cooldown = p.cooldown_bars
                 be_done = False
+                lots = 1.0
+                avg_px = entry_px
         elif state == 2:
             if c[i] < trough:
                 trough = c[i]
-            st = entry_px + p.sl_atr * e_atr
+            st = avg_px + p.sl_atr * e_atr
             if p.trail_atr > 0:
                 t = trough + p.trail_atr * e_atr
                 if t < st:
@@ -141,6 +196,8 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
                 state = 0
                 cooldown = p.cooldown_bars
                 be_done = False
+                lots = 1.0
+                avg_px = entry_px
 
         # ---------------- 进场（state==0 且过冷却） ----------------
         if state == 0 and cooldown == 0 and i >= 30:
@@ -157,16 +214,63 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
             use_bk = p.entry_mode in ("breakout", "breakout_nomacd", "both", "both_nm")
             no_macd = p.entry_mode in ("breakout_nomacd", "both_nm")
 
-            s_tl = use_pb and ok_l[i] and up and tl and sbull and cross_up
-            s_ts = use_pb and ok_s[i] and dn and ts and sbear and cross_down
+            s_tl = use_pb and ok_l[i] and up and tl and (sbull or not use_sbull) and cross_up
+            s_ts = use_pb and ok_s[i] and dn and ts and (sbear or not use_sbull) and cross_down
             _hh10 = max(h[max(0, i - 10):i])
             _ll10 = min(l[max(0, i - 10):i])
             s_bkl = use_bk and ok_l[i] and c[i] > _hh10 and c[i] > o[i] and no_macd
             s_bks = use_bk and ok_s[i] and c[i] < _ll10 and c[i] < o[i] and no_macd
 
+            # ---- P0 斐波那契·汇流（只作用于回踩支路）----
+            # 斐波"腿" = 最近一个**已确认枢轴** → 其后极值（回看窗口 W 内，天然无前视）。
+            # 要求该根的逆势极值 l[i](多)/h[i](空) 落在 0.382/0.5/0.618 位 ± tol×ATR 内。
+            if fib_confl and (s_tl or s_ts):
+                _tol = fib_tol_atr * atr_arr[i]
+                if s_tl:
+                    _legl = None
+                    if pl:
+                        _sli = pl[-1]
+                        if i - _sli >= 2:
+                            _seg = h[_sli:i + 1]
+                            _shi = _sli + int(np.argmax(_seg))
+                            _lg = float(_seg.max()) - float(l[_sli])
+                            if _lg > 0:
+                                _legl = (_shi, _lg)
+                    if _legl is None:
+                        s_tl = False
+                    else:
+                        _shp = float(h[_legl[0]])
+                        _lo = float(l[i])
+                        if not any(abs(_lo - (_shp - r * _legl[1])) <= _tol for r in fib_ratios):
+                            s_tl = False
+                if s_ts:
+                    _legs = None
+                    if ph:
+                        _shj = ph[-1]
+                        if i - _shj >= 2:
+                            _seg2 = l[_shj:i + 1]
+                            _slj = _shj + int(np.argmin(_seg2))
+                            _lg2 = float(h[_shj]) - float(_seg2.min())
+                            if _lg2 > 0:
+                                _legs = (_slj, _lg2)
+                    if _legs is None:
+                        s_ts = False
+                    else:
+                        _slp = float(l[_legs[0]])
+                        _hi = float(h[i])
+                        if not any(abs(_hi - (_slp + r * _legs[1])) <= _tol for r in fib_ratios):
+                            s_ts = False
+
+            # ADX 趋势强度门控（V3.1）：趋势不够强 → 本根全部入场信号作废。
+            # 用「上一根」ADX 判定（i>=2 恒成立），与回测 bt_engine 完全一致、无前视。
+            if adx_min > 0 and adx_arr[i - 1] < adx_min:
+                s_tl = s_ts = s_bkl = s_bks = False
+
             if s_tl or s_bkl:
                 state = 1
                 entry_px = c[i]
+                avg_px = c[i]
+                lots = 1.0
                 entry_i = i
                 e_atr = atr_arr[i]
                 peak = c[i]
@@ -175,18 +279,40 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
             elif s_ts or s_bks:
                 state = 2
                 entry_px = c[i]
+                avg_px = c[i]
+                lots = 1.0
                 entry_i = i
                 e_atr = atr_arr[i]
                 peak = c[i]
                 trough = c[i]
                 be_done = False
 
+        # ---------------- P1 利弗莫尔·阶梯加码（V3.4：浮盈门槛门控） ----------------
+        # 开仓恒为 1 手；仅当「收盘创入场以来新高/新低」且「浮盈 >= lots × add_thr_atr × ATR」
+        # 才加 1 手（金字塔：门槛随手数线性抬升）。V3.2 的结构保本前提
+        # （吊灯须已推进到加码后均价之上，add_guard_atr）自 V3.4 停用——
+        # 实测该约束损失 19.6% 收益而回撤仅多 1.4 万（PRD §17.1 CR-5）。
+        # 代价：加码后不再保证「最差=保本」，约 53% 加码单以亏损结束（中位仅 −0.16R）。
+        elif add_max_lots >= 2 and state != 0 and lots < add_max_lots:
+            if state == 1:
+                _hh = max(h[entry_i:i]) if i > entry_i else h[entry_i]
+                if c[i] > _hh and (c[i] - entry_px) >= lots * add_thr_atr * e_atr:
+                    avg_px = (avg_px * lots + float(c[i])) / (lots + 1.0)
+                    lots += 1.0
+            elif state == 2:
+                _ll = min(l[entry_i:i]) if i > entry_i else l[entry_i]
+                if c[i] < _ll and (entry_px - c[i]) >= lots * add_thr_atr * e_atr:
+                    avg_px = (avg_px * lots + float(c[i])) / (lots + 1.0)
+                    lots += 1.0
+
         # ---------------- 汇总持仓价位（多空镜像） ----------------
-        lv = _levels(state, entry_px, e_atr, peak, trough, be_done, p)
+        lv = _levels(state, avg_px, e_atr, peak, trough, be_done, p)
         yield {
             "state": state,
             "entry_i": entry_i if state != 0 else -1,
-            "entry_px": entry_px if state != 0 else None,
+            "entry_px": avg_px if state != 0 else None,
+            "first_px": entry_px if state != 0 else None,
+            "lots": int(lots) if state != 0 else 0,
             "entry_atr": e_atr if state != 0 else None,
             "peak": peak if state == 1 else None,
             "trough": trough if state == 2 else None,
@@ -201,11 +327,13 @@ def fusion_state_detail(o, h, l, c, htf_dir, p) -> dict:
     返回 dict：
       state      : 0=FLAT / 1=LONG / 2=SHORT
       entry_i    : 开仓那根K的索引（-1 表示空仓）
-      entry_px   : 引擎入场价（= 开仓根收盘价，close-only）
+      entry_px   : **加权均价**（未加码时 == 首次买入价；加码后上移，P&L 的成本基准）
+      first_px   : 首次买入价（保本触发与 0.5R 保本止损的基准，不受加码影响）
+      lots       : 当前手数（1；启用 P1 加码后最多 add_max_lots）
       entry_atr  : 开仓当时的 ATR14（风险单位）
       peak/trough: 持仓期间收盘价的顺势极值（吊灯止损基准）
       be_done    : 是否已触发保本（止损已上移到成本价）
-      be_trigger : 保本触发价 = entry_px ± be_r×ATR（到达即挂保本）
+      be_trigger : 保本触发价 = first_px ± be_r×ATR（到达即挂保本）
       init_stop  : 初始止损 = entry_px ∓ sl_atr×ATR
       trail_stop : 吊灯止损 = peak/trough ∓ trail_atr×ATR
       cur_stop   : 当前生效止损 = 三者中最紧的一个（多取max / 空取min）
@@ -213,8 +341,8 @@ def fusion_state_detail(o, h, l, c, htf_dir, p) -> dict:
     实现说明：直接消费 `walk_fusion_states` 的最后一帧，与回测共享同一套循环（单一真源，无口径分叉）。
     """
     last = {
-        "state": 0, "entry_i": -1, "entry_px": None, "entry_atr": None,
-        "peak": None, "trough": None, "be_done": False,
+        "state": 0, "entry_i": -1, "entry_px": None, "first_px": None, "lots": 0,
+        "entry_atr": None, "peak": None, "trough": None, "be_done": False,
         "be_trigger": None, "init_stop": None, "trail_stop": None, "cur_stop": None,
     }
     for d in walk_fusion_states(o, h, l, c, htf_dir, p):
@@ -224,7 +352,12 @@ def fusion_state_detail(o, h, l, c, htf_dir, p) -> dict:
 
 def _levels(state: int, entry_px: float, e_atr: float, peak: float, trough: float,
             be_done: bool, p) -> dict:
-    """把持仓明细换算成实际价位：保本触发价 / 初始止损 / 吊灯止损 / 当前生效止损。"""
+    """把持仓明细换算成实际价位：保本触发价 / 初始止损 / 吊灯止损 / 当前生效止损。
+
+    注意 entry_px 此处传的是**加权均价**（加码后上移）。V3.4 起加码由浮盈门槛门控
+    （结构保本约束停用），加码后 cur_stop 不再保证 ≥ 均价 —— 约 53% 加码单以亏损收场，
+    但亏损中位仅 −0.16R、均值 +1.00R（PRD §17.2/§17.3 实测）。
+    """
     if state == 0 or not (e_atr and e_atr > 0):
         return {"be_trigger": None, "init_stop": None,
                 "trail_stop": None, "cur_stop": None}
@@ -268,6 +401,8 @@ class FusionPosition(Base):
     signal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # 该品种最近一次被推送的时间（用于止损变动去重）
     pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # ---- P1 加码（2026-09-20）：当前手数。较上一轮增加即为「加码事件」，需要推送 ----
+    lots: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class FusionPushLog(Base):
@@ -296,6 +431,7 @@ _MIGRATIONS = (
     "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS last_be_done BOOLEAN DEFAULT FALSE",
     "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS signal_at TIMESTAMPTZ",
     "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ",
+    "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS lots INTEGER DEFAULT 1",
 )
 
 
@@ -458,6 +594,8 @@ def evaluate_symbol(session, symbol: str, p) -> dict:
         "bars": len(df),
         # 持仓明细（供推送给出止损位/保本位）
         "entry_px": det["entry_px"],
+        "first_px": det["first_px"],
+        "lots": det["lots"],
         "entry_atr": det["entry_atr"],
         "entry_dt": (df["dt"].iloc[det["entry_i"]] if det["entry_i"] >= 0 else None),
         "be_done": det["be_done"],
@@ -487,13 +625,16 @@ def get_position(session, symbol: str) -> str:
     return obj.position if obj else "FLAT"
 
 
-def upsert_position(session, symbol: str, position: str, entry_price=None, entry_at=None) -> None:
+def upsert_position(session, symbol: str, position: str, entry_price=None, entry_at=None,
+                    lots=None) -> None:
     obj = session.get(FusionPosition, symbol)
     if obj is None:
         obj = FusionPosition(symbol=symbol)
     obj.position = position
     obj.entry_price = entry_price
     obj.entry_at = entry_at
+    if lots is not None:
+        obj.lots = int(lots)
     obj.updated_at = datetime.now(timezone.utc)
     session.add(obj)
 
@@ -502,7 +643,7 @@ _UNSET = object()
 
 
 def set_push_state(session, symbol: str, *, last_stop=_UNSET, last_be_done=_UNSET,
-                   signal_at=_UNSET, pushed_at=_UNSET) -> FusionPosition:
+                   signal_at=_UNSET, pushed_at=_UNSET, lots=_UNSET) -> FusionPosition:
     """更新推送辅助字段（只有显式传入的才覆盖；可显式传 None 来清除）。"""
     obj = session.get(FusionPosition, symbol)
     if obj is None:
@@ -513,6 +654,7 @@ def set_push_state(session, symbol: str, *, last_stop=_UNSET, last_be_done=_UNSE
         ("last_be_done", last_be_done),
         ("signal_at", signal_at),
         ("pushed_at", pushed_at),
+        ("lots", lots),
     ):
         if val is not _UNSET:
             setattr(obj, field, val)

@@ -48,6 +48,20 @@ RUN pip install -r requirements.txt -i ${PIP_INDEX_URL}
 RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
     || echo "[build] torch install failed, LSTM disabled"
 
+# DCE 龙虎榜（可选层）：大商所官网套了瑞数动态防护，纯 HTTP 一律 412，
+# 必须真浏览器执行 JS → 用 Scrapling（app/ingest/dce_scrapling.py）。
+# 默认关闭：该层会下载 Chromium（数百 MB），常规构建不需要。
+# 需要「容器内自持 DCE 采集」时启用：
+#     docker compose build --build-arg WITH_SCRAPLING=1
+# 不启用时 DCE 由宿主机 DCE_scrapling_crawler.py 采集（同 src，双向幂等）。
+ARG WITH_SCRAPLING=0
+RUN if [ "$WITH_SCRAPLING" = "1" ]; then \
+        pip install "scrapling[fetchers]" -i ${PIP_INDEX_URL} \
+        && (scrapling install || echo "[build] scrapling install 失败，容器内 DCE 采集将降级") ; \
+    else \
+        echo "[build] 跳过 Scrapling 层（WITH_SCRAPLING=0）：DCE 由宿主机采集器供给" ; \
+    fi
+
 # 源码
 COPY app ./app
 COPY scripts ./scripts

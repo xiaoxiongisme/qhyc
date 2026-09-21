@@ -49,6 +49,19 @@ class FusionBacktestParams:
     cooldown_bars: int = 3
     min_bars: int = 160
     max_bars: int = 400
+    # —— V3.1~V3.4 门控/加码（与 FusionConfig 同名同义；默认 = V3.4 定稿口径）——
+    # ⚠ 必须从 config 全量映射：walk_fusion_states 用 getattr(p, ...) 取值，
+    #   参数对象缺字段会回退旧默认（adx_min=0 / use_sbull=True 等），
+    #   造成回测信号层与线上引擎口径分叉（破坏单一真源）。
+    adx_n: int = 14                  # V3.1 ADX 周期
+    adx_min: float = 15.0            # V3.1 ADX 门控（上一根判定；0=关闭）
+    use_sbull: bool = False          # V3.1 取消「收强/收弱」要求
+    fib_confl: bool = True           # V3.2 斐波汇流（仅回踩支路）
+    fib_ratios: tuple = (0.382, 0.5, 0.618)
+    fib_tol_atr: float = 0.5         # 斐波容差 = 该值 × ATR
+    add_max_lots: int = 2            # V3.2 P1 加码最大手数（1=不加码）
+    add_thr_atr: float = 1.0         # V3.4 加码浮盈门槛（lots × 该值 × ATR）
+    add_guard_atr: float = 0.0       # V3.2 结构保本；V3.4 停用（保留兼容）
     # —— 回测专用 ——
     src: str = "akshare"             # 单一源（杜绝双源混读，§14 #2）
     cost_bp: float = 1.3             # 双边成本（基点）；pnl 中扣 2×单边 = 整段 cost_bp
@@ -67,6 +80,12 @@ def fusion_params_from_config(overrides: dict | None = None) -> FusionBacktestPa
         W=cfg.W, entry_mode=cfg.entry_mode, cooldown_bars=cfg.cooldown_bars,
         min_bars=cfg.min_bars, max_bars=cfg.max_bars,
         src=cfg.hourly_src,
+        # V3.1~V3.4 门控/加码全量映射（与线上引擎同一配置来源，保证信号层逐位一致）
+        adx_n=cfg.adx_n, adx_min=cfg.adx_min, use_sbull=cfg.use_sbull,
+        fib_confl=cfg.fib_confl, fib_ratios=tuple(cfg.fib_ratios),
+        fib_tol_atr=cfg.fib_tol_atr,
+        add_max_lots=cfg.add_max_lots, add_thr_atr=cfg.add_thr_atr,
+        add_guard_atr=cfg.add_guard_atr,
     )
     p = FusionBacktestParams(**base)
     if overrides:
@@ -121,68 +140,83 @@ def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
     htf = _htf_direction(c, p.ema_k)
     n = len(c)
     states = np.zeros(n, dtype=int)
+    lots_arr = np.zeros(n, dtype=int)
     for k, d in enumerate(walk_fusion_states(o, h, l, c, htf, p)):
         states[k + 2] = d["state"]
+        lots_arr[k + 2] = int(d.get("lots", 1) or 1)
     out = df.reset_index(drop=True).copy()
     out["state"] = states
+    out["lots"] = lots_arr
     return out
 
 
 def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[dict]:
-    """组合层：把 state 序列重放成逐笔成交（close-only，单仓）。
+    """组合层：把 state + lots 序列重放成**逐手**成交（close-only，单品种单方向）。
 
-    规则：bar i 收盘后策略目标持仓 = state_i，故在 bar i 的收盘价开/平。
-    - 目标由 0→1/2 或翻转：在 c[i] 开仓（成交价 c[i]）
-    - 目标回到 0 或反向：在 c[i] 平仓（成交价 c[i]）
-    止损/保本离场已蕴含在 state 翻转中（引擎 state 归零即触发离场）。
+    规则（V3.4 口径，PRD §16/§17）：
+    - bar i 收盘后策略目标持仓 = state_i，在 c[i] 开/平；
+    - P1 阶梯加码：持仓期间引擎 lots 由 L→L+1（浮盈门槛门控），视为当根收盘**加开 1 手**；
+    - 离场/反手时把全部在手按当根收盘价平掉（每手独立计 pnl，成本按各自开仓名义扣）；
+    - 每手带 `addon` 标记（首仓=False / 加码=True），指标层单独统计 `n_addons`。
     """
     dts = states_df["dt"].to_numpy()
     closes = states_df["close"].to_numpy(float)
     states = states_df["state"].to_numpy()
+    lots_arr = states_df["lots"].to_numpy()
     cost_frac = p.cost_bp / 10000.0  # 整段双边成本（小数）
     trades: list[dict] = []
-    pos = 0        # 当前持仓方向 0/1/2
-    entry_px = 0.0
-    entry_i = -1
-    for i in range(len(states)):
-        tgt = int(states[i])
-        if tgt == pos:
-            continue
-        px = closes[i]
-        # 平仓（若有）
-        if pos != 0:
+    open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon}
+    pos = 0                      # 当前持仓方向 0/1/2
+
+    def _close_all(i: int) -> None:
+        for lt in open_lots:
             dirn = 1.0 if pos == 1 else -1.0
-            gross = dirn * (px - entry_px)
-            pnl = gross - cost_frac * entry_px  # 扣双边成本
+            gross = dirn * (closes[i] - lt["entry_px"])
+            pnl = gross - cost_frac * lt["entry_px"]
             trades.append({
                 "symbol": None,
                 "side": "LONG" if pos == 1 else "SHORT",
-                "entry_dt": dts[entry_i], "exit_dt": dts[i],
-                "entry_px": round(float(entry_px), 4), "exit_px": round(float(px), 4),
+                "entry_dt": dts[lt["entry_i"]], "exit_dt": dts[i],
+                "entry_px": round(float(lt["entry_px"]), 4),
+                "exit_px": round(float(closes[i]), 4),
                 "pnl": round(float(pnl), 4),
-                "pnl_pct": round(float(pnl / entry_px * 100.0), 4) if entry_px else 0.0,
+                "pnl_pct": round(float(pnl / lt["entry_px"] * 100.0), 4) if lt["entry_px"] else 0.0,
+                "addon": lt["addon"],
             })
-        # 开仓（若目标非 0）
-        if tgt != 0:
-            pos = tgt
-            entry_px = px
-            entry_i = i
-        else:
-            pos = 0
+        open_lots.clear()
+
+    for i in range(len(states)):
+        tgt = int(states[i])
+        cur_lots = int(lots_arr[i])
+        # P1 加码：持仓中引擎手数增加 → 当根收盘加开对应手数
+        if pos != 0 and tgt == pos and cur_lots > len(open_lots):
+            for _ in range(cur_lots - len(open_lots)):
+                open_lots.append({"entry_px": float(closes[i]), "entry_i": i, "addon": True})
+        if tgt != pos:
+            if open_lots:
+                _close_all(i)
+            if tgt != 0:
+                pos = tgt
+                open_lots.append({"entry_px": float(closes[i]), "entry_i": i, "addon": False})
+            else:
+                pos = 0
     # 末尾仍持仓：以最后收盘价强平（标记未实现，不计入已平仓统计）
-    if pos != 0:
-        px = closes[-1]
-        dirn = 1.0 if pos == 1 else -1.0
-        gross = dirn * (px - entry_px)
-        pnl = gross - cost_frac * entry_px
-        trades.append({
-            "symbol": None, "side": "LONG" if pos == 1 else "SHORT",
-            "entry_dt": dts[entry_i], "exit_dt": dts[-1],
-            "entry_px": round(float(entry_px), 4), "exit_px": round(float(px), 4),
-            "pnl": round(float(pnl), 4),
-            "pnl_pct": round(float(pnl / entry_px * 100.0), 4) if entry_px else 0.0,
-            "open": True,
-        })
+    if pos != 0 and open_lots:
+        i = len(states) - 1
+        for lt in open_lots:
+            dirn = 1.0 if pos == 1 else -1.0
+            gross = dirn * (closes[i] - lt["entry_px"])
+            pnl = gross - cost_frac * lt["entry_px"]
+            trades.append({
+                "symbol": None, "side": "LONG" if pos == 1 else "SHORT",
+                "entry_dt": dts[lt["entry_i"]], "exit_dt": dts[i],
+                "entry_px": round(float(lt["entry_px"]), 4),
+                "exit_px": round(float(closes[i]), 4),
+                "pnl": round(float(pnl), 4),
+                "pnl_pct": round(float(pnl / lt["entry_px"] * 100.0), 4) if lt["entry_px"] else 0.0,
+                "addon": lt["addon"], "open": True,
+            })
+        open_lots.clear()
     return trades
 
 
@@ -203,6 +237,7 @@ def _metrics_from_trades(trades: list[dict]) -> dict:
     return {
         "n_trades": n,
         "n_wins": len(wins),
+        "n_addons": sum(1 for t in closed if t.get("addon")),  # V3.4 加码手数
         "win_rate": round(len(wins) / n, 4),
         "avg_pnl_pct": round(mean, 4),
         "total_return_pct": round(float((eq[-1] - 1.0) * 100.0), 4),

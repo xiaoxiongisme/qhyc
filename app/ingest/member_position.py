@@ -1,11 +1,17 @@
 """§18.4（v1.3.2）M6a：会员持仓排名（龙虎榜）采集器
 
-数据源（§18.13 EXCHANGE_COVERAGE 矩阵驱动）：
-- CZCE  : ak.get_rank_table_czce(date)         ✅ 2567 行/日（全品种）
+数据源（§18.13 EXCHANGE_COVERAGE 矩阵驱动；2026-09-20 起统一为**交易所官方源**）：
+- CZCE  : ak.get_rank_table_czce(date)         ✅ 返回 122 键 = 101 合约级 + 21 品种级
+          ⚠️ **只取合约级**：品种级键（`AP` / `PTA`，无月份 = 该品种全合约合计排名）
+             由 `_is_variety_level` 丢弃；否则下游按合约聚合的持仓因子会被品种级主导
 - CFFEX : ak.get_cffex_rank_table(date, vars)  ✅ 496 行/日
 - GFEX  : ak.futures_gfex_position_rank(date, vars) ✅ v1.3.2 新增（SI/LC/PS，2023-11-10 起）
-- DCE   : ak.futures_dce_position_rank(...)    ❌ K1: BadZipFile（akshare 1.18.94，待修复）
-- SHFE  : ak.get_shfe_rank_table(...)          ❌ K1: 静默空 dict（v1.18.94，待修复）
+- DCE   : app.ingest.dce_scrapling（Scrapling 真浏览器过瑞数防护）✅ 全合约/日
+          （原 K1「akshare futures_dce_position_rank → BadZipFile」根因是官网
+           瑞数动态防护，非接口下线；详见该模块 docstring）
+- SHFE  : ak.get_shfe_rank_table(date)         ✅ 一次全量（约 74 合约/日）
+          （原 K1「静默空 dict」是**假阴性**：根因是调用时传了 `vars_list`，
+           不是接口坏。**不传 vars_list** 即返回当日全部合约，详见矩阵注释）
 - INE   : 无持仓/库存接口                       ❌ K4: 硬上限 68/73
 
 **§18.13 红线**（PRD v1.3.2 实现约束）：
@@ -15,6 +21,15 @@
 - 不允许在采集器内对 SHFE/DCE 写硬编码 try 豁免逻辑
 
 防前视（§18.4）：T 日盘后调度，as_of = T（latency 1 自然生效）。
+
+symbol 口径（2026-09-20 统一）
+-----------------------------
+入库的 ``symbol`` 一律为**标准码 = 品种大写 + YYMM 四位**（``AP2701`` / ``CU2611``），
+出口统一走 ``_std_symbol`` → ``app.core.symbol_code.to_std``。
+
+原因：各所官方原生写法不统一（CZCE 3 位 ``AP701``、SHFE/DCE/GFEX 小写 ``cu2611``），
+而新浪源统一 4 位（``AP2701``）——曾导致同一合约两套 symbol 并存、跨源 join 全对不上。
+各源写法 ↔ 标准码的映射登记在 ``contract_code_map``（见 ``db/init/14_contract_code.sql``）。
 """
 from __future__ import annotations
 
@@ -23,6 +38,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from app.core import symbol_code as SC
 from app.core.logging import logger
 from app.models import MemberPositionRank
 
@@ -32,6 +48,17 @@ from app.models import MemberPositionRank
 # - symbols：active=False 时可省（即便提供也不调用）
 # - known_issue：禁用原因（K1 接口坏 / K4 无接口）
 # - fallbacks：可选项，akshare 修复后替代 func 的备选接口列表
+def _dce_fetch(trade_date: date) -> dict:
+    """DCE 矩阵入口：延迟导入 Scrapling 采集器（可选依赖，勿在模块顶层 import）
+
+    依赖缺失/无浏览器时抛 ``DceUnavailable``，由 collect_member_position 记入 errors
+    ——符合 §18.13「降级 + 标注而非硬编码 try」的红线。
+    """
+    from app.ingest.dce_scrapling import fetch_dce_rank
+
+    return fetch_dce_rank(trade_date)
+
+
 def _build_exchange_coverage() -> dict[str, dict]:
     """延迟构造矩阵（避免 import 期 akshare 失败时模块加载）"""
     import akshare as ak  # type: ignore
@@ -65,18 +92,36 @@ def _build_exchange_coverage() -> dict[str, dict]:
             "known_issue": None,
         },
         "DCE": {
-            "active": False,        # K1: v1.18.94 BadZipFile
-            "func": ak.futures_dce_position_rank,
-            "symbols": list({"A", "B", "C", "CS", "FB", "BB", "I", "J", "JM", "L", "M", "P", "PP", "V", "Y", "EG"}),
-            "fallbacks": [],         # akshare 修复后回填
-            "known_issue": "K1",
+            # 原 K1（akshare futures_dce_position_rank → BadZipFile）根因已定位：
+            # 大商所官网套了**瑞数动态防护**，纯 HTTP 客户端一律 412。
+            # 改由 app.ingest.dce_scrapling（Scrapling 真浏览器过挑战）供给。
+            # 依赖缺失时抛 DceUnavailable → 走下面的 errors 分支（不硬编码 try 豁免）。
+            "active": True,
+            "func": _dce_fetch,     # 延迟导入的 Scrapling 采集器
+            "args": lambda d: {"trade_date": d},
+            "symbols": None,        # 接口一次性返回当日全部合约（约 94~110 个）
+            "parser": "_parse_dce_one",
+            "known_issue": None,
+            "src": "scrapling:dce_memberDealPosi",
+            "fallbacks": ["app.ingest.dce_scrapling", "宿主机 DCE_scrapling_crawler.py"],
         },
         "SHFE": {
-            "active": False,        # K1: v1.18.94 静默空 dict
+            # 原 K1「v1.18.94 静默空 dict」经实证是**假阴性**，根因是**调用姿势**而非接口坏：
+            #   ak.get_shfe_rank_table(date, vars_list=None)
+            #   · 传 vars_list  → 只回少量品种（且按品种码猜合约，语义不稳）
+            #   · **不传 vars_list → 当日全部合约（约 74 键，键为合约代码 cu2611/cu2610/…）**
+            # 返回 DataFrame 列：symbol, rank, long_party_name, short_party_name,
+            # vol_party_name, long_open_interest, short_open_interest, long_open_interest_chg,
+            # short_open_interest_chg, vol, vol_chg, variety —— 与 _parse_shfe_one 完全对齐。
+            # 故此处 args **只传 date**，绝不下传 vars_list（matrix 的 symbols 保持 None）。
+            "active": True,
             "func": ak.get_shfe_rank_table,
-            "symbols": list({"CU", "AU", "AG", "AL", "ZN", "PB", "NI", "SN", "RB", "RU", "BU", "FU", "HC", "SP", "SS", "NR", "SC"}),
+            "args": lambda d: {"date": d.strftime("%Y%m%d")},
+            "symbols": None,        # 一次返回当日全部合约（约 74 个）
+            "parser": "_parse_shfe_one",
+            "known_issue": None,
+            "src": "akshare:get_shfe_rank_table",
             "fallbacks": [],
-            "known_issue": "K1",
         },
         "INE": {  # K4: 持仓硬上限 68/73
             "active": False,
@@ -105,18 +150,97 @@ def _coerce_int(v) -> int:
         return 0
 
 
+def _member_name(*cands) -> str:
+    """从候选列里取第一个**有效**会员名。
+
+    ⚠️ 不能用 ``a or b or ""``：``float('nan')`` 在 Python 里是 **truthy**，
+    ``str(nan)`` 会得到字符串 ``'nan'`` 并被当成会员名入库（幽灵行）。
+    """
+    for v in cands:
+        if v is None:
+            continue
+        if isinstance(v, float) and pd.isna(v):
+            continue
+        s = str(v).strip()
+        if s and s.lower() not in ("nan", "none", "null"):
+            return s
+    return ""
+
+
+def _is_summary_row(rank: int, member: str) -> bool:
+    """识别「合约合计」行（20 名明细后追加的汇总行）。
+
+    交易所官方表在 20 名明细后**追加一行合计**：``rank=999``（哨兵）、会员名空白。
+    （SHFE/CFFEX 官方接口实测如此；CZCE 无此形态 —— 但 CZCE 另有**品种级键**，
+     见 ``_is_variety_level``，那是另一种同样必须过滤的行。）
+    不得入库——否则下游按 member 聚合会多出一条幽灵行。
+    """
+    return rank >= 999 or not str(member).strip()
+
+
+def _is_variety_level(symbol: str) -> bool:
+    """识别「品种级」行：symbol 是**纯品种代码、无合约月份**。
+
+    ``ak.get_rank_table_czce`` 一次返回 **122 个键**，含两个语义不同的层级：
+      · **合约级** 101 个 —— ``AP701`` / ``TA705``（带 3 位月份），单合约的会员排名；
+      · **品种级**  21 个 —— ``AP`` / ``PTA``（**无月份**），该品种**全部合约合计**的会员排名。
+
+    两者混进同一 ``symbol`` 列会让下游按合约聚合的持仓因子被品种级主导
+    （品种级量级远大于单合约：如 FG 品种级 top20 多单和约 130 万手）。
+    本项目 ``member_position_rank`` 的语义是**合约级**（见 ``app/features/position_factors.py``），
+    故品种级行**必须丢弃**。
+
+    判据：合约代码必然含月份数字；纯字母即品种级。
+    （实测：CZCE 官方 122 键中有 21 个此形态；DCE/SHFE/GFEX/CFFEX 均无。）
+    """
+    s = str(symbol or "").strip()
+    return bool(s) and not any(ch.isdigit() for ch in s)
+
+
+def _std_symbol(raw: str, exchange: str, trade_date: date, drop_variety: bool = True) -> str:
+    """交易所原生合约码 → **标准码**（品种大写 + YYMM 四位，见 ``app.core.symbol_code``）。
+
+    ⚠️ 这是本项目 symbol 口径的**唯一收口点**，五个解析器都必须过这里。
+
+    为什么必须归一：五所官方原生写法不统一，而新浪源统一用 4 位 ——
+      官方 CZCE ``AP701``（3 位）vs 新浪 ``AP2701``（4 位）→ **同一合约两套 symbol**，
+      跨源 join / 跨所聚合全部对不上（2026-09-20 实测确认）。
+    归一后全库只有一种写法，映射关系登记在 ``contract_code_map``。
+
+    ``ref_date`` 必须传**交易日**：郑商所 3 位码的「年」只有个位（十年一循环），
+    要靠当天的年月才能补全（``AP701`` + 2026-09 → ``AP2701``）。
+    """
+    if drop_variety and _is_variety_level(raw):
+        return ""
+    return SC.to_std(raw, exchange=exchange, ref_date=trade_date)
+
+
 def _parse_czce_one(df: pd.DataFrame, trade_date: date, symbol_hint: str = "") -> list[dict]:
-    """郑商所单品种 DataFrame → 标准化行（§18.4：v1.0 字段映射）"""
+    """郑商所单 DataFrame → 标准化行（§18.4：v1.0 字段映射）
+
+    ⚠️ 只保留**合约级**：``get_rank_table_czce`` 的品种级键（``AP``/``PTA``）必须过滤，
+    详见 ``_is_variety_level`` 的说明。
+
+    ⚠️ symbol 出口统一为标准码（``_std_symbol``）：官方原生是 3 位（``AP701``），
+    入库为 4 位（``AP2701``），与新浪/其他四所对齐。
+    """
     rows = []
     for _, r in df.iterrows():
         try:
+            symbol = _std_symbol(_member_name(r.get("symbol"), symbol_hint), "CZCE", trade_date)
+            if not symbol:
+                continue
+            rank = _coerce_int(r.get("rank"))
+            member = _member_name(r.get("long_party_name"), r.get("vol_party_name"))
+            if _is_summary_row(rank, member):
+                continue
             rows.append(
                 {
                     "trade_date": trade_date,
                     "exchange": "CZCE",
-                    "symbol": str(r.get("symbol") or symbol_hint or "").upper(),
-                    "member": str(r.get("long_party_name") or r.get("vol_party_name") or "").strip(),
-                    "rank": _coerce_int(r.get("rank")),
+                    "symbol": symbol,
+                    "member": member,
+                    "rank": rank,
                     "long_pos": _coerce_int(r.get("long_open_interest")),
                     "short_pos": _coerce_int(r.get("short_open_interest")),
                     "long_chg": _coerce_int(r.get("long_open_interest_chg")),
@@ -131,18 +255,29 @@ def _parse_czce_one(df: pd.DataFrame, trade_date: date, symbol_hint: str = "") -
     return rows
 
 
-def _parse_shfe_one(df: pd.DataFrame, trade_date: date, symbol_hint: str) -> list[dict]:
-    """上期所单合约 DataFrame（列: rank, long_party_name, long_open_interest, ...）"""
+def _parse_shfe_one(df: pd.DataFrame, trade_date: date, symbol_hint: str = "") -> list[dict]:
+    """上期所单合约 DataFrame（列: rank, long_party_name, long_open_interest, ...）
+
+    契约与 `app.ingest.rank_position._run_shfe_official` 共用（同 args 姿势、同 src），
+    两条链路写出的行完全同构，可互相幂等补齐。
+    """
     rows = []
     for _, r in df.iterrows():
         try:
+            symbol = _std_symbol(_member_name(r.get("symbol"), symbol_hint), "SHFE", trade_date)
+            if not symbol:
+                continue
+            rank = _coerce_int(r.get("rank"))
+            member = _member_name(r.get("long_party_name"), r.get("vol_party_name"))
+            if _is_summary_row(rank, member):
+                continue
             rows.append(
                 {
                     "trade_date": trade_date,
                     "exchange": "SHFE",
-                    "symbol": str(r.get("symbol") or symbol_hint).upper(),
-                    "member": str(r.get("long_party_name") or r.get("vol_party_name") or "").strip(),
-                    "rank": _coerce_int(r.get("rank")),
+                    "symbol": symbol,
+                    "member": member,
+                    "rank": rank,
                     "long_pos": _coerce_int(r.get("long_open_interest")),
                     "short_pos": _coerce_int(r.get("short_open_interest")),
                     "long_chg": _coerce_int(r.get("long_open_interest_chg")),
@@ -158,17 +293,28 @@ def _parse_shfe_one(df: pd.DataFrame, trade_date: date, symbol_hint: str) -> lis
 
 
 def _parse_cffex_one(df: pd.DataFrame, trade_date: date, symbol_hint: str) -> list[dict]:
-    """中金所（CFFEX 字段与 SHFE 同构，按需适配）"""
+    """中金所（CFFEX 字段与 SHFE 同构，按需适配）
+
+    注：CFFEX 经 ``vars_list`` 按合约拉取，返回即合约级、实测无品种级形态，
+    故此处不做 ``_is_variety_level`` 过滤（避免 symbol_hint 为品种代码时误杀）。
+    """
     rows = []
     for _, r in df.iterrows():
         try:
+            rank = _coerce_int(r.get("rank"))
+            member = _member_name(r.get("long_party_name"), r.get("vol_party_name"))
+            if _is_summary_row(rank, member):
+                continue
             rows.append(
                 {
                     "trade_date": trade_date,
                     "exchange": "CFFEX",
-                    "symbol": str(r.get("symbol") or symbol_hint).upper(),
-                    "member": str(r.get("long_party_name") or r.get("vol_party_name") or "").strip(),
-                    "rank": _coerce_int(r.get("rank")),
+                    # drop_variety=False：CFFEX 经 vars_list 按合约拉取，symbol_hint 是
+                    # 品种码（IF/T…），走品种级过滤会把整批误杀（详见上方 docstring）。
+                    "symbol": _std_symbol(_member_name(r.get("symbol"), symbol_hint),
+                                          "CFFEX", trade_date, drop_variety=False),
+                    "member": member,
+                    "rank": rank,
                     "long_pos": _coerce_int(r.get("long_open_interest")),
                     "short_pos": _coerce_int(r.get("short_open_interest")),
                     "long_chg": _coerce_int(r.get("long_open_interest_chg")),
@@ -188,13 +334,20 @@ def _parse_gfex_one(df: pd.DataFrame, trade_date: date, symbol_hint: str) -> lis
     rows = []
     for _, r in df.iterrows():
         try:
+            symbol = _std_symbol(_member_name(r.get("symbol"), symbol_hint), "GFEX", trade_date)
+            if not symbol:
+                continue
+            rank = _coerce_int(r.get("rank"))
+            member = _member_name(r.get("long_party_name"), r.get("vol_party_name"))
+            if _is_summary_row(rank, member):
+                continue
             rows.append(
                 {
                     "trade_date": trade_date,
                     "exchange": "GFEX",
-                    "symbol": str(r.get("symbol") or symbol_hint).upper(),
-                    "member": str(r.get("long_party_name") or r.get("vol_party_name") or "").strip(),
-                    "rank": _coerce_int(r.get("rank")),
+                    "symbol": symbol,
+                    "member": member,
+                    "rank": rank,
                     "long_pos": _coerce_int(r.get("long_open_interest")),
                     "short_pos": _coerce_int(r.get("short_open_interest")),
                     "long_chg": _coerce_int(r.get("long_open_interest_chg")),
@@ -206,6 +359,45 @@ def _parse_gfex_one(df: pd.DataFrame, trade_date: date, symbol_hint: str) -> lis
             )
         except Exception as e:
             logger.warning(f"[member_position] GFEX 解析行失败: {e}")
+    return rows
+
+
+def _parse_dce_one(df: pd.DataFrame, trade_date: date, symbol_hint: str = "") -> list[dict]:
+    """大商所（DCE）单合约 DataFrame → 标准化行
+
+    列由 ``app.ingest.dce_scrapling.rows_to_frames`` 产出：
+    ``symbol, rank, member, long_pos, long_chg, short_pos, short_chg, vol_pos``
+    （名次对齐口径，见该模块 docstring）。``src`` 与外部采集器一致，
+    便于两条链路互相幂等补齐。
+    """
+    rows = []
+    for _, r in df.iterrows():
+        try:
+            symbol = _std_symbol(_member_name(r.get("symbol"), symbol_hint), "DCE", trade_date)
+            if not symbol:
+                continue
+            rank = _coerce_int(r.get("rank"))
+            member = _member_name(r.get("member"))
+            if _is_summary_row(rank, member):
+                continue
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "exchange": "DCE",
+                    "symbol": symbol,
+                    "member": member,
+                    "rank": rank,
+                    "long_pos": _coerce_int(r.get("long_pos")),
+                    "short_pos": _coerce_int(r.get("short_pos")),
+                    "long_chg": _coerce_int(r.get("long_chg")),
+                    "short_chg": _coerce_int(r.get("short_chg")),
+                    "vol_pos": _coerce_int(r.get("vol_pos")),
+                    "src": "scrapling:dce_memberDealPosi",
+                    "version": "v1.0",
+                }
+            )
+        except Exception as e:
+            logger.warning(f"[member_position] DCE 解析行失败: {e}")
     return rows
 
 
@@ -300,6 +492,8 @@ def collect_member_position(
             # CFFEX/GFEX symbols 可被调用方 override
             if ex == "CFFEX" and cffex_contracts:
                 symbols = cffex_contracts
+            # SHFE 现走官方全量接口（args 只接 date、symbols=None），
+            # 故下面的 shfe_contracts override 事实上**已不生效**（保留仅为签名兼容）。
             if ex == "SHFE" and shfe_contracts:
                 symbols = shfe_contracts
             # args_fn 签名：1 参 (d) 或 2 参 (d, syms)

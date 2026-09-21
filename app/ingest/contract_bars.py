@@ -6,7 +6,17 @@
 - CFFEX  暂不采（金融期货 carry 信号意义弱）
 
 活跃合约清单来源：spot_basis.near_contract / dominant_contract（M6a 每日维护）。
-CZCE tqsdk 代码：CZCE.FG701（大写）。
+
+symbol 口径（2026-09-20 统一）
+-----------------------------
+本模块**入参与入库都用标准码**（品种大写 + YYMM 四位，如 ``FG2701``）。
+调用外部接口前必须转回该源的原生写法：
+
+    sina  : ``_sina_symbol``  → ``symbol_code.to_sina``（全大写 4 位，恒等）
+    tqsdk : ``_tqsdk_symbol`` → ``symbol_code.to_tqsdk``（``CZCE.FG701``，**郑商所仍 3 位**）
+
+⚠️ 天勤那一步曾是最容易踩的坑：库里统一成 4 位后，若直接拿 ``CZCE.FG2701`` 去订阅，
+   天勤会报合约不存在 —— 必须转回 3 位。
 
 因子（§18.6）：term_slope / roll_yield / term_curv —— 见 carry_factors()。
 """
@@ -17,6 +27,7 @@ from typing import Any
 
 import pandas as pd
 
+from app.core import symbol_code as SC
 from app.core.logging import logger
 from app.models import ContractDaily
 
@@ -43,15 +54,23 @@ def _to_date(v) -> date | None:
 
 
 def _sina_symbol(exchange: str, symbol: str) -> str:
-    """新浪合约代码：SHFE/INE/DCE/GFEX 用大写（CU2610/M2701）；
-    CZCE sina 接口当前 Length mismatch（v1.18.94），由 TQSDK 兜底，不在此处理。
+    """**标准码** → 新浪行情接口用的合约代码。
+
+    新浪对所有交易所都用「品种大写 + YYMM 四位」（``rb2609`` / ``FG2701``），
+    与标准码同构，故这里基本是恒等映射；单独留一层是为了将来新浪换写法只改一处。
     """
-    return symbol.upper()
+    return SC.to_sina(symbol, exchange)
 
 
 def _tqsdk_symbol(exchange: str, symbol: str) -> str:
-    """tqsdk 合约代码：交易所.合约（大写）"""
-    return f"{exchange}.{symbol.upper()}"
+    """**标准码** → 天勤合约代码 ``交易所.原生码``。
+
+    ⚠️ **必须转回交易所原生写法**：天勤按原生码订阅，郑商所仍是 **3 位**
+    （``CZCE.FG701``，不是 ``CZCE.FG2701``）。
+    本模块的入参已统一为标准码（``spot_basis.near_contract`` 等），
+    若不转换就会拿 ``CZCE.FG2701`` 去订阅 → 报「合约不存在」。
+    """
+    return SC.to_tqsdk(symbol, exchange)
 
 
 # 数据源矩阵（§18.13 风格）
@@ -65,18 +84,22 @@ CARRY_SOURCES: dict[str, dict] = {
 }
 
 
-def fetch_sina_contract_daily(symbol: str, days: int = 90) -> list[dict]:
-    """ak.futures_zh_daily_sina：单合约日线（近 days 自然日）"""
+def fetch_sina_contract_daily(symbol: str, days: int = 90, exchange: str = "") -> list[dict]:
+    """ak.futures_zh_daily_sina：单合约日线（近 days 自然日）
+
+    ``symbol`` 入参为**标准码**（4 位）；入库同样写标准码。
+    """
     import akshare as ak  # type: ignore
 
     try:
-        df = ak.futures_zh_daily_sina(symbol=_sina_symbol("", symbol))
+        df = ak.futures_zh_daily_sina(symbol=_sina_symbol(exchange, symbol))
     except Exception as e:
         logger.warning(f"[contract_bars] sina {symbol} 失败: {e}")
         return []
     if df is None or df.empty:
         return []
     cutoff = date.today() - timedelta(days=days)
+    out_symbol = SC.to_std(symbol, exchange=exchange)
     rows: list[dict] = []
     for _, r in df.iterrows():
         d = _to_date(r.get("date"))
@@ -84,7 +107,7 @@ def fetch_sina_contract_daily(symbol: str, days: int = 90) -> list[dict]:
             continue
         rows.append(
             {
-                "symbol": symbol.upper(),
+                "symbol": out_symbol,
                 "trade_date": d,
                 "open": _coerce_float(r.get("open")),
                 "high": _coerce_float(r.get("high")),
@@ -106,7 +129,10 @@ def fetch_tqsdk_contract_daily(
     symbol: str,
     days: int = 90,
 ) -> list[dict]:
-    """tqsdk 兜底：CZCE 合约级日线（N/A 时 sina 用不了）"""
+    """tqsdk 兜底：CZCE 合约级日线（N/A 时 sina 用不了）
+
+    ``symbol`` 入参为**标准码**（4 位）；订阅前用 ``_tqsdk_symbol`` 转回原生 3 位。
+    """
     from datetime import datetime, timedelta as td
     from zoneinfo import ZoneInfo
 
@@ -120,6 +146,7 @@ def fetch_tqsdk_contract_daily(
             return []
         tz = ZoneInfo("Asia/Shanghai")
         cutoff = date.today() - timedelta(days=days)
+        out_symbol = SC.to_std(symbol, exchange=exchange)
         rows: list[dict] = []
         for _, r in klines.iterrows():
             dtv = r.get("datetime")
@@ -130,7 +157,7 @@ def fetch_tqsdk_contract_daily(
                 continue
             rows.append(
                 {
-                    "symbol": symbol.upper(),
+                    "symbol": out_symbol,
                     "trade_date": d,
                     "open": _coerce_float(r.get("open")),
                     "high": _coerce_float(r.get("high")),
@@ -225,7 +252,7 @@ def collect_contract_bars(
         for c in contracts:
             try:
                 if src_cfg.get("sina"):
-                    r = fetch_sina_contract_daily(c, days=days)
+                    r = fetch_sina_contract_daily(c, days=days, exchange=exchange)
                 elif src_cfg.get("tqsdk"):
                     r = fetch_tqsdk_contract_daily(session, exchange, c, days=days)
                 else:
@@ -275,16 +302,12 @@ def carry_factors(contract_rows: pd.DataFrame) -> dict:
     out["sub_contract"] = cur.iloc[1]["symbol"]
     out["term_slope_pct"] = round((sub_close - dom_close) / dom_close * 100, 4)
     # 展期收益（月化）：价差 / 主力价 / 月份数
-    # 合约代码月解析：CZCE 3 位（701=2027-01、609=2026-09）/ 其他所 4 位（2701、2609）
+    # 交割年月统一走 app.core.symbol_code（标准码是 4 位，年月解析只有一处）
     def _month(sym: str) -> int:
         try:
-            digits = "".join(ch for ch in sym if ch.isdigit())
-            if len(digits) >= 4:
-                y, m = digits[:2], digits[2:4]
-            else:  # CZCE 3 位：首字符=年份尾数
-                y, m = digits[0], digits[1:3]
-            return (2000 + int(y)) * 12 + int(m)
-        except Exception:
+            y, m = SC.delivery_ym(sym)
+            return 0 if y is None else y * 12 + m
+        except Exception:  # noqa: BLE001
             return 0
 
     m_dom = _month(cur.iloc[0]["symbol"])

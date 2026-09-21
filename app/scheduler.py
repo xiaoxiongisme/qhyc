@@ -313,6 +313,7 @@ def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
             "stop": r.get("cur_stop"),
             "be_trigger": r.get("be_trigger"),
             "be_done": bool(r.get("be_done")),
+            "lots": int(r.get("lots") or 1),      # P1 加码后的手数（1 = 未加码）
             "atr": r.get("entry_atr"),
             "risk_px": (abs(float(entry) - float(r["init_stop"]))
                         if (entry is not None and r.get("init_stop") is not None)
@@ -333,6 +334,8 @@ def _row_line(r: dict, show_levels: bool) -> str:
     pnl = f"{r['pnl']:+.1%}" if r["pnl"] is not None else "-"
     line = (f"{r['icon']} {r['label']} "
             f"{_px_of(sym, r['entry'])}→{_px_of(sym, r['px'])} {pnl}")
+    if int(r.get("lots") or 1) > 1:
+        line += f" ×{int(r['lots'])}手"          # P1 加码：标明已加到手数
     if show_levels:
         if r["stop"] is not None:
             line += f" ｜⛔{_px_of(sym, r['stop'])}"
@@ -396,11 +399,17 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
             lines.append("")
 
     if changes:
-        lines.append(f"### ⚠️ 止损变动 {len(changes)} 个")
+        lines.append(f"### ⚠️ 止损/加码变动 {len(changes)} 个")
         for c in changes:
             sym = c["symbol"]
             if c["kind"] == "be":
                 lines.append(f"✅ {c['label']}　已挂保本 · 止损提到 {_px_of(sym, c['new'])}")
+            elif c["kind"] == "add":
+                # P1 利弗莫尔加码：止损此刻已在加权均价之上 → 整仓最差=保本
+                tail = (f" ｜ 均价 {_px_of(sym, c['avg'])} ｜ ⛔止损 {_px_of(sym, c['stop'])}"
+                        if c.get("avg") is not None and c.get("stop") is not None else "")
+                lines.append(f"➕ {c['label']}　加码 至 **{c['new']}手**（{c['old']}→{c['new']}）"
+                             f"　整仓已锁保本{tail}")
             else:
                 lines.append(
                     f"↑ {c['label']}　止损 {_px_of(sym, c['old'])} → **{_px_of(sym, c['new'])}**"
@@ -594,6 +603,7 @@ def _fusion_scan_job() -> None:
                         s, sym, eng,
                         entry_price=r.get("entry_px") or r.get("latest_close"),
                         entry_at=now,
+                        lots=r.get("lots"),
                     )
                     set_push_state(
                         s, sym,
@@ -627,7 +637,8 @@ def _fusion_scan_job() -> None:
                         elif db == "SHORT":
                             pnl = (db_entry - px) / db_entry
                     new_entry = r.get("entry_px") if eng != "FLAT" else None
-                    upsert_position(s, sym, eng, entry_price=new_entry or px, entry_at=now)
+                    upsert_position(s, sym, eng, entry_price=new_entry or px, entry_at=now,
+                                    lots=r.get("lots"))
                     sig = {
                         "symbol": sym,
                         "name": names.get(sym, sym),
@@ -659,7 +670,7 @@ def _fusion_scan_job() -> None:
                     )
                     continue
 
-                # ---------- 状态未变：吊灯止损上移 / 首次触发保本 ----------
+                # ---------- 状态未变：P1加码 / 吊灯止损上移 / 首次触发保本 ----------
                 if eng == "FLAT" or old is None or not fresh:
                     continue
                 cur = r.get("cur_stop")
@@ -667,6 +678,8 @@ def _fusion_scan_job() -> None:
                 atr = r.get("entry_atr")
                 be_now = bool(r.get("be_done"))
                 be_prev = bool(old.last_be_done)
+                lots_now = int(r.get("lots") or 1)
+                lots_prev = int(old.lots or 1)
                 sign = 1.0 if eng == "LONG" else -1.0
                 thr = (f.trail_push_atr * float(atr)) if (atr and f.trail_push_atr > 0) else None
                 moved = None
@@ -674,11 +687,21 @@ def _fusion_scan_job() -> None:
                         and (float(cur) - prev_stop) * sign >= thr):
                     moved = (prev_stop, float(cur))
                 be_flip = bool(be_now and not be_prev)
+                # P1 利弗莫尔加码：手数增加即独立事件（加码后止损已锁在均价之上 → 整仓最差=保本）
+                if lots_now > lots_prev:
+                    changes.append({"symbol": sym, "label": label, "kind": "add",
+                                    "old": lots_prev, "new": lots_now,
+                                    "avg": (float(r["entry_px"]) if r.get("entry_px") else None),
+                                    "stop": (float(cur) if cur is not None else None)})
+                    set_push_state(s, sym,
+                                   last_stop=(float(cur) if cur is not None else prev_stop),
+                                   last_be_done=be_now, lots=lots_now, pushed_at=now_utc)
+                    continue
                 if prev_stop is None or (moved is None and not be_flip):
                     # 首次记录基准 / 变动未达阈值 → 只静默更新基准
                     set_push_state(s, sym,
                                    last_stop=(float(cur) if cur is not None else prev_stop),
-                                   last_be_done=be_now)
+                                   last_be_done=be_now, lots=lots_now)
                     continue
                 if be_flip:
                     changes.append({"symbol": sym, "label": label, "kind": "be",
@@ -689,7 +712,7 @@ def _fusion_scan_job() -> None:
                                     "old": moved[0], "new": moved[1]})
                 set_push_state(s, sym,
                                last_stop=(float(cur) if cur is not None else prev_stop),
-                               last_be_done=be_now, pushed_at=now_utc)
+                               last_be_done=be_now, lots=lots_now, pushed_at=now_utc)
 
             if is_cold:
                 n_ok = sum(1 for r in results if not r.get("error"))

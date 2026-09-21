@@ -6,9 +6,13 @@
 --   CFFEX  暂不采（金融期货 carry 信号意义弱）
 -- 活跃合约清单来源：spot_basis.near_contract / dominant_contract（M6a 已每日维护）
 -- 因子：term_slope（期限斜率）/ roll_yield（展期收益）/ term_curv（曲率）
+--
+-- ⚠️ symbol 口径（2026-09-20 统一）：**标准码 = 品种大写 + YYMM 四位**（FG2701 / CU2611）。
+--    采集器入库前经 app.core.symbol_code.to_std() 归一；调行情接口前再用
+--    to_sina / to_tqsdk 转回源原生写法（天勤郑商所仍是 3 位 CZCE.FG701）。
 -- =====================================================
 CREATE TABLE IF NOT EXISTS contract_daily (
-    symbol        TEXT          NOT NULL,    -- 合约代码（统一大写：FG701/cu2610→CU2610）
+    symbol        TEXT          NOT NULL,    -- 合约代码（标准码 4 位：FG2701 / CU2610）
     product       TEXT          NOT NULL,    -- 品种简称（FG/CU）
     exchange      TEXT          NOT NULL,    -- CZCE/DCE/SHFE/INE/GFEX
     trade_date    DATE          NOT NULL,

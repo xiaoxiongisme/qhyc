@@ -17,6 +17,7 @@ from app.models.domain import (
     SpotBasis,            # §18.5（v1.3.2）基差因子
     ContractDaily,        # §18.6 M6b 合约级日线
     FutKline,              # futures-data-fetch 技能适配层
+    ContractCodeMap,       # 合约代码对照表（全库统一 4 位标准码）
 )
 from app.models.sector import SectorMap, SectorIndex, TransmissionWeight, ModelWeight
 from app.models.domain import BacktestDetail
@@ -43,4 +44,5 @@ __all__ = [
     "SpotBasis",
     "ContractDaily",
     "FutKline",
+    "ContractCodeMap",
 ]
