@@ -546,7 +546,7 @@ def _collect_hourly_settled(s, f) -> None:
 
 
 def _fusion_scan_job() -> None:
-    """融合策略扫描（每 15 分钟一次，与每日三次 ingest 并行，互不影响）。
+    """融合策略扫描（每个整点后 :05/:35 触发，即小时线落盘后再生成信号/推送）。
 
     推送形态（2026-09-15 定稿）：
       - 🚨 新信号：开仓 / 平仓 / 反手即时推，附 ⛔止损位 / 🎯保本触发价
@@ -761,9 +761,9 @@ def _fusion_scan_job() -> None:
             if last_push is not None:
                 lp = last_push if last_push.tzinfo else last_push.replace(tzinfo=timezone.utc)
                 gap_ok = (now_utc - lp).total_seconds() >= f.heartbeat_interval_min * 60
-            interval = max(1, int(f.heartbeat_interval_min))
-            due_heartbeat = bool(f.heartbeat and rows
-                                 and (now.minute % interval) == 0 and gap_ok)
+            # 作业已固定在整点后 :05/:35 触发，心跳每次扫描均可触发，
+            # 由 heartbeat_interval_min 控制最小间隔（gap_ok）。
+            due_heartbeat = bool(f.heartbeat and rows and gap_ok)
             if signals:
                 kind = "signal"
             elif is_pre:
@@ -899,17 +899,18 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info("[scheduler] registered cron day1 06:30 (weights_monthly_update)")
 
-    # 融合策略实时信号扫描：每15分钟（与每日三次 ingest 并行，互不影响）
+    # 融合策略实时信号扫描：每个整点后 :05/:35 触发（小时线落盘后再生成信号/推送，
+    # 与每小时 :00 的 hourly_collect 错开，避免重叠；与每日三次 ingest 并行，互不影响）
     if settings.fusion.enabled:
         sched.add_job(
             _fusion_scan_job,
-            trigger=CronTrigger(minute="*/15", timezone=settings.env.TZ),
+            trigger=CronTrigger(minute="5,35", timezone=settings.env.TZ),
             id="fusion_scan",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
         )
-        logger.info("[scheduler] registered fusion_scan every 15min")
+        logger.info("[scheduler] registered fusion_scan at :05/:35 (post hourly collect)")
 
     # 复权主连每日重算（凌晨 02:30，此时日盘+夜盘均已收盘并定稿）
     # 幂等：每次全量重算并 upsert cont_adj；单品种异常隔离，不中断整体
