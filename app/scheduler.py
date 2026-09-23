@@ -15,6 +15,11 @@ import signal
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+# 全系统统一以交易所时区（上海）为口径：DB 会话已设为 Asia/Shanghai，
+# 经 psycopg2 读出的 timestamptz 即为上海感知，故交易时段/新鲜度判断一律用上海 now。
+_SH_TZ = ZoneInfo("Asia/Shanghai")
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -290,9 +295,10 @@ def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
         latest = r.get("latest_dt")
         if latest is None:
             continue
-        lt = latest.replace(tzinfo=None) if getattr(latest, "tzinfo", None) else latest
-        age_min = (now - lt).total_seconds() / 60.0
-        if age_min > stale_minutes:
+        if latest.tzinfo is None:
+            latest = latest.replace(tzinfo=_SH_TZ)
+        age_min = (now - latest).total_seconds() / 60.0
+        if age_min < -10 or age_min > stale_minutes:   # 负 age=未来时间戳棒，同样视为不新鲜
             continue
         sym = r["symbol"]
         side = POS_MAP.get(r["state"], "FLAT")
@@ -320,7 +326,7 @@ def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
                         else None),
             "risk_atr": 2.0,
             "age_min": age_min,
-            "latest_dt": lt,
+            "latest_dt": latest,
         })
     return rows
 
@@ -507,7 +513,7 @@ def _collect_hourly_settled(s, f) -> None:
     """
     from app.ingest.hourly_collector import HourlyCollector
 
-    hc = HourlyCollector(s)
+    hc = HourlyCollector(s, prefer="tqsdk")
     hc.collect_all(data_length=800)
 
     settle = int(getattr(f, "settle_delay_sec", 0) or 0)
@@ -516,8 +522,9 @@ def _collect_hourly_settled(s, f) -> None:
     mx = s.execute(text("select max(trade_datetime) from hourly_bar")).scalar()
     if mx is None:
         return
-    mxt = mx.replace(tzinfo=None) if getattr(mx, "tzinfo", None) else mx
-    age = (datetime.now() - mxt).total_seconds()
+    if mx.tzinfo is None:
+        mx = mx.replace(tzinfo=_SH_TZ)
+    age = (datetime.now(_SH_TZ) - mx).total_seconds()
     if not (0 <= age < settle):
         return
 
@@ -562,7 +569,7 @@ def _fusion_scan_job() -> None:
         f = settings.fusion
         if not f.enabled:
             return
-        now = datetime.now()
+        now = datetime.now(_SH_TZ)
         now_utc = datetime.now(timezone.utc)
         names = {x.symbol: x.name for x in settings.main_contracts}
         with session_scope() as s:
@@ -616,13 +623,16 @@ def _fusion_scan_job() -> None:
                 db = old.position if old is not None else "FLAT"
                 db_entry = (float(old.entry_price)
                             if (old is not None and old.entry_price is not None) else None)
-                # 数据新鲜度：陈旧K不产生任何信号/价位（防用过期数据触发）
+                # 数据新鲜度：陈旧K不产生任何信号/价位（防用过期数据触发）。
+                # 2026-09-23 补丁：age 为负（未来时间戳棒）此前恒判"新鲜"，打穿本门控
+                # → 一轮 18 信号误推送。未来棒与陈旧棒一律视为不新鲜。
                 latest = r.get("latest_dt")
                 age_min = None
                 if latest is not None:
-                    lt = latest.replace(tzinfo=None) if latest.tzinfo else latest
-                    age_min = (now - lt).total_seconds() / 60.0
-                fresh = (age_min is None) or (age_min <= f.stale_minutes)
+                    if latest.tzinfo is None:
+                        latest = latest.replace(tzinfo=_SH_TZ)
+                    age_min = (now - latest).total_seconds() / 60.0
+                fresh = (age_min is not None) and (-10.0 <= age_min <= f.stale_minutes)
 
                 if db != eng:
                     # ---------- 状态变化 → 信号 ----------
@@ -1131,7 +1141,7 @@ def _hourly_job() -> None:
         with session_scope() as s:
             from app.ingest.hourly_collector import HourlyCollector
 
-            hc = HourlyCollector(s)
+            hc = HourlyCollector(s, prefer="tqsdk")
             h_stats = hc.collect_all()
             h_ok = sum(1 for r in h_stats if "error" not in r)
             logger.info(f"[scheduler] hourly collect done: {h_ok}/{len(h_stats)} symbols")

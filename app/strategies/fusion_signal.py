@@ -25,6 +25,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text, Boolean, DateTime, Integer, Numeric, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -33,6 +34,10 @@ from app.core.db import get_engine
 from app.core.logging import logger
 from app.models.base import Base
 from app.models import HourlyBar
+
+# 全系统统一交易所时区（上海）；DB 会话已设为 Asia/Shanghai，
+# 读出的 timestamptz 为上海感知，故收盘判定一律用上海 now。
+_SH_TZ = ZoneInfo("Asia/Shanghai")
 
 
 # -----------------------------------------------------
@@ -521,11 +526,14 @@ def drop_forming_bars(df: pd.DataFrame | None, now: datetime | None = None) -> p
     """
     if df is None or df.empty:
         return df
-    now = now or datetime.now()
+    now = now or datetime.now(_SH_TZ)
     s = pd.to_datetime(df["dt"])
-    if s.dt.tz is not None:
-        s = s.dt.tz_localize(None)   # 仅去掉名义时区标签，保持北京时间墙钟
-    keep = (s <= now).to_numpy()
+    # 统一到上海时区（与 DB 存储口径一致），dt 即收盘时刻
+    if s.dt.tz is None:
+        s = s.dt.tz_localize(_SH_TZ)
+    else:
+        s = s.dt.tz_convert(_SH_TZ)
+    keep = (s <= pd.Timestamp(now)).to_numpy()
     if keep.all():
         return df
     n_drop = int((~keep).sum())
@@ -548,11 +556,13 @@ def drop_unsettled(df, settle_delay_sec: int, now=None):
     """
     if df is None or df.empty or not settle_delay_sec or settle_delay_sec <= 0:
         return df
-    now = now or datetime.now()
+    now = now or datetime.now(_SH_TZ)
     last = pd.to_datetime(df["dt"].iloc[-1])
-    if last.tzinfo is not None:
-        last = last.tz_localize(None)
-    if (now - last).total_seconds() < settle_delay_sec:
+    if last.tzinfo is None:
+        last = last.tz_localize(_SH_TZ)
+    else:
+        last = last.tz_convert(_SH_TZ)
+    if (pd.Timestamp(now) - last).total_seconds() < settle_delay_sec:
         return df.iloc[:-1].reset_index(drop=True)
     return df
 

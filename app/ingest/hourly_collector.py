@@ -11,8 +11,9 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 from decimal import Decimal
 
@@ -43,25 +44,34 @@ def _to_int(v) -> int | None:
             return None
 
 
+_SH_TZ = ZoneInfo("Asia/Shanghai")
+
+
 def _parse_ak_dt(s) -> datetime | None:
-    """新浪分钟线 datetime 列为字符串 '2025-12-26 11:15:00'"""
+    """新浪分钟线 datetime 列为字符串 '2025-12-26 11:15:00'（上海本地时间，无时区）。
+    解析后按上海时区定位并转为 UTC 感知，确保写入 hourly_bar 的是真实瞬时。"""
     if not s:
         return None
     if isinstance(s, datetime):
-        return s
-    s = str(s).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            continue
-    return None
+        dt = s
+    else:
+        s = str(s).strip()
+        dt = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                dt = datetime.strptime(s, fmt)
+                break
+            except Exception:
+                continue
+        if dt is None:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_SH_TZ)
+    return dt.astimezone(timezone.utc)
 
 
 def _parse_tq_dt(dt) -> datetime | None:
-    """tqsdk kline datetime 列为纳秒级 Unix 时间戳（numpy.float64 / int）/ Timestamp / str"""
-    from datetime import datetime as _dt
-
+    """tqsdk kline datetime 列为纳秒级 Unix 时间戳（真实瞬时）。统一转为 UTC 感知。"""
     if dt is None:
         return None
     if isinstance(dt, (int, float)):
@@ -69,16 +79,17 @@ def _parse_tq_dt(dt) -> datetime | None:
 
         if isinstance(dt, np.floating) and dt != dt:  # NaN
             return None
-        return _dt.fromtimestamp(float(dt) / 1e9)
+        return datetime.fromtimestamp(float(dt) / 1e9, tz=timezone.utc)
     if isinstance(dt, datetime):
-        return dt
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     import pandas as pd  # type: ignore
 
     if isinstance(dt, pd.Timestamp):
-        return dt.to_pydatetime()
+        return dt.to_pydatetime().astimezone(timezone.utc) if dt.tzinfo \
+            else dt.replace(tzinfo=timezone.utc).astimezone(timezone.utc)
     if isinstance(dt, str):
         try:
-            return _dt.fromisoformat(dt)
+            return datetime.fromisoformat(dt).astimezone(timezone.utc)
         except Exception:
             return None
     return None
@@ -92,15 +103,16 @@ _VALID_HOURLY_HOURS = frozenset({0, 1, 2, 9, 10, 11, 13, 14, 15, 21, 22, 23})
 
 
 def _valid_hourly_ts(dt) -> bool:
-    """小时线对齐校验：必须是交易时段整点、且非未来时间戳。"""
-    if dt is None:
+    """小时线对齐校验：按上海时区判定必须是交易时段整点，且非未来时间戳。"""
+    if dt is None or dt.tzinfo is None:
         return False
-    if dt.minute != 0:
+    sh = dt.astimezone(_SH_TZ)
+    if sh.minute != 0:
         return False
-    if dt.hour not in _VALID_HOURLY_HOURS:
+    if sh.hour not in _VALID_HOURLY_HOURS:
         return False
     # 未来时间戳：akshare 偶发返回尚未形成的棒（如当前 00:19 却带当日 10:00）
-    if dt > datetime.now() + timedelta(minutes=2):
+    if dt > datetime.now(timezone.utc) + timedelta(minutes=2):
         return False
     return True
 
@@ -108,9 +120,14 @@ def _valid_hourly_ts(dt) -> bool:
 class HourlyCollector:
     """在线小时线采集（单 session 内批量 upsert）"""
 
-    def __init__(self, session, prefer: str = "akshare"):
+    def __init__(self, session, prefer: str = "tqsdk"):
+        # ⚠ 2026-09-23 事故（SN414170/AP7332.5 推送用户无法在盘面找到）：
+        #   新浪分钟线接口的 datetime 标签整体 +8h（真实 09:00-10:00 收盘棒标 "18:00"、
+        #   夜盘 22:00-01:00 标 "6:00-9:00"），写入库即成"未来棒"/乱序棒，打穿新鲜度门控，
+        #   状态机在错位序列上集体误触发（单轮 18 信号）。根因在新浪接口侧，未修复前
+        #   akshare 主源禁用，统一走 tqsdk（起点标签 +1h 重标为收盘口径，时间戳已实证正确）。
         self.session = session
-        self.prefer = prefer  # 'akshare'（默认，免费免登录）| 'tqsdk'（长历史回填）
+        self.prefer = prefer  # 'tqsdk'（默认，时间戳可信）| 'akshare'（禁用中，见上）
         self._tq_api = None   # 共享的 tqsdk 连接（惰性创建，全品种复用）
 
     # ---------- 资源释放 ----------
@@ -176,38 +193,11 @@ class HourlyCollector:
         logger.info(f"[hourly] collect_all done: {ok}/{len(results)} symbols")
         return results
 
-    # ---------- akshare 主源 ----------
+    # ---------- akshare 主源（⚠ 禁用中：新浪分钟线 datetime 标签整体 +8h，见 __init__ 注释） ----------
     def _fetch_akshare(self, spec: MainContractSpec) -> list[dict]:
-        import akshare as ak  # type: ignore
-
-        # 新浪主连代码：FG888 -> FG0（与日线 AkShareSource 同映射）
-        sina = AkShareSource.to_sina_symbol(spec.symbol)
-        try:
-            df = ak.futures_zh_minute_sina(symbol=sina, period="60")
-        except Exception as e:
-            logger.warning(f"[hourly] akshare {spec.symbol} 失败: {e}")
-            return []
-        if df is None or len(df) == 0:
-            return []
-        rows: list[dict] = []
-        for i in range(len(df)):
-            dt = _parse_ak_dt(df.iloc[i].get("datetime"))
-            if dt is None or not _valid_hourly_ts(dt):
-                continue
-            rows.append(
-                {
-                    "symbol": spec.symbol,
-                    "trade_datetime": dt,
-                    "open": _to_dec(df.iloc[i].get("open")),
-                    "high": _to_dec(df.iloc[i].get("high")),
-                    "low": _to_dec(df.iloc[i].get("low")),
-                    "close": _to_dec(df.iloc[i].get("close")),
-                    "volume": _to_int(df.iloc[i].get("volume")),
-                    "oi": _to_int(df.iloc[i].get("hold")),  # 新浪分钟线持仓列名 hold
-                    "src": "akshare",
-                }
-            )
-        return rows
+        # 2026-09-23：sina 标签 +8h 未修复前禁止入库（曾致未来棒毒化信号状态机）。
+        # 若日后启用，必须先在下面验证 sina 标签口径，并对 dt 做口径矫正 + 未来棒剔除。
+        return []
 
     # ---------- tqsdk 兜底 / 回填 ----------
     def _fetch_tqsdk(self, spec: MainContractSpec, data_length: int = 8000) -> list[dict]:
@@ -254,7 +244,14 @@ class HourlyCollector:
             rows: list[dict] = []
             for i in range(len(klines)):
                 dt = _parse_tq_dt(klines.iloc[i].get("datetime"))
-                if dt is None or not _valid_hourly_ts(dt):
+                if dt is None:
+                    continue
+                # tqsdk 为「整点起点」标签；引擎/回测假定「收盘时刻」标签，
+                # 故重标 +1h 以 akshare 源（收盘口径）入库，保持口径一致。
+                # ⚠ 2026-09-23 修复：必须**先重标再校验**——未完成棒（起点 11:00）原样校验
+                # 通过、+1h 入库即成 12:00 未来棒（本次回填 50 品种各 1 根的来源）。
+                dt = dt + timedelta(hours=1)
+                if not _valid_hourly_ts(dt):
                     continue
                 rows.append(
                     {
@@ -268,7 +265,7 @@ class HourlyCollector:
                         "oi": _to_int(
                             klines.iloc[i].get("close_oi") or klines.iloc[i].get("open_oi")
                         ),
-                        "src": "tqsdk",
+                        "src": "akshare",
                     }
                 )
             return rows
