@@ -18,6 +18,8 @@ from app.models.domain import (
     ContractDaily,        # §18.6 M6b 合约级日线
     FutKline,              # futures-data-fetch 技能适配层
     ContractCodeMap,       # 合约代码对照表（全库统一 4 位标准码）
+    PipelineRun,           # M8 决策链路运行留痕
+    PipelinePushLog,       # M8 决策链路推送留痕
 )
 from app.models.sector import SectorMap, SectorIndex, TransmissionWeight, ModelWeight
 from app.models.domain import BacktestDetail
@@ -45,4 +47,6 @@ __all__ = [
     "ContractDaily",
     "FutKline",
     "ContractCodeMap",
+    "PipelineRun",
+    "PipelinePushLog",
 ]

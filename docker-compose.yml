@@ -55,6 +55,11 @@ services:
       - ./app:/app/app:ro
       - ./scripts:/app/scripts:ro
       - ./web/dist:/app/web/dist:ro
+      # M8：WB 决策链路源码只读挂载（与 pipeline 容器共享 ./runtime 下的启动快照，
+      #     使 /pipeline/run 手动触发与 /pipeline/manifest 可在 api 侧直接执行）
+      - ${WB_PIPELINE_PATH}:/app/pipeline_src:ro
+      # M8：简报产物目录（api 只读，供 /pipeline/brief/{date} 读取；写由 pipeline 容器完成）
+      - ${QH_BRIEF_PATH}:/app/qh:ro
     ports:
       - "${API_PORT:-8000}:8000"
     command: ["python", "-m", "app.main"]
@@ -86,6 +91,52 @@ services:
     healthcheck:
       disable: true
     command: ["python", "-m", "app.scheduler"]
+
+  # =====================================================
+  # M8 · 决策链路容器化（docs/M8_决策链路容器化_PRD_20260922.md）
+  # 复用同一镜像（不新建 Dockerfile），独立进程：
+  #   - 常驻跑 WB 侧五条子链路（简报/研究/基本面/盘中监控/信号）
+  #   - 源码 = WB skill 只读挂载 → 启动快照（单一真源，容器内不可漂移）
+  #   - 崩溃不影响 qhyc-scheduler 的 */15 fusion_scan 与数据入库
+  # 回滚：docker compose stop pipeline && docker compose rm -f pipeline
+  # =====================================================
+  pipeline:
+    build: .
+    container_name: qhyc-pipeline
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: timescaledb
+      ROLE: pipeline
+      TZ: Asia/Shanghai
+      QH_BRIEF_BASE: /app/qh
+      QH_PG_HOST: timescaledb
+      QH_PG_PORT: 5432
+      QH_PG_DB: futures
+      QH_PG_USER: futures
+      QH_PG_PWD: ${POSTGRES_PASSWORD}
+      PIPELINE_SNAPSHOT: /app/runtime/pipeline_snapshot
+    volumes:
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+      - ./config:/app/config:ro
+      - ./app:/app/app:ro
+      # WB 单一真源：只读挂载，启动时复制为快照（§5.3）
+      - ${WB_PIPELINE_PATH}:/app/pipeline_src:ro
+      # 产出目录：与宿主查看/手工调整的是同一份
+      - ${QH_BRIEF_PATH}:/app/qh:rw
+    mem_limit: 2g            # R4：研究层 quant 回放限内存
+    healthcheck:
+      test: ["CMD-SHELL", "python -m app.pipeline.healthcheck"]
+      interval: 5m
+      timeout: 30s
+      retries: 3
+      start_period: 90s
+    command: ["python", "-m", "app.pipeline.worker"]
 
 networks:
   default:

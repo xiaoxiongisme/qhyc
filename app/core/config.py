@@ -324,6 +324,63 @@ class RankPositionConfig(BaseModel):
     run_minute: int = 30
 
 
+class PipelineDailyCron(BaseModel):
+    """M8 日链触发时刻（17:40：给 rank_position 17:30 让 10 分钟，PRD §6.2）"""
+    hour: int = 17
+    minute: int = 40
+
+
+class PipelineCheckCron(BaseModel):
+    day_of_week: str = "mon"
+    hour: int = 8
+    minute: int = 5
+
+
+class PipelineReadinessConfig(BaseModel):
+    enabled: bool = True
+    timeout_min: int = 10
+    poll_sec: int = 60
+
+
+class PipelineSnapshotConfig(BaseModel):
+    src: str = "/app/pipeline_src"
+    dest: str = "/app/runtime/pipeline_snapshot"
+
+
+class PipelineConfig(BaseModel):
+    """M8 决策链路容器化（docs/M8_决策链路容器化_PRD_20260922.md §13-6）"""
+    enabled: bool = True
+    daily_cron: PipelineDailyCron = Field(default_factory=PipelineDailyCron)
+    signal_slots: list[str] = Field(
+        default_factory=lambda: ["09:00", "10:00", "11:00", "13:30", "14:00", "15:00",
+                                 "21:00", "22:00", "23:00"]
+    )
+    intraday_enabled: bool = True
+    check_cron: PipelineCheckCron = Field(default_factory=PipelineCheckCron)
+    readiness: PipelineReadinessConfig = Field(default_factory=PipelineReadinessConfig)
+    snapshot: PipelineSnapshotConfig = Field(default_factory=PipelineSnapshotConfig)
+    step_timeout_sec: int = 1800
+    max_instances: int = 1
+    notify_on_failure: bool = True
+
+
+class FutKlineConfig(BaseModel):
+    """fut_kline（天勤 tqsdk）增量入库调度（2026-09-23 补齐）。
+
+    实测问题：scheduler 只有 `adjust_fdf`（02:30 由 fut_kline 生成 cont_adj），
+    却没有抓取原始行情的定时任务 → fut_kline 原始层长期无增量。
+    本项在 adjust 之前（01:40，夜盘已收）跑一次增量抓取。
+    """
+    enabled: bool = True
+    run_hour: int = 1
+    run_minute: int = 40
+    freqs: list[str] = Field(default_factory=lambda: ["daily", "hourly"])
+    buffer_days: int = 7
+    adjust_after: bool = True
+    max_stale_days: int = 0      # >0：落后不超过该天数则跳过（防重复跑）
+    timeout_sec: int = 3600
+
+
 class YamlConfig(BaseModel):
     app: AppYAML = Field(default_factory=AppYAML)
     database: DbYAML = Field(default_factory=DbYAML)
@@ -338,6 +395,8 @@ class YamlConfig(BaseModel):
     predict: PredictConfig = Field(default_factory=PredictConfig)
     fusion: FusionConfig = Field(default_factory=FusionConfig)
     rank_position: RankPositionConfig = Field(default_factory=RankPositionConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    fut_kline: FutKlineConfig = Field(default_factory=FutKlineConfig)
 
 
 @lru_cache(maxsize=1)
@@ -407,6 +466,14 @@ class Settings(BaseModel):
     @property
     def spot_basis_config(self) -> SpotBasisConfig:
         return self.yaml.spot_basis
+
+    @property
+    def pipeline_config(self) -> PipelineConfig:
+        return self.yaml.pipeline
+
+    @property
+    def fut_kline_config(self) -> FutKlineConfig:
+        return self.yaml.fut_kline
 
     @property
     def fusion(self) -> FusionConfig:

@@ -24,8 +24,10 @@ DURATION = D.DURATION
 
 # 免费尾部模式单次上限（天勤硬上限 10000）
 TAIL_CAP = 10000
-TAIL_LEN = {"hourly": 10000, "min15": 10000}
-TAIL_LEN_CONTRACT = {"hourly": 9000, "min15": 10000}
+# 2026-09-23：补 daily。原字典只有 hourly/min15，非专业版（tail）模式抓日线会
+# KeyError('daily') → 日线增量直接失败（fut_kline daily 停滞的成因之一）。
+TAIL_LEN = {"daily": 5000, "hourly": 10000, "min15": 10000}
+TAIL_LEN_CONTRACT = {"daily": 5000, "hourly": 9000, "min15": 10000}
 
 # 各频率的起始年（15min 受 10000 根限制主连只能到 ~2024，故从 2024 起取分合约即可）
 FREQ_START_YEAR = {"hourly": 2020, "min15": 2024}
@@ -114,7 +116,7 @@ def fetch_continuous(api, spec, freq, start_dt, end_dt, windowed, full):
     if windowed:
         rows = fetch_windowed(api, code, dur, freq, start_dt, end_dt)
     else:
-        rows = fetch_tail(api, code, dur, TAIL_LEN[freq])
+        rows = fetch_tail(api, code, dur, TAIL_LEN.get(freq, 5000))
     if not rows:
         print(f"  [主连] {code} 取数失败")
         return None
@@ -157,7 +159,7 @@ def fetch_contracts(api, spec, freq, start_year, windowed, start_dt, end_dt, min
             if windowed:
                 rows = fetch_windowed(api, c, dur, freq, start_dt, end_dt)
             else:
-                rows = fetch_tail(api, c, dur, TAIL_LEN_CONTRACT[freq])
+                rows = fetch_tail(api, c, dur, TAIL_LEN_CONTRACT.get(freq, 5000))
         except PermissionError:
             raise
         except Exception as e:  # noqa: BLE001

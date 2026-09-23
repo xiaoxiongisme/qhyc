@@ -13,6 +13,9 @@ python-dotenv==1.0.1
 # --- 数据库 ---
 SQLAlchemy==2.0.36
 psycopg[binary,pool]==3.2.3
+# M8：决策链路（WB skill 的 _fut_research/_fut_fund_light）直接用 psycopg2 裸连接
+# 调 pd.read_sql_query；保持业务代码零改动优先，故并存第二驱动（PRD M8 §5.2①）
+psycopg2-binary==2.9.10
 asyncpg==0.30.0
 alembic==1.14.0
 

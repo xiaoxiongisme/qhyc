@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 
 from decimal import Decimal
@@ -82,6 +82,27 @@ def _parse_tq_dt(dt) -> datetime | None:
         except Exception:
             return None
     return None
+
+
+# 中国期货小时线「合法收盘整点」集合（覆盖日盘+夜盘，含各交易所差异）。
+# 实测 akshare 固定网格分钟线会吐出 11:15/14:15/09:30/10:45/13:45/14:45/22:15
+# 等非对齐棒（全表 24,659 行脏数据，2026-09-23 数据质量整改）；另有少量未来时间戳。
+# 凡不在本集合、非整点、或晚于当前时刻的棒一律丢弃。
+_VALID_HOURLY_HOURS = frozenset({0, 1, 2, 9, 10, 11, 13, 14, 15, 21, 22, 23})
+
+
+def _valid_hourly_ts(dt) -> bool:
+    """小时线对齐校验：必须是交易时段整点、且非未来时间戳。"""
+    if dt is None:
+        return False
+    if dt.minute != 0:
+        return False
+    if dt.hour not in _VALID_HOURLY_HOURS:
+        return False
+    # 未来时间戳：akshare 偶发返回尚未形成的棒（如当前 00:19 却带当日 10:00）
+    if dt > datetime.now() + timedelta(minutes=2):
+        return False
+    return True
 
 
 class HourlyCollector:
@@ -171,7 +192,7 @@ class HourlyCollector:
         rows: list[dict] = []
         for i in range(len(df)):
             dt = _parse_ak_dt(df.iloc[i].get("datetime"))
-            if dt is None:
+            if dt is None or not _valid_hourly_ts(dt):
                 continue
             rows.append(
                 {
@@ -233,7 +254,7 @@ class HourlyCollector:
             rows: list[dict] = []
             for i in range(len(klines)):
                 dt = _parse_tq_dt(klines.iloc[i].get("datetime"))
-                if dt is None:
+                if dt is None or not _valid_hourly_ts(dt):
                     continue
                 rows.append(
                     {

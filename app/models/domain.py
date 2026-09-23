@@ -461,3 +461,39 @@ class TaskRun(Base):
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     message: Mapped[str | None] = mapped_column(Text)
+
+
+# -----------------------------------------------------
+# M8 决策链路容器化：运行留痕（db/init/15_pipeline.sql）
+# -----------------------------------------------------
+class PipelineRun(Base):
+    __tablename__ = "pipeline_run"
+
+    run_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)      # daily|signal|intraday|check
+    run_date: Mapped[date] = mapped_column(Date, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="running")
+    steps: Mapped[dict | None] = mapped_column(JSON)             # [{i,name,ok,dur_s,exit}]
+    artifacts: Mapped[dict | None] = mapped_column(JSON)         # 产出路径清单
+    src_manifest: Mapped[str | None] = mapped_column(Text)       # 源码 md5 清单摘要
+    data_ready: Mapped[bool | None] = mapped_column(Boolean)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False, default="scheduler")
+
+
+class PipelinePushLog(Base):
+    __tablename__ = "pipeline_push_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[int | None] = mapped_column(BigInteger)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    channel: Mapped[str | None] = mapped_column(Text)            # pushplus|webhook|none
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    resp: Mapped[str | None] = mapped_column(Text)

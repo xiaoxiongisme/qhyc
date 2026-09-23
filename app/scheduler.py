@@ -795,6 +795,46 @@ def _fusion_scan_job() -> None:
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] fusion scan failed: {e}")
 
+def _fut_kline_job() -> None:
+    """fut_kline 增量入库（天勤 tqsdk）：subprocess 隔离跑增量抓取。
+
+    背景（2026-09-23 实测）：scheduler 只注册了 `adjust_fdf`（02:30 由 fut_kline
+    生成 cont_adj），**从未定时抓取原始行情** → fut_kline 原始层停滞 7~12 天，
+    adjust 只能在陈数据上重算。本作业补齐这一环，跑在 adjust 之前（夜盘已收）。
+
+    隔离原因同 M8 §4.3：抓取耗时长，放进程里避免占满 APScheduler 线程池。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    fk = get_settings().fut_kline_config
+    script = (Path(__file__).resolve().parents[2]
+              / "scripts" / "ingest_fut_kline_incremental.py")
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到增量脚本 {script}")
+        return
+    cmd = [_sys.executable, str(script),
+           "--freqs", ",".join(fk.freqs),
+           "--buffer-days", str(fk.buffer_days)]
+    if fk.adjust_after:
+        cmd.append("--adjust")
+    if fk.max_stale_days:
+        cmd += ["--max-stale-days", str(fk.max_stale_days)]
+    logger.info(f"[scheduler] fut_kline incremental start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=int(fk.timeout_sec))
+        logger.info(f"[scheduler] fut_kline incremental exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-400:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] fut_kline stderr={(proc.stderr or '')[-600:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"[scheduler] fut_kline incremental timeout>{fk.timeout_sec}s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] fut_kline incremental failed: {e}")
+
+
 def _build_scheduler() -> BlockingScheduler:
     settings = get_settings()
     sched = BlockingScheduler(timezone=settings.env.TZ)
@@ -909,6 +949,23 @@ def _build_scheduler() -> BlockingScheduler:
         logger.info(f"[scheduler] registered hourly collect every :{hcfg.minute:02d}")
     else:
         logger.info("[scheduler] hourly collect disabled (config)")
+
+    # fut_kline 增量入库（天勤 tqsdk）：在 02:30 adjust_fdf 之前跑，保证复权主连有新数据
+    # 用 subprocess 隔离：抓取耗时长，避免占满 APScheduler 线程池（M8 §4.3 同因）
+    fk = settings.fut_kline_config
+    if fk.enabled:
+        sched.add_job(
+            _fut_kline_job,
+            trigger=CronTrigger(hour=fk.run_hour, minute=fk.run_minute,
+                                timezone=settings.env.TZ),
+            id="fut_kline_incremental",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=1800,
+        )
+        logger.info(f"[scheduler] registered fut_kline incremental "
+                    f"{fk.run_hour:02d}:{fk.run_minute:02d} freqs={fk.freqs}")
 
     # 库存 / 仓单（决策 2，周频周五）
     inv = settings.inventory_config
