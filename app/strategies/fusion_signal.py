@@ -635,11 +635,26 @@ def get_position(session, symbol: str) -> str:
     return obj.position if obj else "FLAT"
 
 
-def upsert_position(session, symbol: str, position: str, entry_price=None, entry_at=None,
-                    lots=None) -> None:
+def _get_or_create_position(session, symbol: str) -> FusionPosition:
+    """get-or-create FusionPosition。
+
+    ⚠ 2026-09-23 修复：本项目 session 为 autoflush=False，upsert_position 新建的
+    pending 行对随后的 session.get 不可见 → set_push_state 会再建一个同主键对象，
+    flush 时 UniqueViolation（清空基线后的冷启动首次暴露）。故先扫 session.new。
+    """
+    for pending in session.new:
+        if isinstance(pending, FusionPosition) and pending.symbol == symbol:
+            return pending
     obj = session.get(FusionPosition, symbol)
     if obj is None:
-        obj = FusionPosition(symbol=symbol)
+        obj = FusionPosition(symbol=symbol, position="FLAT")
+        session.add(obj)
+    return obj
+
+
+def upsert_position(session, symbol: str, position: str, entry_price=None, entry_at=None,
+                    lots=None) -> None:
+    obj = _get_or_create_position(session, symbol)
     obj.position = position
     obj.entry_price = entry_price
     obj.entry_at = entry_at
@@ -655,10 +670,7 @@ _UNSET = object()
 def set_push_state(session, symbol: str, *, last_stop=_UNSET, last_be_done=_UNSET,
                    signal_at=_UNSET, pushed_at=_UNSET, lots=_UNSET) -> FusionPosition:
     """更新推送辅助字段（只有显式传入的才覆盖；可显式传 None 来清除）。"""
-    obj = session.get(FusionPosition, symbol)
-    if obj is None:
-        obj = FusionPosition(symbol=symbol, position="FLAT")
-        session.add(obj)
+    obj = _get_or_create_position(session, symbol)
     for field, val in (
         ("last_stop", last_stop),
         ("last_be_done", last_be_done),

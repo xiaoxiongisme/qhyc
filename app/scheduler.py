@@ -961,6 +961,19 @@ def _build_scheduler() -> BlockingScheduler:
     else:
         logger.info("[scheduler] hourly collect disabled (config)")
 
+    # #5 分钟优先管线：每 30 分钟把实时 1 分钟并入 minute_bar 并增量合成 bar_5/15/30/60m
+    # （bar_60m 即"小时数据"）。与 hourly_collect 解耦，各自服务不同表，互不冲突。
+    sched.add_job(
+        _minute_and_bars_job,
+        trigger=CronTrigger(minute="*/30", timezone=settings.env.TZ),
+        id="minute_and_bars",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=900,
+    )
+    logger.info("[scheduler] registered minute_and_bars every :30 (minute-first pipeline)")
+
     # fut_kline 增量入库（天勤 tqsdk）：在 02:30 adjust_fdf 之前跑，保证复权主连有新数据
     # 用 subprocess 隔离：抓取耗时长，避免占满 APScheduler 线程池（M8 §4.3 同因）
     fk = settings.fut_kline_config
@@ -1147,6 +1160,31 @@ def _hourly_job() -> None:
             logger.info(f"[scheduler] hourly collect done: {h_ok}/{len(h_stats)} symbols")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] hourly collect failed: {e}")
+
+
+def _minute_and_bars_job() -> None:
+    """#5 分钟优先管线：实时 1 分钟入库 → 增量合成 5/15/30/60 分钟。
+
+    使 minute_bar 成为唯一事实来源（历史 CSV + 实时 tqsdk 1 分钟同口径），
+    bar_*（含 bar_60m = 小时数据）随调度低成本刷新。hourly_bar（tqsdk 直拉）的去留
+    取决于 #5 分叉决策——本作业只负责 bar_* 一侧，互不冲突。
+    """
+    logger.info("[scheduler] minute_and_bars start")
+    try:
+        with session_scope() as s:
+            from app.ingest.minute_collector import MinuteCollector
+            from app.ingest.synthesizer import synthesize_bars_incremental
+
+            mc = MinuteCollector(s, prefer="tqsdk")
+            m_stats = mc.collect_all()
+            m_ok = sum(1 for r in m_stats if "error" not in r)
+            synth_stats = synthesize_bars_incremental(s)
+            logger.info(
+                f"[scheduler] minute_and_bars done: minute_ok={m_ok}/{len(m_stats)} "
+                f"synth={synth_stats}"
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] minute_and_bars failed: {e}")
 
 
 def _inventory_job() -> None:

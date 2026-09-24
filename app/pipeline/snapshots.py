@@ -57,6 +57,64 @@ def _patch_base(dest: Path) -> bool:
     return True
 
 
+def _file_index(root: Path) -> dict[str, str]:
+    """相对路径 -> md5（排除 __pycache__ 与隐藏路径）。"""
+    out: dict[str, str] = {}
+    if not root.exists():
+        return out
+    for p in root.rglob("*"):
+        if not p.is_file() or "__pycache__" in p.parts:
+            continue
+        rel = p.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        out[rel.as_posix()] = _md5(p)
+    return out
+
+
+def needs_resync(src: str, dest: str) -> bool:
+    """判断快照是否需要重建。
+
+    ⚠ 历史 bug：调用方（worker.ensure_snapshot）过去只在「快照目录为空」时同步，
+    于是：一旦建立过快照，① WB 源码后续更新永不生效；② 更严重的是，本文件新增的
+    `_patch_base()` 逻辑对**已存在的旧快照**永远不会执行 —— run_pipeline.py 里
+    仍是硬编码 `BASE = r"E:/QH/期货简报"`，在 Linux 容器里被当成相对路径，
+    产出被写到 `/app/runtime/pipeline_snapshot/E:/QH/...`（一堆垃圾目录），
+    宿主简报目录反而没更新。表现为 /pipeline/status 的 base_patch_applied=false。
+
+    判定规则（任一命中即重建）：
+      1. 快照不存在 / 为空
+      2. 快照里的 run_pipeline.py 仍未打 BASE 补丁
+      3. 源文件集合或内容发生变化
+         （run_pipeline.py 例外：以「是否已打补丁」判断，不比 md5，否则永不收敛）
+    """
+    src_p, dest_p = Path(src), Path(dest)
+    if not src_p.exists():
+        # 源不可见（bind mount 丢失 / 路径写错）→ 保留旧快照，绝不把空目录覆盖进去
+        logger.warning(f"[pipeline] snapshot: 源不可见 {src}，跳过重建（保留现有快照）")
+        return False
+    if not dest_p.exists() or not any(dest_p.iterdir()):
+        return True
+
+    rp = dest_p / "run_pipeline.py"
+    try:
+        if rp.exists() and _BASE_OLD in rp.read_text(encoding="utf-8", errors="replace"):
+            logger.info("[pipeline] snapshot: 检测到 BASE 补丁未生效，重建快照")
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+
+    s, d = _file_index(src_p), _file_index(dest_p)
+    if set(s) != set(d):
+        return True
+    for k, v in s.items():
+        if k == "run_pipeline.py":
+            continue
+        if d.get(k) != v:
+            return True
+    return False
+
+
 def sync(src: str, dest: str) -> tuple[list[dict], bool]:
     """把 src 复制为 dest 快照，返回 (manifest, base_patched)。
 
@@ -72,7 +130,7 @@ def sync(src: str, dest: str) -> tuple[list[dict], bool]:
     patched = _patch_base(tmp)
     if dest_p.exists():
         shutil.rmtree(dest_p)
-    os.replace(tmp, dest_p) if not dest_p.exists() else shutil.move(str(tmp), str(dest_p))
+    os.replace(tmp, dest_p)
 
     manifest = [
         {"name": str(p.relative_to(dest_p)).replace("\\", "/"), "md5": _md5(p)}

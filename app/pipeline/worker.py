@@ -30,11 +30,15 @@ _KIND_ARGS = {
 }
 
 
-def ensure_snapshot() -> tuple[str, str]:
-    """确保快照存在，返回 (快照目录, manifest 摘要)。缺失则现场同步。"""
+def ensure_snapshot(force: bool = False) -> tuple[str, str]:
+    """确保快照存在且是最新的，返回 (快照目录, manifest 摘要)。
+
+    ⚠ 不要用「目录是否为空」判断是否需要同步：那会让已存在的过期快照永不更新，
+    BASE 补丁也永远打不上。统一交给 snapshots.needs_resync() 做漂移检测。
+    """
     cfg = config.load()
     dest = Path(cfg.dest)
-    if not dest.exists() or not any(dest.iterdir()):
+    if force or snapshots.needs_resync(cfg.src, cfg.dest):
         snapshots.sync(cfg.src, cfg.dest)
     digest = snapshots.manifest_digest(snapshots.manifest_of(cfg.dest))
     return str(dest), digest
@@ -95,6 +99,19 @@ def run_once(kind: str, *, wait_readiness: bool = False,
         "PYTHONDONTWRITEBYTECODE": "1",
         "TZ": os.environ.get("TZ", "Asia/Shanghai"),
     })
+    # WB 侧子脚本直连 PG 读的是 QH_PG_*，而 compose 只为 pipeline 服务注入了这组变量。
+    # api 容器经 /pipeline/run 手动触发时它们缺失 → 子脚本退化为连 localhost 失败。
+    # 这里统一兜底：已有则保留，缺失则从 POSTGRES_* 推导，使任意容器拉起的子进程都能连库。
+    _pg_fallback = {
+        "QH_PG_HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
+        "QH_PG_PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        "QH_PG_DB": os.environ.get("POSTGRES_DB", "futures"),
+        "QH_PG_USER": os.environ.get("POSTGRES_USER", "futures"),
+        "QH_PG_PWD": os.environ.get("POSTGRES_PASSWORD", ""),
+    }
+    for k, v in _pg_fallback.items():
+        if not env.get(k):
+            env[k] = v
     t0 = time.time()
     status, error, code = "ok", None, 0
     try:

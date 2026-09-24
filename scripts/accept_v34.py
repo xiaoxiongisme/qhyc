@@ -39,6 +39,21 @@ def real_cost_per_lot(sym, mult):
 ANCHOR = dict(events=16400, executed=3226, win_rate=0.2349659,
               net=695715.0, mdd=167865.2, mar=4.1445, addons=1583)
 
+def _resolve_fut_symbol(session, product, exchange):
+    """fut_kline 品种代码大小写不统一（CZCE/CFFEX/INE 大写，DCE/SHFE/GFEX 小写）。
+
+    历史 bug：统一用大写构造 KQ.m@{exch}.{PROD} 时，50 个主力品种只有 14 个命中。
+    """
+    for cand in (product.upper(), product.lower()):
+        k = f"KQ.m@{exchange}.{cand}"
+        n = session.execute(text(
+            "SELECT count(*) FROM fut_kline WHERE freq='hourly' AND kind='continuous' "
+            "AND symbol=:s"), {"s": k}).scalar()
+        if n:
+            return k
+    return None
+
+
 def load_fut_kline(session, symbol):
     q = text(
         "SELECT trade_datetime, open, high, low, close FROM fut_kline "
@@ -51,20 +66,36 @@ def load_fut_kline(session, symbol):
         df[c] = df[c].astype(float)
     return df
 
-def build_positions(df, p):
-    """在单品种上跑 CB 引擎，重建“头寸”（含加码手数/首仓价/各手入场价）。"""
+def build_positions(df, p, legacy_align=False):
+    """在单品种上跑 CB 引擎，重建“头寸”（含加码手数/首仓价/各手入场价）。
+
+    legacy_align=True 复刻历史错位写法：walk_fusion_states 产出的第 k 个状态实际描述的是
+    第 k 根 K 线**之后**的仓位意图，却直接配 c[k]，等效于提前 2 根成交 → 前视偏差
+    （表现为虚假的 89% 胜率、852 万净利）。
+    legacy_align=False（默认，正确）：状态右移 2 根对齐，与 fusion_backtest._generate_states
+    口径一致。
+    """
     o=df["open"].to_numpy(float); h=df["high"].to_numpy(float)
     l=df["low"].to_numpy(float); c=df["close"].to_numpy(float)
     dts=df["dt"].to_numpy()
     htf=_htf_direction(c, p.ema_k)
-    states=[]; lots=[]
-    for d in walk_fusion_states(o,h,l,c,htf,p):
-        states.append(d["state"]); lots.append(int(d.get("lots",1) or 1))
-    states=np.array(states); lots=np.array(lots)
-    n=len(states)
+    n=len(c)
+    if legacy_align:
+        states=[]; lots=[]
+        for d in walk_fusion_states(o,h,l,c,htf,p):
+            states.append(d["state"]); lots.append(int(d.get("lots",1) or 1))
+        states=np.array(states); lots=np.array(lots)
+        dts=dts[:len(states)]
+        o,h,l,c = o[:len(states)],h[:len(states)],l[:len(states)],c[:len(states)]
+    else:
+        states=np.zeros(n,dtype=int); lots=np.zeros(n,dtype=int)
+        for k,d in enumerate(walk_fusion_states(o,h,l,c,htf,p)):
+            if k+2 < n:
+                states[k+2]=d["state"]
+                lots[k+2]=int(d.get("lots",1) or 1)
     positions=[]
     cur=None  # dict: dir, first_px, exit_px, entry_dt, exit_dt, lot_pxs(list)
-    for i in range(n):
+    for i in range(len(states)):
         st=int(states[i]); lt=int(lots[i])
         if cur is None:
             if st!=0:
@@ -88,9 +119,16 @@ def build_positions(df, p):
         positions.append(cur)
     return positions
 
-def replay_capacity5(positions, mult_map):
-    """逐字复刻研究侧 replay4：容量5 FIFO + real_cost(1.0) + 研究近似 gross。
+def replay_capacity5(positions, mult_map, pnl_mode="perlot"):
+    """逐字复刻研究侧 replay4：容量5 FIFO + real_cost(1.0)。
     事件口径：events = 全部头寸（含末根强平）；末根强平在入场时 continue（不计入 executed/cap_skip）。
+
+    pnl_mode:
+      "perlot"（默认，正确）—— 各手按各自实际入场价独立计价。加码手的入场价通常劣于首仓价，
+        按首仓价统一计价会系统性高估利润（实测高估 209 万）。
+      "first" —— 研究侧历史近似：全部手数按首仓价计价。仅用于复现旧数字。
+
+    历史 bug：默认口径曾为 "first"，导致净利虚高。
     """
     tl=[]
     for pos in positions:
@@ -124,11 +162,14 @@ def replay_capacity5(positions, mult_map):
             mult=mult_map[sym]
             dirn=1.0 if pos["dir"]==1 else -1.0
             first_px=pos["first_px"]; exit_px=pos["exit_px"]
-            # 研究近似：gross = 方向×(exit−首仓价)×mult×手数（ATR 抵消）
-            gross=dirn*(exit_px-first_px)*mult*lots
+            if pnl_mode=="perlot":
+                gross=sum(dirn*(exit_px-px)*mult for px in pos["lot_pxs"])
+            else:
+                # 研究近似：gross = 方向×(exit−首仓价)×mult×手数（ATR 抵消）
+                gross=dirn*(exit_px-first_px)*mult*lots
             cost=real_cost_per_lot(sym,mult)*lots
             Y=gross-cost
-            win = (dirn*(exit_px-first_px))>0
+            win = Y>0 if pnl_mode=="perlot" else (dirn*(exit_px-first_px))>0
             open_pos[sym]=dict(Y=Y, win=win)
             executed+=1
             if lots>1:
@@ -152,19 +193,20 @@ def main():
     n_sym=0; skipped=[]
     with session_scope() as s:
         for m in mc:
-            fk=f"KQ.m@{m.exchange}.{m.product}"
-            df=load_fut_kline(s, fk)
+            fk=_resolve_fut_symbol(s, m.product, m.exchange)
+            df=load_fut_kline(s, fk) if fk else None
             if df is None or len(df)<p.min_bars:
-                skipped.append((m.symbol, fk, 0 if df is None else len(df)))
+                skipped.append((m.symbol, fk or f"KQ.m@{m.exchange}.{m.product}",
+                                0 if df is None else len(df)))
                 continue
-            pos=build_positions(df, p)
+            pos=build_positions(df, p, legacy_align=LEGACY_ALIGN)
             for pp in pos:
                 pp["sym"]=m.symbol
             nev=len([x for x in pos if not x.get("open_at_end")])
             per_sym_events[m.symbol]=nev
             all_pos.extend(pos)
             n_sym+=1
-    res=replay_capacity5(all_pos, mult_map)
+    res=replay_capacity5(all_pos, mult_map, pnl_mode=PNL_MODE)
     # 报告
     print("="*60)
     print("V3.4 验收：CB 引擎(walk_fusion_states) @ fut_kline 连续主连")
@@ -201,4 +243,13 @@ def main():
     print("结果已写 /app/runtime/accept_v34_result.json")
 
 if __name__=="__main__":
+    import argparse
+    _ap=argparse.ArgumentParser(description="V3.4 验收（等价性验证）")
+    _ap.add_argument("--legacy-align", action="store_true",
+                     help="复刻历史错位对齐（前视），仅用于回归对比，勿作为结论")
+    _ap.add_argument("--pnl-mode", default="perlot", choices=["perlot","first"],
+                     help="perlot=逐手独立计价(正确,默认) / first=研究侧旧近似(高估)")
+    _a=_ap.parse_args()
+    LEGACY_ALIGN=_a.legacy_align
+    PNL_MODE=_a.pnl_mode
     main()
