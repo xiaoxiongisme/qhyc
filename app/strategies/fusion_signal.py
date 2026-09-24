@@ -27,7 +27,7 @@ import pandas as pd
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, text, Boolean, DateTime, Integer, Numeric, Text
+from sqlalchemy import select, text, Boolean, DateTime, Float, Integer, JSON, Numeric, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import get_engine
@@ -430,6 +430,37 @@ class FusionPushLog(Base):
     via: Mapped[str] = mapped_column(Text, default="pushplus")      # 实际成功通道
 
 
+class FusionSignalLog(Base):
+    """信号明细落库 —— 每次扫描产生的**结构化**信号逐条留存，供回测/复盘使用。
+
+    与 `fusion_push_log` 的区别：后者存"推送文本"（给人看），本表存"可计算字段"（给程序用）。
+    落库为旁路：任何失败只告警，绝不阻塞扫描与推送。
+    """
+    __tablename__ = "fusion_signal_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # 信号时间(UTC)
+    trade_date: Mapped[str] = mapped_column(Text, default="")             # 本地交易日 YYYY-MM-DD
+    source: Mapped[str] = mapped_column(Text, default="fusion_scan")      # fusion_scan / pipeline_daily
+    kind: Mapped[str] = mapped_column(Text, default="signal")             # signal / heartbeat / presession
+    symbol: Mapped[str] = mapped_column(Text, default="")
+    name: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str | None] = mapped_column(Text)      # 开多/开空/平多/反手...（中文动作）
+    direction: Mapped[str | None] = mapped_column(Text)   # 目标状态 LONG/SHORT/FLAT
+    prev_state: Mapped[str | None] = mapped_column(Text)  # 变化前状态
+    price: Mapped[float | None] = mapped_column(Float)    # 触发时最新价
+    entry: Mapped[float | None] = mapped_column(Float)    # 引擎入场价（新仓）
+    prev_entry: Mapped[float | None] = mapped_column(Float)
+    stop: Mapped[float | None] = mapped_column(Float)     # 当前吊灯止损
+    be_trigger: Mapped[float | None] = mapped_column(Float)   # 保本触发价
+    be_done: Mapped[bool | None] = mapped_column(Boolean)
+    atr: Mapped[float | None] = mapped_column(Float)      # 入场 ATR
+    risk_px: Mapped[float | None] = mapped_column(Float)  # 初始风险(价差)
+    lots: Mapped[int | None] = mapped_column(Integer)     # 手数
+    pnl: Mapped[float | None] = mapped_column(Float)      # 持仓浮盈率
+    extra: Mapped[dict | None] = mapped_column(JSON)      # 其余字段兜底
+
+
 # 新增列的兼容迁移语句（表已存在时 create_all 不会补列）
 _MIGRATIONS = (
     "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS last_stop NUMERIC(20, 4)",
@@ -444,7 +475,8 @@ def ensure_fusion_table(engine) -> None:
     """运行时建表（容器已启动、不重跑 init SQL，故用 CREATE IF NOT EXISTS 等价机制）。"""
     # 仅建本模块新增的表，不影响既有表
     Base.metadata.create_all(
-        engine, tables=[FusionPosition.__table__, FusionPushLog.__table__]
+        engine, tables=[FusionPosition.__table__, FusionPushLog.__table__,
+                        FusionSignalLog.__table__]
     )
     # 老库补列（幂等）
     with engine.begin() as conn:
@@ -453,7 +485,66 @@ def ensure_fusion_table(engine) -> None:
                 conn.execute(text(stmt))
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[fusion] migration skipped: {stmt[:60]}... ({e})")
-    logger.info("[fusion] ensure fusion_position / fusion_push_log table ok")
+    logger.info("[fusion] ensure fusion_position / fusion_push_log / fusion_signal_log table ok")
+
+
+def persist_signals(session, signals: list[dict], ts_local: datetime,
+                    source: str = "fusion_scan", kind: str = "signal",
+                    prev_states: dict[str, str] | None = None) -> int:
+    """把一轮扫描的信号结构化落库（旁路，失败只告警）。返回落库条数。
+
+    ts_local 为带时区的本地时间；库内统一存 UTC。
+    """
+    if not signals:
+        return 0
+    prev_states = prev_states or {}
+    utc = ts_local.astimezone(timezone.utc)
+    trade_date = ts_local.strftime("%Y-%m-%d")
+    rows = []
+    for sg in signals:
+        lv = sg.get("levels") or {}
+        rows.append(FusionSignalLog(
+            signal_at=utc,
+            trade_date=trade_date,
+            source=source,
+            kind=kind,
+            symbol=sg.get("symbol") or "",
+            name=sg.get("name"),
+            action=sg.get("action"),
+            direction=sg.get("to"),
+            prev_state=prev_states.get(sg.get("symbol")),
+            price=_f(sg.get("close")),
+            entry=_f(sg.get("new_entry") or sg.get("entry")),
+            prev_entry=_f(sg.get("entry")),
+            stop=_f(lv.get("stop")),
+            be_trigger=_f(lv.get("be_trigger")),
+            be_done=lv.get("be_done") if lv else None,
+            atr=_f(lv.get("atr")),
+            risk_px=_f(lv.get("risk_px")),
+            lots=sg.get("lots"),
+            pnl=_f(sg.get("pnl")),
+            extra={k: v for k, v in sg.items()
+                   if k not in ("symbol", "name", "action", "to", "close",
+                                "entry", "new_entry", "levels", "pnl")} or None,
+        ))
+    try:
+        session.bulk_save_objects(rows)
+        session.flush()
+        return len(rows)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[fusion] 信号落库失败（不影响推送）: {e}")
+        return 0
+
+
+def _f(v) -> float | None:
+    """安全转 float（None/NaN/异常一律返回 None）。"""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f  # NaN
 
 
 # -----------------------------------------------------

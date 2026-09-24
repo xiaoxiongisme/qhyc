@@ -37,9 +37,11 @@ from app.strategies.fusion_signal import (
     get_position,
     set_push_state,
     upsert_position,
+    persist_signals,
     POS_MAP,
     FusionPosition,
     FusionPushLog,
+    FusionSignalLog,
 )
 from app.notify import send_notify
 
@@ -480,7 +482,25 @@ def _deliver(s, title: str, content: str, now: datetime, *, kind: str,
 
 
 def _push_startup_notice(s, n_symbols: int, now: datetime, settings) -> None:
-    """冷启动：只发一条极简上线通知（不列方向清单，避免与'新信号'混淆）"""
+    """冷启动：只发一条极简上线通知（不列方向清单，避免与'新信号'混淆）
+
+    两道闸门（2026-09-24 修复「每 15/30 分钟重复推送」）：
+      ① 品种数为 0（无数据）时不推——此时"已记录 0 个品种基线"无意义；
+      ② 同一自然日只推一次——数据表为空时 is_cold 会反复为真（无基线可建），
+         否则用户每半小时收到一条"已启动"。
+    """
+    if n_symbols <= 0:
+        logger.info("[fusion] 冷启动但品种数为 0（无数据），跳过上线通知")
+        return
+    day_start = datetime(now.year, now.month, now.day,
+                         tzinfo=now.tzinfo).astimezone(timezone.utc)
+    already = (s.query(FusionPushLog.id)
+                 .filter(FusionPushLog.kind == "startup",
+                         FusionPushLog.pushed_at >= day_start)
+                 .first())
+    if already:
+        logger.info("[fusion] 今日已推送过上线通知，跳过")
+        return
     f = settings.fusion
     content = "\n".join([
         "## 融合策略监控已启动",
@@ -723,6 +743,18 @@ def _fusion_scan_job() -> None:
                 set_push_state(s, sym,
                                last_stop=(float(cur) if cur is not None else prev_stop),
                                last_be_done=be_now, lots=lots_now, pushed_at=now_utc)
+
+            # 2.5) 信号明细落库（供回测/复盘）：旁路，失败不阻塞推送
+            #     冷启动轮也会产生基线信号，一并留存，保证"从哪天开始有记录"可追溯。
+            try:
+                n_logged = persist_signals(
+                    s, signals, now, source="fusion_scan",
+                    kind="startup" if is_cold else "signal",
+                )
+                if n_logged:
+                    logger.info(f"[scheduler] 信号落库 {n_logged} 条")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[scheduler] 信号落库异常（已忽略）: {e}")
 
             if is_cold:
                 n_ok = sum(1 for r in results if not r.get("error"))
