@@ -68,6 +68,11 @@ COPY scripts ./scripts
 COPY config ./config
 # M5 看板静态文件（Stage 1 构建产物）
 COPY --from=webbuilder /build/dist ./web/dist
+# M8 决策链路源码（WB skill 的内化副本）
+#   由 `python scripts/vendor_pipeline_src.py` 生成到 vendor/pipeline_src。
+#   进镜像 = 远端部署不再依赖任何宿主机 bind mount（app/pipeline/config.py 的
+#   src 默认值正是 /app/pipeline_src，无需额外配置）。
+COPY vendor/pipeline_src ./pipeline_src
 
 # 运行用户（非 root）
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app

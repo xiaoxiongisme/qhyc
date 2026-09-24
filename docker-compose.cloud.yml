@@ -1,0 +1,148 @@
+# =====================================================
+# 期货预测平台 - 云端编排（腾讯云轻量服务器）
+# -----------------------------------------------------
+# 与本地 docker-compose.yml 的核心区别：**零宿主机路径依赖**。
+# 本地那套用 bind mount 把源码/WB skill/简报目录挂进容器，远端没有这些路径，
+# Docker 会静默建空目录 → 代码被覆盖成空、决策链路无源码可执行。
+#
+# 启动方式：
+#   export QHYC_IMAGE=ccr.ccs.tencentyun.com/<ns>/qhyc:<tag>
+#   export POSTGRES_PASSWORD=...
+#   docker compose -f docker-compose.cloud.yml up -d
+# =====================================================
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.17.1-pg16
+    container_name: qhyc-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-futures}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-futures}
+      # ⚠ 按实机内存调：2G 机器设 1（≈512MB），4G 机器设 2（≈1GB）。
+      # 库体积约 37GB，内存不足会频繁 OOM / 查询极慢，建议 4GB 起步。
+      TS_TUNE_MEMORY: ${TS_TUNE_MEMORY:-2}
+      TS_TUNE_NUM_CPUS: ${TS_TUNE_NUM_CPUS:-2}
+    command:
+      - "postgres"
+      - "-cshared_buffers=${PG_SHARED_BUFFERS:-1GB}"
+      - "-cwork_mem=${PG_WORK_MEM:-64MB}"
+      - "-cmaintenance_work_mem=512MB"
+      - "-cmax_connections=100"
+      - "-cwal_compression=on"
+      - "-clisten_addresses=localhost"   # 只监听本机：数据库不对外，端口也不映射宿主
+    volumes:
+      # 云端用 named volume（或改成 /data/qhyc/pgdata 挂数据盘）。
+      # ⚠ 库约 37GB：默认系统盘很可能放不下，务必先挂数据盘并把
+      #   docker 的 data-root 或此路径指到数据盘。
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    # 不在宿主暴露 5432（本地那份映射了，云端必须收掉）
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-futures} -d ${POSTGRES_DB:-futures}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    # 防止单容器吃满内存把 SSH 一起拖死
+    mem_limit: ${DB_MEM_LIMIT:-3g}
+
+  api:
+    # 云端默认用已推送好的镜像；本地调试想现编可加 `--build`
+    image: ${QHYC_IMAGE:-qhyc:latest}
+    build: .
+    container_name: qhyc-api
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: timescaledb
+      ROLE: api
+    volumes:
+      # 只挂**运行时产物**，源码全部来自镜像
+      - logs:/app/logs
+      - runtime:/app/runtime
+      # 远端没有 E:/QH：简报产出落在独立 named volume
+      - qh_brief:/app/qh
+      # config/local.yaml 的 imports.container_root=/app/imports。
+      # 云端没有本地历史数据可挂，但仍要挂一个（可空）卷，否则目录不存在会报错。
+      - imports:/app/imports
+      # ⚠ 不要挂 ./config 覆盖镜像内配置：云端若目录为空会把配置盖没。
+      #   需要改配置走 env 覆盖，或在服务器上放好 config 再挂。
+    ports:
+      - "${API_PORT:-8000}:8000"
+    command: ["python", "-m", "app.main"]
+
+  scheduler:
+    image: ${QHYC_IMAGE:-qhyc:latest}
+    build: .
+    container_name: qhyc-scheduler
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      api:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: timescaledb
+      ROLE: scheduler
+      RUN_ON_BOOT: "0"
+    volumes:
+      - logs:/app/logs
+      - runtime:/app/runtime
+    healthcheck:
+      disable: true
+    command: ["python", "-m", "app.scheduler"]
+
+  pipeline:
+    image: ${QHYC_IMAGE:-qhyc:latest}
+    build: .
+    container_name: qhyc-pipeline
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: timescaledb
+      ROLE: pipeline
+      TZ: Asia/Shanghai
+      # 源码来自镜像内 /app/pipeline_src（由 scripts/vendor_pipeline_src.py 内化）
+      # —— 不再依赖 ${WB_PIPELINE_PATH}
+      PIPELINE_SRC: /app/pipeline_src
+      PIPELINE_SNAPSHOT: /app/runtime/pipeline_snapshot
+      QH_BRIEF_BASE: /app/qh
+      QH_PG_HOST: timescaledb
+      QH_PG_PORT: 5432
+      QH_PG_DB: ${POSTGRES_DB:-futures}
+      QH_PG_USER: ${POSTGRES_USER:-futures}
+      QH_PG_PWD: ${POSTGRES_PASSWORD}
+    volumes:
+      - logs:/app/logs
+      - runtime:/app/runtime
+      - qh_brief:/app/qh
+    mem_limit: ${PIPELINE_MEM_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "python -m app.pipeline.healthcheck"]
+      interval: 5m
+      timeout: 30s
+      retries: 3
+      start_period: 90s
+    command: ["python", "-m", "app.pipeline.worker"]
+
+volumes:
+  pgdata:
+  logs:
+  runtime:
+  qh_brief:
+  imports:
+
+networks:
+  default:
+    name: qhyc
