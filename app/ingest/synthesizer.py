@@ -45,12 +45,23 @@ def _run(session: Session, sql: str, params: dict | None = None) -> int:
 
 
 def synthesize_bars_incremental(session: Session, days_back: int = 3) -> dict:
-    """增量重算最近 days_back 天的桶（覆盖在途桶），成本极低。返回各表影响行数。"""
+    """增量重算最近 days_back 天的桶（覆盖在途桶），成本极低。返回各表影响行数。
+
+    边界处理：DELETE 按「桶对齐」阈值（含 since 所在的不完整桶），
+    否则 since 落在某桶中间时该半截桶起点早于 since 不会被删、又因冲突被
+    DO NOTHING 跳过，导致漏更新。
+    """
     since = datetime.now(_SH_TZ) - timedelta(days=days_back)
     stats: dict[str, int] = {}
     for t, iv in _BARS:
-        session.execute(text(f"DELETE FROM {t} WHERE bucket >= :since"), {"since": since})
-        sql = _INSERT_HEAD.format(t=t, iv=iv) + "WHERE ts >= :since\nGROUP BY symbol, bucket\n" \
+        session.execute(
+            text(
+                f"DELETE FROM {t} WHERE bucket >= time_bucket(INTERVAL '{iv}', :since, 'Asia/Shanghai')"
+            ),
+            {"since": since},
+        )
+        sql = _INSERT_HEAD.format(t=t, iv=iv) + \
+              "WHERE ts >= :since\nGROUP BY symbol, bucket\n" \
               "ON CONFLICT (symbol, bucket) DO NOTHING"
         stats[t] = _run(session, sql, {"since": since})
     session.commit()
