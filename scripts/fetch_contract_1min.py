@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -331,12 +332,15 @@ def fetch_min(session: Session, symbols: list[str], data_length: int = 8000) -> 
             tq = _to_tq_symbol(sym)
             print(f"[fetch-min] {sym} -> tqsdk {tq}")
             klines = api.get_kline_serial(tq, duration_seconds=60, data_length=data_length)
-            for _ in range(5):
-                if klines is not None and len(klines) > 0:
-                    break
+            # 等待序列完整下载：tqsdk 主连 1 分钟上限约 10000 根，需多轮 wait_update 才填满；
+            # 早退会导致只抓到半截。超时才放行（合约历史不足 data_length 时也靠它收尾）。
+            _deadline = time.monotonic() + min(300.0, max(30.0, data_length / 50.0))
+            while klines is not None and len(klines) < data_length:
                 try:
                     api.wait_update(timeout=20)
                 except Exception:
+                    break
+                if time.monotonic() > _deadline:
                     break
             if klines is None or len(klines) == 0:
                 print(f"[fetch-min] {sym} 无数据")
