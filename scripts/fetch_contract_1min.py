@@ -348,10 +348,15 @@ def fetch_min(session: Session, symbols: list[str], data_length: int = 8000) -> 
                 continue
             rows = _parse_tq_klines(klines, sym)
             if rows:
-                stmt = pg_insert(_MINUTE_BAR).values(rows).on_conflict_do_nothing(
-                    index_elements=["symbol", "ts"]
-                )
-                session.execute(stmt)
+                # PostgreSQL 单条语句参数上限 65535；1 分钟 1 万行 ×15 列会超限，按 2000 行分批
+                _CH = 2000
+                for _i in range(0, len(rows), _CH):
+                    _batch = rows[_i:_i + _CH]
+                    session.execute(
+                        pg_insert(_MINUTE_BAR).values(_batch).on_conflict_do_nothing(
+                            index_elements=["symbol", "ts"]
+                        )
+                    )
                 session.commit()
             stats[sym] = len(rows)
             print(f"[fetch-min] {sym} upsert {len(rows)} 行")
