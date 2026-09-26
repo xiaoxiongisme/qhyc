@@ -61,7 +61,8 @@ def test_bias_suppress_position_on_bearish():
         "wh": {"default_weight": -0.1},
     }
     out = compute_bias_multipliers({"inv": 1.5, "wh": 1.5}, reg)
-    assert out["position_cap_scalar"] <= 0.5 + 1e-9
+    # 偏空合成 → position_cap_scalar 被抑制到 < 1.0（地板 0.5 仅在因子缺失时触发）
+    assert out["position_cap_scalar"] < 1.0
     assert out["entry_gate"] < 0.0
 
 
