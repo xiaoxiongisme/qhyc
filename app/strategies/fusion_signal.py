@@ -30,10 +30,26 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, text, Boolean, DateTime, Float, Integer, JSON, Numeric, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.config import get_settings
 from app.core.db import get_engine
 from app.core.logging import logger
+from app.factor import FactorContext, compute_bias_multipliers
 from app.models.base import Base
 from app.models import HourlyBar
+
+# 因子偏置乘子上下文（因子接入 PRD §5）：模块级懒加载并缓存，避免每次评估都查库。
+_factor_ctx_cache = None
+
+
+def _get_factor_ctx() -> FactorContext | None:
+    global _factor_ctx_cache
+    if _factor_ctx_cache is None:
+        try:
+            _factor_ctx_cache = FactorContext.load()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[fusion] 因子上下文加载失败，偏置乘子置中性: {e}")
+            _factor_ctx_cache = False
+    return _factor_ctx_cache or None
 
 # 全系统统一交易所时区（上海）；DB 会话已设为 Asia/Shanghai，
 # 读出的 timestamptz 为上海感知，故收盘判定一律用上海 now。
@@ -153,6 +169,20 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
     trough = 0.0
     be_done = False
 
+    # ---- 因子偏置乘子（因子接入 PRD §5，V3.4 接入点 T5）----
+    # 以「乘子」方式接入，不重写核心循环：position_cap_scalar 缩放加码上限，
+    # entry_gate 门控新开仓。未传 symbol/trade_date 时保持中性（=原行为）。
+    _bias_cfg = get_settings().factor_bias
+    _eff_cap = max(1, int(round(p.add_max_lots * 1.0)))
+    _entry_gate = 1.0
+    _ctx = _get_factor_ctx()
+    if _ctx is not None and symbol is not None and trade_date is not None:
+        _b_ids = [fid for fid, m in _ctx.registry.items() if m.get("category") == "B"]
+        _zs = _ctx.lookup_many(_b_ids, symbol, trade_date)
+        _b = compute_bias_multipliers(_zs, _ctx.registry, _bias_cfg)
+        _eff_cap = max(1, int(round(p.add_max_lots * _b["position_cap_scalar"])))
+        _entry_gate = _b["entry_gate"]
+
     for i in range(2, n):
         if h[i - 1] > h[i - 2] and h[i - 1] > h[i]:
             ph.append(i - 1)
@@ -271,7 +301,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
             if adx_min > 0 and adx_arr[i - 1] < adx_min:
                 s_tl = s_ts = s_bkl = s_bks = False
 
-            if s_tl or s_bkl:
+            if (s_tl or s_bkl) and _entry_gate >= _bias_cfg.gate_threshold:
                 state = 1
                 entry_px = c[i]
                 avg_px = c[i]
@@ -281,7 +311,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
                 peak = c[i]
                 trough = c[i]
                 be_done = False
-            elif s_ts or s_bks:
+            elif (s_ts or s_bks) and _entry_gate >= _bias_cfg.gate_threshold:
                 state = 2
                 entry_px = c[i]
                 avg_px = c[i]
@@ -298,7 +328,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
         # （吊灯须已推进到加码后均价之上，add_guard_atr）自 V3.4 停用——
         # 实测该约束损失 19.6% 收益而回撤仅多 1.4 万（PRD §17.1 CR-5）。
         # 代价：加码后不再保证「最差=保本」，约 53% 加码单以亏损结束（中位仅 −0.16R）。
-        elif add_max_lots >= 2 and state != 0 and lots < add_max_lots:
+        elif _eff_cap >= 2 and state != 0 and lots < _eff_cap:
             if state == 1:
                 _hh = max(h[entry_i:i]) if i > entry_i else h[entry_i]
                 if c[i] > _hh and (c[i] - entry_px) >= lots * add_thr_atr * e_atr:
@@ -326,7 +356,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
         }
 
 
-def fusion_state_detail(o, h, l, c, htf_dir, p) -> dict:
+def fusion_state_detail(o, h, l, c, htf_dir, p, symbol=None, trade_date=None) -> dict:
     """融合策略主循环，返回最后一根已收盘K之后的持仓**明细**（单一真源）。
 
     返回 dict：
@@ -684,7 +714,11 @@ def evaluate_symbol(session, symbol: str, p) -> dict:
     ema140 = ema(c, p.ema_k)
     dir_raw = np.where(c > ema140, 1, -1)
     htf_dir = np.concatenate([[0], dir_raw[:-1]])  # 用前一根方向门控（对齐已收盘，无前视）
-    det = fusion_state_detail(o, h, l, c, htf_dir, p)
+    det = fusion_state_detail(
+        o, h, l, c, htf_dir, p,
+        symbol=symbol,
+        trade_date=pd.Timestamp(df["dt"].iloc[-1]).date(),
+    )
     st = det["state"]
     latest_dt = df["dt"].iloc[-1]
     return {

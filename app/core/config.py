@@ -381,6 +381,15 @@ class FutKlineConfig(BaseModel):
     timeout_sec: int = 3600
 
 
+class FactorBiasConfig(BaseModel):
+    """因子偏置乘子配置（因子接入 PRD §5）。"""
+    gate_threshold: float = 0.0
+    cap_floor: float = 0.5
+    gate_floor: float = -1.0
+    degrade_missing: str = "floor"
+    max_weight_registry_sum: float = 1.0
+
+
 class YamlConfig(BaseModel):
     app: AppYAML = Field(default_factory=AppYAML)
     database: DbYAML = Field(default_factory=DbYAML)
@@ -397,6 +406,7 @@ class YamlConfig(BaseModel):
     rank_position: RankPositionConfig = Field(default_factory=RankPositionConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     fut_kline: FutKlineConfig = Field(default_factory=FutKlineConfig)
+    factor_bias: FactorBiasConfig = Field(default_factory=FactorBiasConfig)
 
 
 @lru_cache(maxsize=1)
@@ -478,6 +488,10 @@ class Settings(BaseModel):
     @property
     def fusion(self) -> FusionConfig:
         return self.yaml.fusion
+
+    @property
+    def factor_bias(self) -> "FactorBiasConfig":
+        return self.yaml.factor_bias
 
     @property
     def pushplus_token(self) -> str:
