@@ -6,10 +6,12 @@
   （注意：这是「品种内各标的加总」，不是真实品种排名，且**不能**回填逐会员表，见 PRD §4.2）。
 
 落库表 ``member_position_rank_summary``，主键 ``(report_date, symbol, version)``。
+源 ``symbol`` 为真实合约码（如 ``RB2611``），按品种前缀映射回 ``XXXX888`` 主力连续口径。
 """
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from typing import Any
 
 from app.core.db import get_engine
@@ -66,6 +68,26 @@ def _col(row: dict, *keys: str) -> Any:
         if key.lower() in low:
             return row[low[key.lower()]]
     return None
+
+
+def _to_date(s) -> _dt.date | None:
+    if s is None:
+        return None
+    try:
+        return _dt.datetime.strptime(str(s).strip(), "%Y%m%d").date()
+    except Exception:  # noqa: BLE001
+        try:
+            return _dt.date.fromisoformat(str(s).strip()[:10])
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _to_main(symbol_raw: str) -> str | None:
+    """真实合约码（如 RB2611）→ 主力连续码 RB888。"""
+    m = re.match(r"^([A-Za-z]+)", str(symbol_raw))
+    if not m:
+        return None
+    return m.group(1).upper() + "888"
 
 
 _INSERT = text(
@@ -136,13 +158,15 @@ def fetch(start: _dt.date, end: _dt.date, vars_list: list[str]) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         sym_raw = _col(r, "symbol")
-        var_raw = _col(r, "variety", "variety_name")
         if not sym_raw:
             continue
+        main = _to_main(sym_raw)
+        if not main:
+            continue
         rec = {
-            "report_date": start,  # get_rank_sum_daily 区间通常返回单日快照，取 start
-            "symbol": f"{str(sym_raw).upper().strip('0')}888",
-            "variety": _str(var_raw),
+            "report_date": _to_date(_col(r, "date")) or start,
+            "symbol": main,
+            "variety": _str(_col(r, "variety", "variety_name")),
             "src": SRC,
             "version": VERSION,
         }
