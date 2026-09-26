@@ -51,12 +51,16 @@ def test_bias_all_zero_neutral():
 
 
 def test_bias_suppress_position_on_bearish():
-    """一致看空因子 → position_cap_scalar 压到地板，entry_gate 转负。"""
+    """一致看空因子（库存/仓单偏高=偏空）→ 合成偏空：position_cap_scalar 压到地板，entry_gate 转负。
+
+    约定：default_weight 符号编码方向（负=偏空因子），z 为标准化原值（越高=该因子条件越强）。
+    故库存/仓单处于高位 → z 为正，权重为负 → 合成贡献为负 → 偏空。
+    """
     reg = {
         "inv": {"default_weight": -0.1},
         "wh": {"default_weight": -0.1},
     }
-    out = compute_bias_multipliers({"inv": -1.5, "wh": -1.5}, reg)
+    out = compute_bias_multipliers({"inv": 1.5, "wh": 1.5}, reg)
     assert out["position_cap_scalar"] <= 0.5 + 1e-9
     assert out["entry_gate"] < 0.0
 
