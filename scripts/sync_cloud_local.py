@@ -213,6 +213,18 @@ def sync_table(src, dst, table, *, chunk_months, mode, dry_run):
     sc = psycopg2.connect(**src); scur = sc.cursor()
     dc = psycopg2.connect(**dst); dcur = dc.cursor()
 
+    # 2026-09-29 实测：目标库的表若是**已启用压缩的超表**，增量模式先 DELETE 水位之后的
+    # 行会触发解压，默认上限 100,000 元组 → 直接报错：
+    #   ConfigurationLimitExceeded: tuple decompression limit exceeded by operation
+    #   HINT: increase timescaledb.max_tuples_decompressed_per_dml_transaction or set to 0
+    # 0 = 不限制。增量 DELETE 的窗口很小（只删水位之后的行），不会失控；
+    # 本会话内设置，不影响实例全局。不修的话 03:15 的定时同步每晚都会失败。
+    try:
+        dcur.execute("SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0")
+        dc.commit()
+    except Exception:  # noqa: BLE001  非 TimescaleDB 或无该 GUC → 忽略
+        dc.rollback()
+
     scols = get_cols(scur, table)
     dcols = get_cols(dcur, table)
     if scols != dcols:
