@@ -1,0 +1,116 @@
+# -*- coding: utf-8 -*-
+"""口径注册表（六层解耦 · 数据层 L2 的"字典"）。
+
+为什么需要它
+------------
+历史代码中，同一个"15 分钟主连"在不同脚本里有不同取法：
+  * 有人查 `fut_kline(freq='min15', kind='continuous')`
+  * 有人查 `bar_15m`（888 主连，未复权）
+  * 复权序列又在 `fut_kline(kind='cont_adj')`
+  * daily/hourly 的 cont_adj 用 `KQ.m@EXCHANGE.PROD`，而 min15/30/60 用 `XXX888`
+于是出现「跨周期 join 静默少数据」——不报错，只是结果不对（PRD 差距分析已点名）。
+
+本模块把「周期 × 口径 → 具体表」的映射固化成**唯一权威**，上层只能通过
+`BarStore` 取数，禁止裸 SQL。
+
+口径定义（PRD 铁律，不得混淆）
+------------------------------
+  continuous  未复权主连（888 法）：**回测与对账的基准**。换月有跳空，
+              但它是真实可交易序列的价格轨迹。
+  cont_adj    加法平移前复权主连：仅用于**统计与交叉校验**，不作回测基准。
+  contract    标准合约序列（品种大写 + YYMM，如 AP2701）：逐合约，不连续。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+#: 合法口径（回测基准为 continuous）
+CALIBERS = ("continuous", "cont_adj", "contract")
+
+#: 周期枚举（与 fut_kline.freq / bar_* 对齐）
+FREQS = ("1m", "5m", "15m", "30m", "60m", "hourly", "daily")
+
+#: 回测与对账的默认口径（PRD 铁律）
+DEFAULT_CALIBER = "continuous"
+
+
+@dataclass(frozen=True)
+class Route:
+    """一条取数路由：周期+口径 → 表 + 过滤条件。"""
+
+    table: str
+    #: 额外 SQL 条件（已参数化占位符用 :name 形式，由 BarStore 绑定）
+    where: str = ""
+    #: 时间列名
+    time_col: str = "bucket"
+    #: 是否需要在 symbol 上做 888/8888 等后缀约束
+    symbol_transform: str = ""
+    note: str = ""
+
+
+#: 路由表：(freq, caliber) -> Route
+#: 依据（2026-09-28 全库实测）：
+#:   fut_kline       freq ∈ {daily,hourly,min15,min30,min60} × kind ∈ {continuous,cont_adj,contract}
+#:   bar_5m/15m/30m/60m  未复权主连区间棒（symbol=XXX888，另有 XXX8888 指数连）
+#:   minute_bar / minute_bar_adj  1 分钟（原始 / 已复权）
+#:   daily_bar / hourly_bar       日线 / 小时线（含多 src）
+#:   contract_daily               逐合约日线
+ROUTES: dict[tuple[str, str], Route] = {
+    # —— 1 分钟 ——
+    ("1m", "continuous"): Route("minute_bar", time_col="ts",
+                                note="1 分钟原始主连（未复权）"),
+    ("1m", "cont_adj"):   Route("minute_bar_adj", time_col="ts",
+                                note="1 分钟已复权主连"),
+    # —— 5 分钟 ——
+    ("5m", "continuous"): Route("bar_5m", time_col="bucket",
+                                note="5 分钟未复权主连（888）"),
+    # —— 15 / 30 / 60 分钟 ——
+    ("15m", "continuous"): Route("bar_15m", time_col="bucket", note="15m 未复权主连"),
+    ("30m", "continuous"): Route("bar_30m", time_col="bucket", note="30m 未复权主连"),
+    ("60m", "continuous"): Route("bar_60m", time_col="bucket", note="60m 未复权主连"),
+    ("15m", "cont_adj"):   Route("fut_kline", where="freq='min15' AND kind='cont_adj'",
+                                 time_col="trade_datetime", note="15m 前复权（symbol=XXX888）"),
+    ("30m", "cont_adj"):   Route("fut_kline", where="freq='min30' AND kind='cont_adj'",
+                                 time_col="trade_datetime", note="30m 前复权"),
+    ("60m", "cont_adj"):   Route("fut_kline", where="freq='min60' AND kind='cont_adj'",
+                                 time_col="trade_datetime", note="60m 前复权"),
+    # —— 小时线：融合策略主周期，必须单一源（akshare），杜绝双源混读 ——
+    ("hourly", "continuous"): Route("hourly_bar", where="src='akshare'",
+                                    time_col="trade_datetime",
+                                    note="小时线未复权；融合策略主周期，src 必须锁定 akshare"),
+    ("hourly", "cont_adj"):   Route("fut_kline", where="freq='hourly' AND kind='cont_adj'",
+                                    time_col="trade_datetime",
+                                    note="小时线前复权；注意 daily/hourly 用 KQ.m@ 命名空间"),
+    # —— 日线 ——
+    ("daily", "continuous"): Route("fut_kline", where="freq='daily' AND kind='continuous'",
+                                   time_col="trade_datetime", note="日线未复权主连"),
+    ("daily", "cont_adj"):   Route("fut_kline", where="freq='daily' AND kind='cont_adj'",
+                                   time_col="trade_datetime",
+                                   note="日线前复权；命名空间为 KQ.m@EXCHANGE.PROD"),
+    ("daily", "contract"):   Route("contract_daily", time_col="trade_date",
+                                   note="逐合约日线（symbol=品种大写+YYMM）"),
+}
+
+
+class CaliberError(ValueError):
+    """口径/周期组合不合法或尚未登记。"""
+
+
+def get_route(freq: str, caliber: str) -> Route:
+    """取路由，未登记则抛出 CaliberError（强制显式登记，避免走偏到裸 SQL）。"""
+    if caliber not in CALIBERS:
+        raise CaliberError(f"未知口径 {caliber!r}，合法值 {CALIBERS}")
+    if freq not in FREQS:
+        raise CaliberError(f"未知周期 {freq!r}，合法值 {FREQS}")
+    r = ROUTES.get((freq, caliber))
+    if r is None:
+        raise CaliberError(
+            f"未登记的取数组合 freq={freq} caliber={caliber}。"
+            f"请在 app/data/caliber.py ROUTES 显式登记后再取数（禁止绕过 BarStore 裸 SQL）")
+    return r
+
+
+def register_route(freq: str, caliber: str, route: Route) -> None:
+    """运行时扩展路由（新增数据源/新周期时使用）。"""
+    ROUTES[(freq, caliber)] = route

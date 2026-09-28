@@ -21,6 +21,11 @@ services:
       - "-cmaintenance_work_mem=512MB"
       - "-cmax_connections=100"
       - "-cwal_compression=on"
+      # 2026-09-29 实测：全库 2291 个 chunk，而默认值 64 导致任何跨全表查询
+      # （count(*) / DISTINCT / VACUUM / 建索引）都报
+      # "out of shared memory / max_locks_per_transaction"。
+      # TimescaleDB 官方建议按 chunk 数量级调大；取 4096 留足增长空间。
+      - "-cmax_locks_per_transaction=4096"
     volumes:
       - ./pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
@@ -100,6 +105,8 @@ services:
       # 源码/脚本本地挂载：docker 仅提供运行环境，代码改动免重建（重启容器即生效）
       - ./app:/app/app:ro
       - ./scripts:/app/scripts:ro
+      # DB 迁移脚本（与代码同版本，方便在容器内直接 apply）
+      - ./migrations:/app/migrations:ro
     # scheduler 不监听端口，禁用继承自 Dockerfile 的 HTTP 健康检查
     healthcheck:
       disable: true

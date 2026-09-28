@@ -66,6 +66,9 @@ RUN if [ "$WITH_SCRAPLING" = "1" ]; then \
 COPY app ./app
 COPY scripts ./scripts
 COPY config ./config
+# DB 迁移脚本：与代码同版本入库，远端部署后可直接在容器内执行
+#   python /app/scripts/db_apply_migrations.py --apply
+COPY migrations ./migrations
 # M5 看板静态文件（Stage 1 构建产物）
 COPY --from=webbuilder /build/dist ./web/dist
 # M8 决策链路源码（WB skill 的内化副本）

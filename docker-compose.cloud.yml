@@ -30,6 +30,9 @@ services:
       - "-cmaintenance_work_mem=512MB"
       - "-cmax_connections=100"
       - "-cwal_compression=on"
+      # 2026-09-29 实测：chunk 数远超默认 64，跨全表查询必报
+      # "out of shared memory / max_locks_per_transaction"（云端 chunk 更多，取 8192）
+      - "-cmax_locks_per_transaction=8192"
       - "-clisten_addresses=localhost"   # 只监听本机：数据库不对外，端口也不映射宿主
     volumes:
       # 云端用 named volume（或改成 /data/qhyc/pgdata 挂数据盘）。

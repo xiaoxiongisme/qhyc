@@ -970,6 +970,12 @@ SUBPROCESS_SCRIPTS = (
     "sync_cloud_local.py",
     "adjust_bars.py",
     "adjust_minute.py",
+    # Phase 4（因子层）：缺任一都会在 16:20/16:45 静默失败，故一并纳入启动自检
+    "compute_factor_v1v6.py",
+    "factor_ic_monitor.py",
+    # Phase 4/6（准入裁决 / 迁移执行）：人工与部署入口
+    "admit_factors.py",
+    "db_apply_migrations.py",
 )
 
 
@@ -1234,7 +1240,133 @@ def _build_scheduler() -> BlockingScheduler:
         logger.info(f"[scheduler] registered spot_basis daily "
                     f"{sbc.run_hour:02d}:{sbc.run_minute:02d}")
 
+    # ---- 因子层（Phase 4 / 新 PRD T22）-------------------------------------
+    # 顺序：收盘(15:00) → 16:20 因子计算 → 16:45 IC 监控 → 17:35 数据自检。
+    # 三者都用 subprocess 隔离（耗时长 / 需独立 DB 连接），且脚本自带幂等。
+    if os.getenv("FACTOR_COMPUTE_ENABLED", "1") == "1":
+        sched.add_job(
+            _factor_v1v6_job,
+            trigger=CronTrigger(hour=16, minute=20, timezone=settings.env.TZ),
+            id="factor_v1v6_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("[scheduler] registered cron 16:20 (factor_v1v6_daily)")
+
+    if os.getenv("FACTOR_IC_MONITOR_ENABLED", "1") == "1":
+        sched.add_job(
+            _factor_ic_monitor_job,
+            trigger=CronTrigger(hour=16, minute=45, timezone=settings.env.TZ),
+            id="factor_ic_monitor_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("[scheduler] registered cron 16:45 (factor_ic_monitor_daily)")
+
+    # ---- 数据自检（Phase 5 / 新 PRD T19，V4）--------------------------------
+    # 默认关闭（SelfCheckConfig.enabled=False），由 DATA_SELFCHECK_ENABLED=1 开启；
+    # 只写 anomaly_ticket 工单，**不阻塞**决策链。
+    if os.getenv("DATA_SELFCHECK_ENABLED", "0") == "1":
+        sched.add_job(
+            _data_selfcheck_job,
+            trigger=CronTrigger(hour=17, minute=35, timezone=settings.env.TZ),
+            id="data_selfcheck_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("[scheduler] registered cron 17:35 (data_selfcheck_daily)")
+    else:
+        logger.info("[scheduler] data_selfcheck 停用（DATA_SELFCHECK_ENABLED!=1）")
+
     return sched
+
+
+# ---------------------------------------------------------------------------
+# Phase 4/5 新增作业
+# ---------------------------------------------------------------------------
+def _factor_v1v6_job() -> None:
+    """V1/V6 因子每日增量计算（T22）。
+
+    增量口径：默认回溯 60 天（FACTOR_COMPUTE_LOOKBACK_DAYS），脚本 UPSERT 幂等；
+    首次部署或修复历史时手工跑一次全量（--since 2015）。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "compute_factor_v1v6.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到脚本 {script}")
+        return
+    lookback = os.getenv("FACTOR_COMPUTE_LOOKBACK_DAYS", "60")
+    since = os.getenv("FACTOR_COMPUTE_SINCE") or (
+        datetime.now() - timedelta(days=int(lookback))).date().isoformat()
+    cmd = [_sys.executable, str(script), "--since", since]
+    logger.info(f"[scheduler] factor_v1v6 start since={since}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        logger.info(f"[scheduler] factor_v1v6 exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-400:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] factor_v1v6 stderr={(proc.stderr or '')[-600:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] factor_v1v6 timeout>3600s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] factor_v1v6 failed: {e}")
+
+
+def _factor_ic_monitor_job() -> None:
+    """因子滚动 IC 监控（T21）：写入 factor_ic_roll，异常因子进告警清单。"""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "factor_ic_monitor.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到脚本 {script}")
+        return
+    cmd = [_sys.executable, str(script), "--apply",
+           "--window", os.getenv("FACTOR_IC_WINDOW", "20")]
+    if os.getenv("FACTOR_IC_ONLY_ENABLED", "1") == "1":
+        cmd.append("--enabled-only")
+    logger.info("[scheduler] factor_ic_monitor start")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        logger.info(f"[scheduler] factor_ic_monitor exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-800:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] factor_ic_monitor stderr={(proc.stderr or '')[-600:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] factor_ic_monitor timeout>3600s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] factor_ic_monitor failed: {e}")
+
+
+def _data_selfcheck_job() -> None:
+    """数据自检（T19/V4）：缺失 / 零成交 / 尾部回退 → anomaly_ticket 工单。"""
+    try:
+        from app.ingest.data_selfcheck import SelfCheckConfig, run as _run
+        from app.core.db import session_scope
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[scheduler] data_selfcheck 导入失败：{e}")
+        return
+    cfg = SelfCheckConfig(
+        enabled=True,
+        missing_pct_alarm=float(os.getenv("DATA_SELFCHECK_MISSING_PCT", "0.05")),
+        zero_volume_days=int(os.getenv("DATA_SELFCHECK_ZERO_VOL_DAYS", "3")),
+    )
+    try:
+        with session_scope() as s:
+            res = _run(session=s, cfg=cfg)
+        logger.info(f"[scheduler] data_selfcheck done: {res}")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] data_selfcheck failed: {e}")
 
 
 def _backtest_weekly_job() -> None:
