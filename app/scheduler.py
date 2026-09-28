@@ -15,6 +15,7 @@ import signal
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # 全系统统一以交易所时区（上海）为口径：DB 会话已设为 Asia/Shanghai，
@@ -851,7 +852,9 @@ def _fut_kline_job() -> None:
     from pathlib import Path
 
     fk = get_settings().fut_kline_config
-    script = (Path(__file__).resolve().parents[2]
+    # G9 修复：容器内 __file__=/app/app/scheduler.py，parents[1]=/app，
+    # 而 parents[2]=/ → 旧写法拼出 /scripts/...（不存在）导致作业每天静默失败。
+    script = (Path(__file__).resolve().parents[1]
               / "scripts" / "ingest_fut_kline_incremental.py")
     if not script.exists():
         logger.error(f"[scheduler] 找不到增量脚本 {script}")
@@ -877,9 +880,148 @@ def _fut_kline_job() -> None:
         logger.exception(f"[scheduler] fut_kline incremental failed: {e}")
 
 
+def _rebuild_fut_kline_job() -> None:
+    """fut_kline 夜间派生重建（方案 1：物化派生）。
+
+    从权威分钟源重建 fut_kline（cont_adj←minute_bar_adj / continuous←bar_* /
+    contract←contract_daily UPSERT），替代旧的 fetch_fdf+adjust_fdf+_adjust_bars
+    三个独立写入。subprocess 隔离（耗时长，避免占满 APScheduler 线程池）。
+
+    依赖：04:30 _adjust_minute_job 已生成 minute_bar_adj，且 minute_and_bars
+    已刷新 bar_*；故排在 05:00 之后跑。
+    """
+    rb = get_settings().fut_kline_rebuild_config
+    if not rb.enabled:
+        return
+    import sys as _sys
+    from pathlib import Path as _P
+
+    script = (_P(__file__).resolve().parents[1] / "scripts" / "rebuild_fut_kline.py")
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到重建脚本 {script}")
+        return
+    cmd = [_sys.executable, str(script)]
+    logger.info(f"[scheduler] rebuild fut_kline start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=int(rb.timeout_sec))
+        logger.info(f"[scheduler] rebuild fut_kline exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-600:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] rebuild fut_kline stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"[scheduler] rebuild fut_kline timeout>{rb.timeout_sec}s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] rebuild fut_kline failed: {e}")
+
+
+def _sync_cloud_local_job() -> None:
+    """统一云地同步链路（PRD §14）：subprocess 隔离跑 scripts/sync_cloud_local.py。
+
+    通过环境变量启用/配置（默认关闭，避免影响线上云调度）：
+      CLOUD_SYNC_ENABLED=1          启用本作业
+      CLOUD_SYNC_TABLES=...         逗号表名（默认见下）
+      CLOUD_SYNC_DIRECTION=cloud2local
+      CLOUD_SYNC_MODE=incremental   首次自动全量，之后增量
+      CLOUD_SYNC_CRON_HOUR/MINUTE   默认 03:15
+      CLOUD_SYNC_CHUNK_MONTHS=3
+    DSN 由脚本自身按 CLOUD_PG*/LOCAL_PG* 解析（CB 经隧道 15432 连云）。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "sync_cloud_local.py")
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到同步脚本 {script}")
+        return
+    direction = os.getenv("CLOUD_SYNC_DIRECTION", "cloud2local")
+    mode = os.getenv("CLOUD_SYNC_MODE", "incremental")
+    tables = os.getenv(
+        "CLOUD_SYNC_TABLES",
+        "bar_15m,bar_30m,bar_60m,fut_kline,daily_bar,factor_value,"
+        "warehouse_receipt,member_position_rank_summary",
+    )
+    cmd = [_sys.executable, str(script), "--tables", tables,
+           "--direction", direction, "--mode", mode]
+    chunk = os.getenv("CLOUD_SYNC_CHUNK_MONTHS")
+    if chunk:
+        cmd += ["--chunk-months", chunk]
+    logger.info(f"[scheduler] cloud_local_sync start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+        logger.info(f"[scheduler] cloud_local_sync exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-600:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] cloud_local_sync stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] cloud_local_sync timeout>7200s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[scheduler] cloud_local_sync failed")
+
+
+#: 调度以 subprocess 方式调用的生产脚本（相对仓库根的 scripts/）。
+#: 2026-09-29：历史上因路径 parents[2] 拼错 + .dockerignore 排除 runtime/，
+#: 这 5 个作业**每天静默失败**（日志仅一行 error，无人看）。此处集中登记，
+#: 启动时 fail-fast 校验，缺一个就大声报错，杜绝再次静默。
+SUBPROCESS_SCRIPTS = (
+    "ingest_fut_kline_incremental.py",
+    "rebuild_fut_kline.py",
+    "sync_cloud_local.py",
+    "adjust_bars.py",
+    "adjust_minute.py",
+)
+
+
+def _scripts_dir() -> Path:
+    """容器内 /app/scripts（__file__=/app/app/scheduler.py → parents[1]=/app）。"""
+    return Path(__file__).resolve().parents[1] / "scripts"
+
+
+def _verify_script_assets() -> None:
+    """启动自检：subprocess 脚本必须存在且可读，否则 ERROR 级告警（不阻断启动）。
+
+    不阻断是因为：同步专用实例也可能不需要全部脚本；但必须**看得见**——
+    旧行为是 `if not script.exists(): logger.error(...)` 埋在作业内部，
+    只有到点触发时才报一行，等于静默。
+    """
+    d = _scripts_dir()
+    missing = [n for n in SUBPROCESS_SCRIPTS if not (d / n).is_file()]
+    if missing:
+        logger.error(
+            f"[scheduler][ASSET] scripts 目录={d} 缺失生产脚本 {missing} "
+            f"—— 相关作业将全部失败（典型原因：.dockerignore 排除 / 镜像未 COPY）")
+    else:
+        logger.info(f"[scheduler][ASSET] 生产脚本自检通过 {len(SUBPROCESS_SCRIPTS)} 个 ({d})")
+
+
 def _build_scheduler() -> BlockingScheduler:
     settings = get_settings()
     sched = BlockingScheduler(timezone=settings.env.TZ)
+    _verify_script_assets()
+
+    # CLOUD_SYNC_ENABLED=1 → 本调度实例为「云地同步专用」：
+    # 仅注册 cloud_local_sync 作业并立即返回，其余采集/训练/回测任务全部由云端
+    # 调度器负责。目的有二：
+    #   1) 本实例跑在 CB 裸机（经隧道 15432 连云、127.0.0.1:5432 连本地），
+    #      其余任务用 get_engine()→POSTGRES_HOST=timescaledb（docker 服务名）在裸机不可解析；
+    #   2) 避免与云端调度器重复执行、重复写库。
+    # 云容器内不设置此变量（无隧道），照常注册全部任务。
+    if os.getenv("CLOUD_SYNC_ENABLED") == "1":
+        _sh = int(os.getenv("CLOUD_SYNC_CRON_HOUR", "3"))
+        _sm = int(os.getenv("CLOUD_SYNC_CRON_MINUTE", "15"))
+        sched.add_job(
+            _sync_cloud_local_job,
+            trigger=CronTrigger(hour=_sh, minute=_sm, timezone=settings.env.TZ),
+            id="cloud_local_sync",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=1800,
+        )
+        logger.info(f"[scheduler] SYNC-ONLY mode: registered cloud_local_sync at {_sh:02d}:{_sm:02d} (CLOUD_SYNC_ENABLED)")
+        return sched
+
     for spec in settings.cron_specs:
         trigger = CronTrigger(
             hour=spec.hour, minute=spec.minute, timezone=settings.env.TZ
@@ -954,17 +1096,34 @@ def _build_scheduler() -> BlockingScheduler:
         )
         logger.info("[scheduler] registered fusion_scan at :05/:35 (post hourly collect)")
 
-    # 复权主连每日重算（凌晨 02:30，此时日盘+夜盘均已收盘并定稿）
-    # 幂等：每次全量重算并 upsert cont_adj；单品种异常隔离，不中断整体
+    # 复权主连每日重算（02:30）：方案 1（fut_kline 物化派生）启用时，cont_adj 改由
+    # 05:00 的 _rebuild_fut_kline_job 从分钟源统一重建，此处停用（保持可逆）。
+    rb_cfg = settings.fut_kline_rebuild_config
+    if not rb_cfg.enabled:
+        sched.add_job(
+            _adjust_job,
+            trigger=CronTrigger(hour=2, minute=30, timezone=settings.env.TZ),
+            id="adjust_cont_adj",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("[scheduler] registered cron 02:30 (adjust_cont_adj)")
+    else:
+        logger.info("[scheduler] adjust_cont_adj 停用（fut_kline 由 05:00 派生作业重建）")
+
+    # 1 分钟复权（云端 minute_bar → minute_bar_adj）：04:30 增量（since=72h，
+    # 期间有换月的品种全量重算、其余追加）。表独立于 fut_kline/bar_*，与 02:30 链路不冲突。
     sched.add_job(
-        _adjust_job,
-        trigger=CronTrigger(hour=2, minute=30, timezone=settings.env.TZ),
-        id="adjust_cont_adj",
+        _adjust_minute_job,
+        trigger=CronTrigger(hour=4, minute=30, timezone=settings.env.TZ),
+        id="adjust_minute_bar_adj",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=3600,
     )
-    logger.info("[scheduler] registered cron 02:30 (adjust_cont_adj)")
+    logger.info("[scheduler] registered cron 04:30 (adjust_minute_bar_adj)")
 
     # 会员持仓排名（龙虎榜）每日收盘后入库（交易所官方 CSV）
     rp = settings.yaml.rank_position
@@ -1006,10 +1165,11 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info("[scheduler] registered minute_and_bars every :30 (minute-first pipeline)")
 
-    # fut_kline 增量入库（天勤 tqsdk）：在 02:30 adjust_fdf 之前跑，保证复权主连有新数据
+    # fut_kline 增量入库（天勤 tqsdk）：在方案 1 物化派生启用时停用——cont_adj/continuous
+    # 改由 05:00 _rebuild_fut_kline_job 从分钟源重建；contract 由该作业 UPSERT。
     # 用 subprocess 隔离：抓取耗时长，避免占满 APScheduler 线程池（M8 §4.3 同因）
     fk = settings.fut_kline_config
-    if fk.enabled:
+    if fk.enabled and not rb_cfg.enabled:
         sched.add_job(
             _fut_kline_job,
             trigger=CronTrigger(hour=fk.run_hour, minute=fk.run_minute,
@@ -1022,6 +1182,27 @@ def _build_scheduler() -> BlockingScheduler:
         )
         logger.info(f"[scheduler] registered fut_kline incremental "
                     f"{fk.run_hour:02d}:{fk.run_minute:02d} freqs={fk.freqs}")
+    else:
+        logger.info("[scheduler] fut_kline incremental 停用（fut_kline 由 05:00 派生作业重建）")
+
+    # fut_kline 夜间派生重建（方案 1：物化派生）：05:00 跑，依赖 04:30 minute_bar_adj
+    # 与每 30 分钟的 bar_* 已就绪。subprocess 隔离（耗时长）。
+    if rb_cfg.enabled:
+        sched.add_job(
+            _rebuild_fut_kline_job,
+            trigger=CronTrigger(hour=rb_cfg.run_hour, minute=rb_cfg.run_minute,
+                                timezone=settings.env.TZ),
+            id="fut_kline_rebuild",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(f"[scheduler] registered fut_kline rebuild "
+                    f"{rb_cfg.run_hour:02d}:{rb_cfg.run_minute:02d}")
+
+    # 统一云地同步链路（PRD §14）：在 CLOUD_SYNC_ENABLED=1 时，本函数已在顶部
+    # 以「同步专用」模式提前返回（仅注册 cloud_local_sync）。此处不再重复注册。
 
     # 库存 / 仓单（决策 2，周频周五）
     inv = settings.inventory_config
@@ -1298,11 +1479,75 @@ def _adjust_job() -> None:
                     except Exception as e:  # noqa: BLE001
                         fail += 1
                         logger.warning(f"[scheduler] adjust {key} {freq} failed: {e}")
+
+            # —— 扩展：15/30/60 分钟未复权主连(bar_*) → fut_kline cont_adj ——
+            # 加法平移前复权，仅平移换月断层(对比8888指数连)，不改任意两点价差/盈亏点数。
+            # subprocess 隔离（耗时较长，避免占满 APScheduler 线程池；同 _fut_kline_job 之因）。
+            try:
+                import subprocess as _sp
+                import sys as _sys
+                from pathlib import Path as _P
+                adj_script = (_P(__file__).resolve().parents[1]
+                              / "scripts" / "adjust_bars.py")
+                if adj_script.exists():
+                    for mf in ("min15", "min30", "min60"):
+                        mcmd = [_sys.executable, str(adj_script), "--freq", mf]
+                        logger.info(f"[scheduler] adjust bars {mf} start")
+                        try:
+                            mproc = _sp.run(mcmd, capture_output=True, text=True, timeout=3600)
+                            logger.info(f"[scheduler] adjust bars {mf} exit={mproc.returncode} "
+                                        f"tail={(mproc.stdout or '')[-400:]}")
+                            if mproc.returncode != 0:
+                                logger.warning(f"[scheduler] adjust bars {mf} stderr="
+                                               f"{(mproc.stderr or '')[-600:]}")
+                                fail += 1
+                        except _sp.TimeoutExpired:
+                            logger.warning(f"[scheduler] adjust bars {mf} timeout>3600s")
+                            fail += 1
+                        except Exception as me:  # noqa: BLE001
+                            logger.exception(f"[scheduler] adjust bars {mf} failed: {me}")
+                            fail += 1
+                else:
+                    logger.warning(f"[scheduler] 找不到复权脚本 {adj_script}")
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"[scheduler] adjust bars job error: {e}")
+
             status = "success" if fail == 0 else "partial"
             repo.finish(run, status, f"ok={ok} fail={fail}")
             logger.info(f"[scheduler] adjust done ok={ok} fail={fail}")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] adjust job error: {e}")
+
+
+def _adjust_minute_job() -> None:
+    """1 分钟原始数据复权 → minute_bar_adj（夜间增量，云端 15432）。
+
+    since=72h 前：期间 15m 检测出换月的品种须全量重算（前复权锚定最新段，
+    新换月会整体平移历史）；否则只追加新 bar（cum=0，复权价=原价）。
+    subprocess 隔离；脚本自带幂等（先 DELETE 后 COPY）。
+    """
+    import subprocess
+    import sys as _sys
+    from datetime import datetime, timedelta
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "adjust_minute.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到 1 分钟复权脚本 {script}")
+        return
+    since = (datetime.now() - timedelta(hours=72)).isoformat(timespec="seconds")
+    cmd = [_sys.executable, str(script), "--since", since]
+    logger.info(f"[scheduler] adjust minute_bar_adj start since={since}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+        logger.info(f"[scheduler] adjust minute exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-400:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] adjust minute stderr={(proc.stderr or '')[-600:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] adjust minute timeout>7200s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] adjust minute failed: {e}")
 
 
 def _ensure_hourly_uniq_index() -> None:
@@ -1345,8 +1590,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    # 启动时立刻执行一次（方便调试），由 RUN_ON_BOOT=0 关闭
-    if os.getenv("RUN_ON_BOOT", "1") == "1":
+    # 启动时立刻执行一次（方便调试），由 RUN_ON_BOOT=0 关闭。
+    # 同步专用模式（CLOUD_SYNC_ENABLED=1，跑在 CB 裸机、不经 docker 服务名）不连本地
+    # timescaledb，跳过 boot 作业与 hourly 索引检查，避免无害报错噪声。
+    if os.getenv("CLOUD_SYNC_ENABLED") != "1" and os.getenv("RUN_ON_BOOT", "1") == "1":
         time.sleep(3)  # 等 DB ready
         _ensure_hourly_uniq_index()
         _ingest_job("boot")

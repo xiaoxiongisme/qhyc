@@ -63,10 +63,20 @@ def fetch_inventory_em(product: str, exchange: str = "") -> list[dict]:
     sym = PRODUCT_TO_EM_SYM.get(product.upper())
     if not sym:
         return []
-    try:
-        df = ak.futures_inventory_em(symbol=sym)
-    except Exception as e:
-        logger.warning(f"[inventory] em {product}({sym}) 失败: {e}")
+    # akshare futures_inventory_em 对大小写敏感（多数品种要大写，少数要小写），
+    # 依次尝试 原值 / 大写 / 小写，命中即返回。
+    last_err = None
+    df = None
+    for cand in (sym, sym.upper(), sym.lower()):
+        try:
+            df = ak.futures_inventory_em(symbol=cand)
+            if df is not None and not df.empty:
+                break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    if df is None or df.empty:
+        if last_err:
+            logger.warning(f"[inventory] em {product}({sym}) 失败: {last_err}")
         return []
     if df is None or df.empty:
         return []

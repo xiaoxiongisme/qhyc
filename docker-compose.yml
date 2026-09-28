@@ -79,6 +79,19 @@ services:
       POSTGRES_HOST: timescaledb
       ROLE: scheduler
       RUN_ON_BOOT: "0"   # 数据已就绪，避免每次重启重复全量回补（定时任务照常）
+      # 本地调度器进入「同步专用」模式：只跑 cloud_local_sync（云->地），不跑采集/重建，
+      # 避免与云端调度器重复写库（PRD §14 / app/scheduler.py CLOUD_SYNC_ENABLED 分支）
+      CLOUD_SYNC_ENABLED: "1"
+      CLOUDPGHOST: host.docker.internal     # 经本机 SSH 隧道 15432 连云
+      CLOUDPGPORT: "15432"
+      CLOUDPGDBNAME: futures
+      CLOUDPGUSER: futures
+      CLOUDPGPWD: ${POSTGRES_PASSWORD}
+      LOCALPGHOST: timescaledb              # 本地 timescaledb（docker 服务名）
+      LOCALPGPORT: "5432"
+      LOCALPGDBNAME: futures
+      LOCALPGUSER: futures
+      LOCALPGPWD: ${POSTGRES_PASSWORD}
     volumes:
       - ./logs:/app/logs
       - ./runtime:/app/runtime

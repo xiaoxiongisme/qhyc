@@ -1,0 +1,139 @@
+# =====================================================
+# 期货预测平台 - 云端配置（M7 起）
+# 与 local.yaml 字段同构，云端切换由环境变量 / docker-compose.cloud.yml 注入
+# =====================================================
+app:
+  name: qhyc
+  env: cloud
+  debug: false
+  log_level: INFO
+  timezone: Asia/Shanghai
+
+database:
+  url_env: DATABASE_URL
+  pool_size: 10
+  max_overflow: 20
+  echo: false
+
+ingest:
+  history_start: "2015-01-01"
+  main_contracts:
+    # ---- CZCE 郑商所 ----
+    - { symbol: "FG888", exchange: "CZCE", product: "FG", name: "玻璃", unit: "吨", multiplier: 20 }
+    - { symbol: "SA888", exchange: "CZCE", product: "SA", name: "纯碱", unit: "吨", multiplier: 20 }
+    - { symbol: "SR888", exchange: "CZCE", product: "SR", name: "白糖", unit: "吨", multiplier: 10 }
+    - { symbol: "CF888", exchange: "CZCE", product: "CF", name: "棉花", unit: "吨", multiplier: 5 }
+    - { symbol: "TA888", exchange: "CZCE", product: "TA", name: "PTA", unit: "吨", multiplier: 5 }
+    - { symbol: "MA888", exchange: "CZCE", product: "MA", name: "甲醇", unit: "吨", multiplier: 10 }
+    - { symbol: "RM888", exchange: "CZCE", product: "RM", name: "菜粕", unit: "吨", multiplier: 10 }
+    - { symbol: "OI888", exchange: "CZCE", product: "OI", name: "菜油", unit: "吨", multiplier: 10 }
+    - { symbol: "AP888", exchange: "CZCE", product: "AP", name: "苹果", unit: "吨", multiplier: 10 }
+    - { symbol: "UR888", exchange: "CZCE", product: "UR", name: "尿素", unit: "吨", multiplier: 20 }
+    - { symbol: "SH888", exchange: "CZCE", product: "SH", name: "烧碱", unit: "吨", multiplier: 30 }
+    - { symbol: "PX888", exchange: "CZCE", product: "PX", name: "对二甲苯", unit: "吨", multiplier: 5 }
+    - { symbol: "SF888", exchange: "CZCE", product: "SF", name: "硅铁", unit: "吨", multiplier: 5 }
+    - { symbol: "SM888", exchange: "CZCE", product: "SM", name: "锰硅", unit: "吨", multiplier: 5 }
+    # ---- SHFE 上期所 ----
+    - { symbol: "CU888", exchange: "SHFE", product: "CU", name: "沪铜", unit: "吨", multiplier: 5 }
+    - { symbol: "AL888", exchange: "SHFE", product: "AL", name: "沪铝", unit: "吨", multiplier: 5 }
+    - { symbol: "ZN888", exchange: "SHFE", product: "ZN", name: "沪锌", unit: "吨", multiplier: 5 }
+    - { symbol: "PB888", exchange: "SHFE", product: "PB", name: "沪铅", unit: "吨", multiplier: 5 }
+    - { symbol: "NI888", exchange: "SHFE", product: "NI", name: "沪镍", unit: "吨", multiplier: 1 }
+    - { symbol: "SN888", exchange: "SHFE", product: "SN", name: "沪锡", unit: "吨", multiplier: 1 }
+    - { symbol: "AU888", exchange: "SHFE", product: "AU", name: "沪金", unit: "克", multiplier: 1000 }
+    - { symbol: "AG888", exchange: "SHFE", product: "AG", name: "沪银", unit: "千克", multiplier: 15 }
+    - { symbol: "RB888", exchange: "SHFE", product: "RB", name: "螺纹钢", unit: "吨", multiplier: 10 }
+    - { symbol: "SS888", exchange: "SHFE", product: "SS", name: "不锈钢", unit: "吨", multiplier: 5 }
+    - { symbol: "FU888", exchange: "SHFE", product: "FU", name: "燃料油", unit: "吨", multiplier: 10 }
+    - { symbol: "BU888", exchange: "SHFE", product: "BU", name: "沥青", unit: "吨", multiplier: 10 }
+    - { symbol: "RU888", exchange: "SHFE", product: "RU", name: "橡胶", unit: "吨", multiplier: 10 }
+    - { symbol: "SP888", exchange: "SHFE", product: "SP", name: "纸浆", unit: "吨", multiplier: 10 }
+    - { symbol: "AO888", exchange: "SHFE", product: "AO", name: "氧化铝", unit: "吨", multiplier: 20 }
+    - { symbol: "HC888", exchange: "SHFE", product: "HC", name: "热卷", unit: "吨", multiplier: 10 }
+    # ---- INE 上期能源 ----
+    - { symbol: "SC888", exchange: "INE", product: "SC", name: "原油", unit: "桶", multiplier: 1000 }
+    # ---- GFEX 广州期货交易所 ----
+    - { symbol: "SI888", exchange: "GFEX", product: "SI", name: "工业硅", unit: "吨", multiplier: 5 }
+    - { symbol: "LC888", exchange: "GFEX", product: "LC", name: "碳酸锂", unit: "吨", multiplier: 1 }
+    # ---- DCE 大商所 ----
+    - { symbol: "A888",  exchange: "DCE", product: "A",  name: "豆一", unit: "吨", multiplier: 10 }
+    - { symbol: "B888",  exchange: "DCE", product: "B",  name: "豆二", unit: "吨", multiplier: 10 }
+    - { symbol: "M888",  exchange: "DCE", product: "M",  name: "豆粕", unit: "吨", multiplier: 10 }
+    - { symbol: "Y888",  exchange: "DCE", product: "Y",  name: "豆油", unit: "吨", multiplier: 10 }
+    - { symbol: "P888",  exchange: "DCE", product: "P",  name: "棕榈油", unit: "吨", multiplier: 10 }
+    - { symbol: "C888",  exchange: "DCE", product: "C",  name: "玉米", unit: "吨", multiplier: 10 }
+    - { symbol: "CS888", exchange: "DCE", product: "CS", name: "淀粉", unit: "吨", multiplier: 10 }
+    - { symbol: "JD888", exchange: "DCE", product: "JD", name: "鸡蛋", unit: "吨", multiplier: 5 }
+    - { symbol: "L888",  exchange: "DCE", product: "L",  name: "塑料", unit: "吨", multiplier: 5 }
+    - { symbol: "V888",  exchange: "DCE", product: "V",  name: "PVC", unit: "吨", multiplier: 5 }
+    - { symbol: "PP888", exchange: "DCE", product: "PP", name: "聚丙烯", unit: "吨", multiplier: 5 }
+    - { symbol: "J888",  exchange: "DCE", product: "J",  name: "焦炭", unit: "吨", multiplier: 100 }
+    - { symbol: "JM888", exchange: "DCE", product: "JM", name: "焦煤", unit: "吨", multiplier: 60 }
+    - { symbol: "I888",  exchange: "DCE", product: "I",  name: "铁矿石", unit: "吨", multiplier: 100 }
+    - { symbol: "EG888", exchange: "DCE", product: "EG", name: "乙二醇", unit: "吨", multiplier: 10 }
+    - { symbol: "EB888", exchange: "DCE", product: "EB", name: "苯乙烯", unit: "吨", multiplier: 5 }
+    - { symbol: "LH888", exchange: "DCE", product: "LH", name: "生猪", unit: "吨", multiplier: 16 }
+  tqsdk_symbol_template: "KQ.m@{exchange}.{product}"
+
+calibration:
+  price_diff_threshold_pct: 0.5
+  volume_anomaly: true
+  timeout_sec: 20
+  max_retries: 3
+
+scheduler:
+  cron:
+    - { hour: 8,  minute: 0,  label: "pre_open" }
+    - { hour: 12, minute: 30, label: "midday" }
+    - { hour: 20, minute: 0,  label: "pre_night" }
+  hourly:
+    enabled: true
+    minute: 0
+    run_hour: "all"
+
+imports:
+  source_root: ""        # 云端不直接导入本地历史；走 pg_dump 迁移
+  container_root: ""
+  format_version: 1
+
+backtest:
+  label_metric: close
+  min_sample_n: 60
+  min_symbols_in_run: 10
+  lstm_weight_freeze: null
+  lstm_retrain_every: 60
+  cost_pct: 0.065
+  coverage_grid: [0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
+
+predict:
+  model_set: m3
+  history_bars: 250
+  min_bars: 60
+  weights:
+    fourier: 1.0
+    markov: 1.0
+    arima: 1.0
+    garch: 0.8
+    kalman: 1.0
+    hmm: 1.0
+    bayesian: 1.0
+    montecarlo: 1.0
+    lstm: 1.2
+    reversal: 1.2
+    rf_pool: 0.3            # M6c.1 池化分类：OOS 0.506（|t|≈2.7 边际显著，远低于反转 0.535）→ 低权重
+    xgb_pool: 0.0           # M6c.1 池化分类：OOS 0.503 p=0.23 未过 |t|>2 → 不给权重（仍注册供研究）
+  gate_models:
+    trend: ["arima", "fourier", "kalman", "lstm", "hmm", "reversal", "rf_pool", "xgb_pool"]
+    mean_revert: ["markov", "bayesian", "montecarlo", "garch", "fourier", "reversal", "rf_pool", "xgb_pool"]
+    neutral: ["fourier", "markov", "arima", "kalman", "montecarlo", "hmm", "bayesian", "reversal", "garch", "rf_pool", "xgb_pool"]
+  pooled:
+    window: 250
+    n_estimators: 200
+    max_depth: 6
+    model_dir: "/app/runtime/pooled"
+    train_end: null
+  reversal:
+    gate_pct: 2.0            # v1.3.3 对齐 research τ*=2.0%（验收=上线）
+    strength: 0.3
+    oi_boost_prob: 0.05
+    max_prob: 0.85

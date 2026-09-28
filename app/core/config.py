@@ -381,6 +381,22 @@ class FutKlineConfig(BaseModel):
     timeout_sec: int = 3600
 
 
+class FutKlineRebuildConfig(BaseModel):
+    """fut_kline 夜间派生重建（方案 1：物化派生）调度开关。
+
+    启用后，fut_kline 不再由 3 个独立 tqsdk/复权写入（fetch_fdf / adjust_fdf /
+    _adjust_bars）维护，而是由一个夜间作业从权威分钟源重建：
+      - cont_adj  ← minute_bar_adj（已复权主连，888 法）
+      - continuous ← bar_*（未复权主连，888 法）
+      - contract  ← contract_daily（UPSERT，保留历史逐合约序列）
+    该开关为 True 时，旧的 adjust_fdf / fetch_fdf 写入任务不再注册（保持可逆）。
+    """
+    enabled: bool = True
+    run_hour: int = 5
+    run_minute: int = 0
+    timeout_sec: int = 7200
+
+
 class FactorBiasConfig(BaseModel):
     """因子偏置乘子配置（因子接入 PRD §5）。"""
     gate_threshold: float = 0.0
@@ -406,6 +422,7 @@ class YamlConfig(BaseModel):
     rank_position: RankPositionConfig = Field(default_factory=RankPositionConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     fut_kline: FutKlineConfig = Field(default_factory=FutKlineConfig)
+    fut_kline_rebuild: FutKlineRebuildConfig = Field(default_factory=FutKlineRebuildConfig)
     factor_bias: FactorBiasConfig = Field(default_factory=FactorBiasConfig)
 
 
@@ -484,6 +501,10 @@ class Settings(BaseModel):
     @property
     def fut_kline_config(self) -> FutKlineConfig:
         return self.yaml.fut_kline
+
+    @property
+    def fut_kline_rebuild_config(self) -> FutKlineRebuildConfig:
+        return self.yaml.fut_kline_rebuild
 
     @property
     def fusion(self) -> FusionConfig:

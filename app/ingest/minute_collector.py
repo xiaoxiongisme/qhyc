@@ -19,7 +19,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import column, insert, table
+from sqlalchemy import column, table
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.config import MainContractSpec, get_settings
@@ -62,8 +63,9 @@ def _parse_tq_dt(dt) -> datetime | None:
     import pandas as pd  # type: ignore
 
     if isinstance(dt, pd.Timestamp):
-        return dt.tz_localize("UTC").astimezone(_SH_TZ) if dt.tzinfo is None \
+        dt = dt.tz_localize("UTC").astimezone(_SH_TZ) if dt.tzinfo is None \
             else dt.astimezone(_SH_TZ)
+        return dt.to_pydatetime()  # 必须返回原生 datetime，psycopg3 无法适配 pandas.Timestamp
     if isinstance(dt, str):
         try:
             return datetime.fromisoformat(dt).astimezone(_SH_TZ)
@@ -218,12 +220,18 @@ class MinuteCollector:
     def _upsert(self, rows: list[dict]) -> int:
         if not rows:
             return 0
-        stmt = insert(_MINUTE_BAR).values(rows).on_conflict_do_nothing(
-            index_elements=["symbol", "ts"]
-        )
-        self.session.execute(stmt)
+        # PostgreSQL 单条 INSERT 参数上限 65535；minute_bar 每行 15 列，
+        # 单品种 data_length=5000 行会超限，故按 ~4000 行分块执行。
+        n = 0
+        for i in range(0, len(rows), 4000):
+            batch = rows[i:i + 4000]
+            stmt = insert(_MINUTE_BAR).values(batch).on_conflict_do_nothing(
+                index_elements=["symbol", "ts"]
+            )
+            self.session.execute(stmt)
+            n += len(batch)
         self.session.commit()
-        return len(rows)
+        return n
 
 
 __all__ = ["MinuteCollector"]

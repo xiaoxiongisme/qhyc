@@ -1,0 +1,346 @@
+# =====================================================
+# 期货预测平台 - 本地配置（开发态）
+# 与 .env 配合：密钥在 .env，业务参数在本文件
+# =====================================================
+app:
+  name: qhyc
+  env: local
+  debug: true
+  log_level: INFO
+  timezone: Asia/Shanghai
+
+database:
+  url_env: DATABASE_URL   # 可由环境变量整体覆盖
+  pool_size: 5
+  max_overflow: 10
+  echo: false
+
+ingest:
+  # 历史回补起始（PRD §11.2 ⑮）
+  history_start: "2015-01-01"
+
+  # ---------------------------------------------------------------------
+  # 合约代码口径（2026-09-20 统一，代码见 app/core/symbol_code.py）
+  # ---------------------------------------------------------------------
+  # 全库**合约级** symbol 统一为「标准码 = 品种码大写 + YYMM 四位」，
+  # 例如 AP2701 / CU2611 / A2609 / SI2611。
+  #
+  # 各数据源的**原生**写法并不统一（表 contract_code_map 存对应关系）：
+  #   交易所  官方原生      新浪        天勤
+  #   CZCE    AP701 (3位)   AP2701      CZCE.AP701   ← 郑商所原生 3 位
+  #   SHFE    cu2611(小写)  RB2611      SHFE.cu2611
+  #   DCE     a2601 (小写)  A2611       DCE.a2601
+  #   GFEX    si2611(小写)  SI2611      GFEX.si2611
+  #   CFFEX   IF2609        —           CFFEX.IF2609
+  #
+  # 三条互操作铁律：
+  #   1) 入库前一律 `symbol_code.to_std()`（郑商所 3 位要靠交易日补全年份）；
+  #   2) 送**天勤**前 `to_tqsdk()` 转回原生（郑商所仍 3 位，否则订阅失败）；
+  #   3) `fut_kline.symbol` 存天勤原生码，**不参与**归一（见 app/ingest/fdf/db_pg.py）。
+  # 维护：`python -m app.ingest.contract_code build|normalize|verify`
+  symbol_std_digits: 4
+  symbol_std_case: upper
+
+  # 最终品种清单（2026-09-13 定稿，共 50 个）：
+  #   已剔除 金融/指数（IF/IH/IC/IM/T/TF/TS/TL）
+  #   与小流动性品种（CY/WR/RR/LG/EC/PG/PF/BR/CJ/PR/PK/BC/NR/LU/PS）
+  # 新浪主连代码 = 品种+0；tqsdk = KQ.m@交易所.品种；主连库内统一 888
+  # （888 是**合成连续码**，与上面的合约标准码是两套命名空间，不做转换）
+  main_contracts:
+    # ---- CZCE 郑商所 ----
+    - { symbol: "FG888", exchange: "CZCE", product: "FG", name: "玻璃", unit: "吨", multiplier: 20 }
+    - { symbol: "SA888", exchange: "CZCE", product: "SA", name: "纯碱", unit: "吨", multiplier: 20 }
+    - { symbol: "SR888", exchange: "CZCE", product: "SR", name: "白糖", unit: "吨", multiplier: 10 }
+    - { symbol: "CF888", exchange: "CZCE", product: "CF", name: "棉花", unit: "吨", multiplier: 5 }
+    - { symbol: "TA888", exchange: "CZCE", product: "TA", name: "PTA", unit: "吨", multiplier: 5 }
+    - { symbol: "MA888", exchange: "CZCE", product: "MA", name: "甲醇", unit: "吨", multiplier: 10 }
+    - { symbol: "RM888", exchange: "CZCE", product: "RM", name: "菜粕", unit: "吨", multiplier: 10 }
+    - { symbol: "OI888", exchange: "CZCE", product: "OI", name: "菜油", unit: "吨", multiplier: 10 }
+    - { symbol: "AP888", exchange: "CZCE", product: "AP", name: "苹果", unit: "吨", multiplier: 10 }
+    - { symbol: "UR888", exchange: "CZCE", product: "UR", name: "尿素", unit: "吨", multiplier: 20 }
+    - { symbol: "SH888", exchange: "CZCE", product: "SH", name: "烧碱", unit: "吨", multiplier: 30 }
+    - { symbol: "PX888", exchange: "CZCE", product: "PX", name: "对二甲苯", unit: "吨", multiplier: 5 }
+    - { symbol: "SF888", exchange: "CZCE", product: "SF", name: "硅铁", unit: "吨", multiplier: 5 }
+    - { symbol: "SM888", exchange: "CZCE", product: "SM", name: "锰硅", unit: "吨", multiplier: 5 }
+    # ---- SHFE 上期所 ----
+    - { symbol: "CU888", exchange: "SHFE", product: "CU", name: "沪铜", unit: "吨", multiplier: 5 }
+    - { symbol: "AL888", exchange: "SHFE", product: "AL", name: "沪铝", unit: "吨", multiplier: 5 }
+    - { symbol: "ZN888", exchange: "SHFE", product: "ZN", name: "沪锌", unit: "吨", multiplier: 5 }
+    - { symbol: "PB888", exchange: "SHFE", product: "PB", name: "沪铅", unit: "吨", multiplier: 5 }
+    - { symbol: "NI888", exchange: "SHFE", product: "NI", name: "沪镍", unit: "吨", multiplier: 1 }
+    - { symbol: "SN888", exchange: "SHFE", product: "SN", name: "沪锡", unit: "吨", multiplier: 1 }
+    - { symbol: "AU888", exchange: "SHFE", product: "AU", name: "沪金", unit: "克", multiplier: 1000 }
+    - { symbol: "AG888", exchange: "SHFE", product: "AG", name: "沪银", unit: "千克", multiplier: 15 }
+    - { symbol: "RB888", exchange: "SHFE", product: "RB", name: "螺纹钢", unit: "吨", multiplier: 10 }
+    - { symbol: "SS888", exchange: "SHFE", product: "SS", name: "不锈钢", unit: "吨", multiplier: 5 }
+    - { symbol: "FU888", exchange: "SHFE", product: "FU", name: "燃料油", unit: "吨", multiplier: 10 }
+    - { symbol: "BU888", exchange: "SHFE", product: "BU", name: "沥青", unit: "吨", multiplier: 10 }
+    - { symbol: "RU888", exchange: "SHFE", product: "RU", name: "橡胶", unit: "吨", multiplier: 10 }
+    - { symbol: "SP888", exchange: "SHFE", product: "SP", name: "纸浆", unit: "吨", multiplier: 10 }
+    - { symbol: "AO888", exchange: "SHFE", product: "AO", name: "氧化铝", unit: "吨", multiplier: 20 }
+    - { symbol: "HC888", exchange: "SHFE", product: "HC", name: "热卷", unit: "吨", multiplier: 10 }
+    # ---- INE 上期能源 ----
+    - { symbol: "SC888", exchange: "INE", product: "SC", name: "原油", unit: "桶", multiplier: 1000 }
+    # ---- GFEX 广州期货交易所 ----
+    - { symbol: "SI888", exchange: "GFEX", product: "SI", name: "工业硅", unit: "吨", multiplier: 5 }
+    - { symbol: "LC888", exchange: "GFEX", product: "LC", name: "碳酸锂", unit: "吨", multiplier: 1 }
+    # ---- DCE 大商所 ----
+    - { symbol: "A888",  exchange: "DCE", product: "A",  name: "豆一", unit: "吨", multiplier: 10 }
+    - { symbol: "B888",  exchange: "DCE", product: "B",  name: "豆二", unit: "吨", multiplier: 10 }
+    - { symbol: "M888",  exchange: "DCE", product: "M",  name: "豆粕", unit: "吨", multiplier: 10 }
+    - { symbol: "Y888",  exchange: "DCE", product: "Y",  name: "豆油", unit: "吨", multiplier: 10 }
+    - { symbol: "P888",  exchange: "DCE", product: "P",  name: "棕榈油", unit: "吨", multiplier: 10 }
+    - { symbol: "C888",  exchange: "DCE", product: "C",  name: "玉米", unit: "吨", multiplier: 10 }
+    - { symbol: "CS888", exchange: "DCE", product: "CS", name: "淀粉", unit: "吨", multiplier: 10 }
+    - { symbol: "JD888", exchange: "DCE", product: "JD", name: "鸡蛋", unit: "吨", multiplier: 5 }
+    - { symbol: "L888",  exchange: "DCE", product: "L",  name: "塑料", unit: "吨", multiplier: 5 }
+    - { symbol: "V888",  exchange: "DCE", product: "V",  name: "PVC", unit: "吨", multiplier: 5 }
+    - { symbol: "PP888", exchange: "DCE", product: "PP", name: "聚丙烯", unit: "吨", multiplier: 5 }
+    - { symbol: "J888",  exchange: "DCE", product: "J",  name: "焦炭", unit: "吨", multiplier: 100 }
+    - { symbol: "JM888", exchange: "DCE", product: "JM", name: "焦煤", unit: "吨", multiplier: 60 }
+    - { symbol: "I888",  exchange: "DCE", product: "I",  name: "铁矿石", unit: "吨", multiplier: 100 }
+    - { symbol: "EG888", exchange: "DCE", product: "EG", name: "乙二醇", unit: "吨", multiplier: 10 }
+    - { symbol: "EB888", exchange: "DCE", product: "EB", name: "苯乙烯", unit: "吨", multiplier: 5 }
+    - { symbol: "LH888", exchange: "DCE", product: "LH", name: "生猪", unit: "吨", multiplier: 16 }
+
+  # 主力连续合约代码映射（akshare 代码 ↔ tqsdk KQ.m@EXCHANGE.PRODUCT）
+  # tqsdk 主连 = KQ.m@交易所.品种（无 888 后缀）
+  tqsdk_symbol_template: "KQ.m@{exchange}.{product}"
+
+calibration:
+  # ---- R1 口径版本留痕（PRD §15.R1）----
+  # 模型特征/预测标签的权威口径 = 用户 CSV 平滑主连（⑪）；
+  # akshare 主连仅作"真实市场价格参照"，不作为训练口径；
+  # 变更口径须全量重跑历史并在 anomaly_ticket 留痕。
+  canonical_main_source: "csv_smooth"
+  canonical_main_version: "v1_csv_smooth_2026-09-06"
+  # ---- 校准阈值 ----
+  price_diff_threshold_pct: 0.5    # 收盘价偏差 > 0.5% 视为异常
+  volume_anomaly: true              # 成交量缺失/翻倍亦视为异常
+  timeout_sec: 15
+  max_retries: 2
+
+scheduler:
+  # 每日三档（决策 7：早盘前 / 午盘时 / 夜盘前）
+  cron:
+    - { hour: 8,  minute: 0,  label: "pre_open" }   # 早盘前（09:00 开盘前）
+    - { hour: 12, minute: 30, label: "midday" }     # 午盘时（11:30 收盘后、13:30 开盘前）
+    - { hour: 20, minute: 0,  label: "pre_night" }  # 夜盘前（21:00 夜盘开盘前）
+  # 小时线每小时自动更新（决策 7）：整点触发一次全品种小时线增量采集
+  hourly:
+    enabled: true
+    minute: 0                # 每小时 :00 触发（hour="*"）
+    run_hour: "all"          # 全天 24 次；非交易时段为幂等轻量刷新
+
+rank_position:
+  enabled: true            # 会员持仓排名（龙虎榜）每日 17:30 入库
+  # 数据源（2026-09-20 统一到**交易所官方源**）：
+  #   CZCE / SHFE / GFEX → akshare 官方直连全量接口（只取合约级，丢弃品种级汇总行）
+  #   DCE                → app.ingest.dce_scrapling（Scrapling 真浏览器绕瑞数动态防护）
+  # INE 无免费源；CFFEX 属金融期货（决策 3）→ 均不纳入、不补
+  # 新浪通道已退役：曾致 DCE 393 行错标 / SHFE 仅 25 主力合约 / CZCE 双 symbol 格式
+  exchanges: ["CZCE", "SHFE", "DCE", "GFEX"]
+  run_hour: 17
+  run_minute: 30
+
+# 库存 / 仓单（决策 2：接入自动调度；数据源 akshare futures_inventory_em）
+inventory:
+  enabled: true
+  freq: "weekly"           # 库存数据为周频，周五盘后拉取
+  run_day: 5               # 周五（0=周一 … 6=周日）
+  run_hour: 17
+  run_minute: 0
+
+# 基差 / 现货（决策 2：接入自动调度；数据源 akshare futures_spot_price_daily）
+spot_basis:
+  enabled: true
+  freq: "daily"            # 基差每日更新
+  run_hour: 17
+  run_minute: 10
+  window_days: 5           # 每轮回填最近 N 天增量窗口
+
+imports:
+  # 用户本地历史数据根目录（PRD §4.5），统一位于工程目录下
+  source_root: "E:/Docker/qhyc/imports"   # 容器内由 ./imports:/app/imports:ro 挂载映射
+  container_root: "/app/imports"
+  format_version: 1
+
+readiness:
+  # R3① 数据就绪门控：有数据的品种数 / 目标品种数 ≥ 比例 且 最新日期距今天 ≤ 容忍天数 视为就绪
+  ready_ratio: 0.9
+  max_lag_days: 5
+
+backtest:
+  # M4 审计修复配置
+  label_metric: close      # §17 已裁决 close
+  min_sample_n: 60         # P1-2 权重月更最小样本门槛
+  min_symbols_in_run: 10   # P1-2 权重月更仅接受整批 run（单品种 run 不够格）
+  # M4.1 后 LSTM 泄漏已机制性消除（walk-forward 快照），冻结解除；
+  # 如需重新冻结，填写数值即可（null = 按回测准确率更新）
+  lstm_weight_freeze: null
+  lstm_retrain_every: 60   # M4.1 walk-forward 重训节奏（根）
+  cost_pct: 0.065          # §18.3（v1.3）：单边成本（手续费+滑点），净 P&L 模拟用，18.11③
+  coverage_grid: [0.1, 0.2, 0.3, 0.5, 0.7, 1.0]   # §18.3 覆盖率-准确率曲线网格
+
+predict:
+  # M2/M3 预测引擎（PRD §5.1–5.4）
+  model_set: m3
+  history_bars: 250          # 模型输入窗口（根数，§4.4）
+  min_bars: 60               # 低于此根数拒绝预测
+  windows:
+    ret: [5, 20]             # 特征窗口（根数）
+    vol: [5, 20]
+  hurst:
+    window: 250              # Hurst 估计窗口
+    trend_threshold: 0.55    # H > 0.55 → trend
+    mean_revert_threshold: 0.45  # H < 0.45 → mean_revert
+  weights:                   # 方向投票权重（⑳ 月更按近 60 日准确率）
+    fourier: 1.0
+    markov: 1.0
+    arima: 1.0
+    garch: 0.8               # 波动率专长模型，方向贡献降权
+    kalman: 1.0
+    hmm: 1.0
+    bayesian: 1.0
+    montecarlo: 1.0
+    lstm: 1.2                # 趋势市主力模型（PRD §5.3），需周更权重就绪
+    reversal: 1.2            # §18.2（v1.3）条件反转，OOS 0.535 显著，默认权重 ≥ 现有模型
+    # M6c.1（P6）池化分类模型：rf/xgb 改分类目标 + 全品种池化（评估点 84→45900）
+    # OOS 实测（research_m6c_pooled，TEST 2024+）：rf_pool 0.5063（|t|≈2.7 边际显著）、
+    # xgb_pool 0.5028（p=0.23 未过 |t|>2）→ 远低于条件反转 0.535，低权重接入，月更再调
+    rf_pool: 0.3
+    xgb_pool: 0.0
+    # P7（§18.10）模型池精简：以下保留在 MODEL_REGISTRY 可手动启用，
+    # 但移出默认门控池 —— rf/xgb 回归点估计 <0.5 且未校准（§18.2 诊断）、
+    # wavelet 覆盖率过低（n=88/6132）、gpr 回测期持续失败
+    # rf: 1.0 / gpr: 1.0 / xgb: 1.0 / wavelet: 1.0
+  gate_models:               # 状态门控启用子集（§5.3 + §18.2 reversal 全状态注册 + P7 精简）
+    # §18.7（v1.3.2）：garch 全状态注册——波动率预测（σ_t）必须每品种每日可得
+    # M6c.1：rf_pool/xgb_pool 池化分类器全状态参与方向投票（替代弱回归 rf/xgb）
+    trend: ["arima", "fourier", "kalman", "lstm", "hmm", "reversal", "garch", "rf_pool", "xgb_pool"]
+    mean_revert: ["markov", "bayesian", "montecarlo", "garch", "fourier", "reversal", "rf_pool", "xgb_pool"]
+    neutral: ["fourier", "markov", "arima", "kalman", "montecarlo", "hmm", "bayesian", "reversal", "garch", "rf_pool", "xgb_pool"]
+  pooled:                    # M6c.1 池化面板分类模型参数
+    window: 250
+    n_estimators: 200
+    max_depth: 6
+    model_dir: "/app/runtime/pooled"
+    train_end: null          # null=全历史；回测防泄漏建议按 eval_date 设置
+  reversal:                  # §18.2 P1 条件反转 + 信号门控
+    gate_pct: 2.0            # |ret_t| <= 2.0% → 无观点；v1.3.3 对齐 research τ*=2.0%（验收=上线）
+    strength: 0.3            # 反转幅度 = -ret_t × strength
+    oi_boost_prob: 0.05      # Δoi>0 软上调
+    max_prob: 0.85
+  lstm:
+    seq_len: 20
+    epochs: 30
+    # 权重目录（容器内），周更 cron 见 scheduler
+    weight_dir: "/app/runtime/lstm"
+
+# =====================================================
+# 融合策略实时信号扫描（每15分钟）
+# 口径与回测验证一致：小时线 EMA140 方向层 + MA20 回踩/突破入场
+# + 2×ATR 初始止损 + 2×ATR 吊灯移动止损 + 0.5R 保本 + 收盘价执行
+# 每个扫描周期：拉最新小时线 → 评估50品种 → 状态机去重 → Server酱推送买/卖/平
+# =====================================================
+fusion:
+  enabled: true
+  ema_k: 140
+  atr_n: 14
+  ma_n: 20
+  sl_atr: 2.0
+  trail_atr: 2.0
+  be_r: 0.5
+  W: 60
+  thr: 0.03
+  entry_mode: "both_nm"
+  cooldown_bars: 3
+  # ---- V3.1（2026-09-20）：ADX 趋势强度门控 + 取消「收强」----
+  # adx_min: 小时线 ADX(14) < 该值则放弃本根入场（用上一根判定，无前视）。0=关闭；V3.1=15。
+  #   ⚠ 阈值不要抬到 20+：会把回踩入场杀光（回踩是主利润来源），13bp 下转亏。
+  # use_sbull: 回踩支路是否要求「收强/收弱」。true=旧行为；V3.1 验证 false 更优。
+  # 两项均可单独回退（改回 adx_min: 0.0 / use_sbull: true 即恢复旧口径）。改后需重启容器生效。
+  adx_n: 14
+  adx_min: 15.0
+  use_sbull: false
+  # ---- V3.2（2026-09-20）：P0 斐波那契·汇流 + P1 利弗莫尔·阶梯加码 ----
+  # P0 fib_confl: 回踩极值须落在 0.382/0.5/0.618 位 ± fib_tol_atr×ATR 内（只作用于回踩支路）。
+  #    实测（真主连 2018→2026）：净¥ 真实1跳 +43.4→+49.2万，MDD 16.8→10.0万，三滚动窗不劣。
+  # P1 add_max_lots: 开仓恒为 1 手；2 = 允许加一次。
+  #    V3.4（2026-09-21 定稿）加码条件 = 收盘创入场以来新高/新低 且 浮盈 >= lots × add_thr_atr × ATR
+  #    （金字塔：门槛随手数线性抬升）。V3.2 的「吊灯已推进到加码后均价之上」结构保本约束
+  #    （add_guard_atr）自 V3.4 停用——实测该约束损失 19.6% 收益（+58.2→+69.6万）。
+  #    代价：加码后不再保证最差=保本，约 53% 加码单以亏损收场（中位仅 −0.16R）。
+  # 回归开关：add_max_lots: 1 → 回到 P0；再 fib_confl: false → 回到 V3.1。改后需重启容器生效。
+  fib_confl: true
+  fib_ratios: [0.382, 0.5, 0.618]
+  fib_tol_atr: 0.5
+  add_max_lots: 2
+  add_thr_atr: 1.0          # V3.4 新增：加码浮盈门槛（×ATR）
+  add_guard_atr: 0.0        # V3.2 结构保本放宽量；V3.4 停用（保留字段兼容）
+  min_bars: 160
+  stale_minutes: 90         # 信号新鲜度：最新K超过则抑制「状态变化信号」
+  display_max_age_min: 14400  # 播报展示上限（分钟，10天）：夜盘→早盘/周末/长假都覆盖
+  max_bars: 400
+  # ---- 推送形态 ----
+  push_stop_levels: true    # 推送中给出止损位 / 保本触发价
+  heartbeat: true           # 定时播报持仓（每 30 分钟一档）
+  heartbeat_interval_min: 30   # 定时播报最小间隔（分钟），实际只在 :00/:30 触发
+  heartbeat_max_rows: 60
+  # 开市前预播报（强制推，含完整止损/保本位）——开盘前先给你一份完整清单
+  pre_session_times:
+    - "08:45"
+    - "13:15"
+    - "20:45"
+  trail_push_atr: 0.5          # 吊灯止损朝有利方向移动 >=0.5×ATR 时推一条（0=关闭）
+  signal_repeat_min: 120       # 开仓信号 120 分钟内每轮复提（防漏看；0=不复提）
+  push_log: true               # 推送留痕（fusion_push_log 表，可回查历史信号）
+  fallback_webhook: ""         # 备用通道：企业微信/钉钉/飞书机器人 URL（pushplus 失败时降级）
+  # 允许推送的时间窗（本地时间）；需覆盖"小时K收盘 + 采集延迟"
+  # 11:30 收盘的K要到 11:31~11:35 才入库，故上午给到 12:00；盘前提早到 08:45
+  push_windows:
+    - "08:45-12:00"
+    - "13:15-15:30"
+    - "20:45-23:30"
+  closed_bars_only: true     # 只用已收盘小时K（防信号重绘；与回测口径一致）
+  settle_delay_sec: 150      # K收盘后等多久再采（防数据源未定稿；实测需1~2分钟）
+  hourly_src: akshare        # 引擎只读该 src 的小时线（akshare=同花顺口径；tqsdk=回测口径）。杜绝双源混读
+  # 微信推送 TOKEN：统一从 .env 的 PUSHPLUS_TOKEN 读取（明文不入库，G7 红线）
+  pushplus_token: ""
+
+# =====================================================
+# M8 决策链路容器化（docs/M8_决策链路容器化_PRD_20260922.md）
+# 把 WB 侧五条子链路（简报/研究/基本面/盘中监控/信号）迁入 qhyc-pipeline 容器常驻
+# 源码单一真源仍在 WB skill（只读挂载 → 启动快照），此处只配调度与闸门
+# =====================================================
+pipeline:
+  enabled: true
+  daily_cron: { hour: 17, minute: 40 }   # 17:40：给 rank_position(17:30) 留 10 分钟
+  signal_slots: ["09:00", "10:00", "11:00", "13:30", "14:00", "15:00", "21:00", "22:00", "23:00"]
+  intraday_enabled: true                  # 整点：先盘中监控（串行），再信号推送
+  check_cron: { day_of_week: mon, hour: 8, minute: 5 }
+  readiness:
+    enabled: true
+    timeout_min: 10                       # 等当日 spot_basis + member_position_rank
+    poll_sec: 60
+  snapshot:
+    src: "/app/pipeline_src"              # 只读挂载（WB 单一真源）
+    dest: "/app/runtime/pipeline_snapshot" # 启动快照（子进程跑这份副本）
+  step_timeout_sec: 1800
+  max_instances: 1
+  notify_on_failure: true
+
+# =====================================================
+# fut_kline 增量入库（天勤 tqsdk）——2026-09-23 补齐
+# 实测：原 scheduler 只有 adjust_fdf(02:30)，无原始抓取 → fut_kline 停滞 7~12 天
+# 本项在 adjust 之前（夜盘已收）跑增量抓取；脚本见 scripts/ingest_fut_kline_incremental.py
+# =====================================================
+fut_kline:
+  enabled: true
+  run_hour: 1
+  run_minute: 40
+  freqs: [daily, hourly]
+  buffer_days: 7
+  adjust_after: true         # 抓完顺带生成 cont_adj（也可等 02:30 的 adjust 作业）
+  max_stale_days: 0          # >0：落后不超过该天数则跳过
+  timeout_sec: 3600
