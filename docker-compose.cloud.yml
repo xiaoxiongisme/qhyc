@@ -33,14 +33,21 @@ services:
       # 2026-09-29 实测：chunk 数远超默认 64，跨全表查询必报
       # "out of shared memory / max_locks_per_transaction"（云端 chunk 更多，取 8192）
       - "-cmax_locks_per_transaction=8192"
-      - "-clisten_addresses=localhost"   # 只监听本机：数据库不对外，端口也不映射宿主
+      # ⚠ 2026-09-29：服务器现场曾改为 0.0.0.0 并映射宿主环回端口 —— **必须保留**，
+      #   否则本地的 SSH 隧道（ssh -L 15432:127.0.0.1:5432 qhyc）连不进来，
+      #   cloud_local_sync 会整体失效。容器内监听 0.0.0.0 ≠ 对外暴露：
+      #   宿主只绑 127.0.0.1，公网不可达（见下方 ports）。
+      - "-clisten_addresses=0.0.0.0"
     volumes:
       # 云端用 named volume（或改成 /data/qhyc/pgdata 挂数据盘）。
       # ⚠ 库约 37GB：默认系统盘很可能放不下，务必先挂数据盘并把
       #   docker 的 data-root 或此路径指到数据盘。
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
-    # 不在宿主暴露 5432（本地那份映射了，云端必须收掉）
+    # 仅在宿主环回暴露 5432，供本机 SSH 隧道穿透（ssh -L 15432:127.0.0.1:5432）；
+    # 不绑 0.0.0.0 / 不对外网开放。删除本段 = 本地同步链路断供。
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-futures} -d ${POSTGRES_DB:-futures}"]
       interval: 10s
