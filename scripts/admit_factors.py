@@ -34,6 +34,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from sqlalchemy import create_engine, text
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -77,7 +78,43 @@ def year_sign_ratio(ic: pd.Series) -> float:
     return float(np.mean((s > 0) == (overall > 0)))
 
 
-def evaluate(eng, fid: str, weight: float, px: pd.DataFrame, args) -> dict:
+def mean_abs_corr(eng, fid: str, others: list[str], since: str,
+                  min_n: int = 30) -> tuple[float, str]:
+    """与**已启用**因子的面板相关性（PRD T17 的 E1：相关性 < 0.3）。
+
+    口径：按 (symbol, trade_date) 内连接后做 pooled spearman，取 |ρ| 均值。
+    目的：防止"新瓶装旧酒"——与在产因子高度重合的新因子不会带来增量信息，
+    只会把同一个信号重复计入偏置。
+    """
+    from factor_ic_monitor import load_factor  # noqa: PLC0415
+    f = load_factor(eng, fid, since).rename(columns={"z_value": "z"})
+    if f.empty or not others:
+        return np.nan, ""
+    worst, wname = 0.0, ""
+    n = 0
+    acc = 0.0
+    for o in others:
+        if o == fid:
+            continue
+        g = load_factor(eng, o, since).rename(columns={"z_value": "z2"})
+        if g.empty:
+            continue
+        m = f.merge(g, on=["symbol", "trade_date"]).dropna(subset=["z", "z2"])
+        if len(m) < min_n or m["z"].nunique() < 2:
+            continue
+        r, _ = stats.spearmanr(m["z"].to_numpy(), m["z2"].to_numpy())
+        r = abs(float(r))
+        acc += r
+        n += 1
+        if r > worst:
+            worst, wname = r, o
+    if n == 0:
+        return np.nan, ""
+    return acc / n, (f"{wname}|ρ|={worst:.2f}" if worst >= 0.3 else "")
+
+
+def evaluate(eng, fid: str, weight: float, px: pd.DataFrame, args,
+             enabled_ids: list[str] | None = None) -> dict:
     g = Gate()
     f = load_factor(eng, fid, args.since)
     if f.empty:
@@ -94,9 +131,14 @@ def evaluate(eng, fid: str, weight: float, px: pd.DataFrame, args) -> dict:
     miss = 1.0 - (len(f) / cells) if cells else 1.0
     g.check(fid, "E1", miss <= args.max_miss, f"缺失率 {miss:.1%} > {args.max_miss:.0%}")
 
-    # ---- E2 前视静态复核 ----
+    # ---- E2 前视（静态复核）+ 与在产因子的相关性（PRD T17 E1）----
     latest = pd.Timestamp(f["trade_date"].max()).date()
     g.check(fid, "E2", latest <= date.today(), f"存在未来日期 {latest}")
+    corr, worst = mean_abs_corr(eng, fid, enabled_ids or [], args.since)
+    if not np.isnan(corr):
+        g.check(fid, "E2", corr < args.corr_max,
+                f"与在产因子平均|ρ|={corr:.2f} ≥ {args.corr_max}"
+                + (f"（最高 {worst}）" if worst else ""))
 
     # ---- E3 显著性（全样本 + 后半段） ----
     ret1 = fwd_returns(px, args.horizon)
@@ -167,6 +209,8 @@ def main():
     # 部分品种本就没有数据）时用 --max-miss 0.5 复核，否则会被数据可得性误杀。
     ap.add_argument("--max-miss", type=float, default=0.05)
     ap.add_argument("--min-n", type=int, default=5, help="每日最少品种数")
+    ap.add_argument("--corr-max", type=float, default=0.30,
+                    help="与在产因子的平均 |ρ| 上限（PRD T17 E1）")
     ap.add_argument("--ic-min", type=float, default=0.02)
     ap.add_argument("--t-min", type=float, default=2.0)
     ap.add_argument("--drift-mult", type=float, default=1.5)
@@ -196,7 +240,8 @@ def main():
         ), {"s": a.since}).fetchall()]
     px = load_closes(eng, syms, a.since)
 
-    rows = [evaluate(eng, fid, w, px, a) for fid, w in facs]
+    enabled_ids = [fid for fid, _ in list_factors(eng, enabled_only=True)]
+    rows = [evaluate(eng, fid, w, px, a, enabled_ids) for fid, w in facs]
     df = pd.DataFrame(rows)
     with pd.option_context("display.width", 220, "display.max_columns", 30):
         print(df.to_string(index=False, float_format=lambda x: f"{x: .4f}"))

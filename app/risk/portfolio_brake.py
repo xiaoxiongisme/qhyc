@@ -103,12 +103,23 @@ def load_equity_curve(session, symbol: str | None = None,
     from sqlalchemy import text
 
     try:
+        # 优先取 equity（累计权益，口径正确）；没有则用 realized_pnl 累加成权益曲线。
+        # ⚠ 不能直接用 realized_pnl 序列算回撤：那是**单日盈亏**，
+        #    其峰值是"赚最多的那一天"，算出来的是假回撤。
         rows = session.execute(text(
-            "SELECT trade_date, realized_pnl FROM portfolio_equity "
+            "SELECT trade_date, equity, realized_pnl FROM portfolio_equity "
             "ORDER BY trade_date DESC LIMIT :n"), {"n": lookback}).fetchall()
-        vals = [float(r[1]) for r in rows][::-1]
-        if vals:
-            return vals
+        rows = rows[::-1]
+        eq = [float(r[1]) for r in rows if r[1] is not None]
+        if eq:
+            return eq
+        pnl = [float(r[2]) for r in rows if r[2] is not None]
+        if pnl:
+            cum, acc = [], 0.0
+            for v in pnl:
+                acc += v
+                cum.append(acc)
+            return cum
     except Exception:  # noqa: BLE001  表不存在或字段缺失 → 走回退
         session.rollback()
 

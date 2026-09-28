@@ -134,20 +134,20 @@ data_selfcheck:
 ## 6. 实施任务（CB 可执行，T 编号接续因子接入 PRD 的 T12）
 
 ### 阶段一 · P0（必须，对应 PRD M1/M2）
-- [ ] **T13** `factor_registry` 补全注册：把 A 组 4 + C 组 2 等未注册因子补齐（关闭"因子工程未闭环"P0 项），含 `horizon`/`lag_days`/`max_weight`。（复用 `scripts/compute_factor_value.py` 已算值，仅补元数据）
-- [ ] **T14** `scripts/compute_factor_value.py` 新增 V1 三因子（VR/VZ/背离）与 V6（`f_atr_pctile`）的 A 组派生逻辑，复用 `factor_ic_scan.build_factors` 与 `bar_15m`；落 `factor_value` 幂等 upsert；`available_at=0`（intraday）。
-- [ ] **T15** `factor_registry` 注册 V1/V6 新因子（`enabled=false` 初始），写入 §5 的 `weights` 初值。
+- [x] **T13** `factor_registry` 补全注册：把 A 组 4 + C 组 2 等未注册因子补齐（关闭"因子工程未闭环"P0 项），含 `horizon`/`lag_days`/`max_weight`。（复用 `scripts/compute_factor_value.py` 已算值，仅补元数据）
+- [x] **T14** `scripts/compute_factor_value.py` 新增 V1 三因子（VR/VZ/背离）与 V6（`f_atr_pctile`）的 A 组派生逻辑，复用 `factor_ic_scan.build_factors` 与 `bar_15m`；落 `factor_value` 幂等 upsert；`available_at=0`（intraday）。
+- [x] **T15** `factor_registry` 注册 V1/V6 新因子（`enabled=false` 初始），写入 §5 的 `weights` 初值。
 - [ ] **T16（V2）** `app/factor/asof.py` 单测：构造 `lag_days=1` 假因子，断言 T 日取不到 `available_at==T` 行；新增启动守卫扫描 `data_sources` 均有 `_lag` 视图或 intraday 标记。
-- [ ] **T17（V3=T8）** 新增 `scripts/admit_factors.py`：自动跑「有因子 / 无因子」两组回放，输出 E1（相关性<0.3）/ E2（ablation MAR 净升、回撤不恶化）/ E3（IS/OOS 同号）/ E4（扣 2bp/5bp 仍正）/ E5（可关闭）/ E6（断供降级）六项判定。
+- [x] **T17（V3=T8）** 新增 `scripts/admit_factors.py`：自动跑「有因子 / 无因子」两组回放，输出 E1（相关性<0.3）/ E2（ablation MAR 净升、回撤不恶化）/ E3（IS/OOS 同号）/ E4（扣 2bp/5bp 仍正）/ E5（可关闭）/ E6（断供降级）六项判定。
 - [ ] **T18（V3=T9）** `enabled=false` 回归测试：断言关闭全部新增因子后，引擎输出与"因子从未上线"逐位一致（diff 基线）。
 
 ### 阶段二 · P1
-- [ ] **T19（V4）** 新增 `app/ingest/data_selfcheck.py` + `app/scheduler.py` 的 `data_selfcheck` cron（17:35）；缺失>5% 报警切源、`build_continuous` oi 主导逻辑做换月断层检测、`anomaly_ticket` 写入。
-- [ ] **T20（V5）** 新增 `app/risk/portfolio_brake.py` + `config.portfolio_brake`；在 scheduler 提交 `FusionPosition` 处乘 `portfolio_brake_scalar`（默认 1.0）；不触及 `walk_fusion_states`。
-- [ ] **T21（V3=T10）** 新增 `scripts/factor_ic_monitor.py`：20 日滚动 IC 监控，连续 10 日转负告警 + 建议 `enabled=false`。
+- [x] **T19（V4）** 新增 `app/ingest/data_selfcheck.py` + `app/scheduler.py` 的 `data_selfcheck` cron（17:35）；缺失>5% 报警切源、`build_continuous` oi 主导逻辑做换月断层检测、`anomaly_ticket` 写入。
+- [x] **T20（V5）** 新增 `app/risk/portfolio_brake.py` + `config.portfolio_brake`；在 scheduler 提交 `FusionPosition` 处乘 `portfolio_brake_scalar`（默认 1.0）；不触及 `walk_fusion_states`。
+- [x] **T21（V3=T10）** 新增 `scripts/factor_ic_monitor.py`：20 日滚动 IC 监控，连续 10 日转负告警 + 建议 `enabled=false`。
 
 ### 阶段三 · P2（储备）
-- [ ] **T22** 因子计算接入 `app/scheduler.py` 持续增量（关闭"因子工程未闭环"P1）；与 V4 自检共用日终流程。
+- [x] **T22** 因子计算接入 `app/scheduler.py` 持续增量（关闭"因子工程未闭环"P1）；与 V4 自检共用日终流程。
 - [ ] **T23** `factor_value` 按季度分区（数据量大后）。
 
 ---
@@ -199,7 +199,7 @@ data_selfcheck:
 
 ## 10. 验收标准（CB 勾选）
 
-- [ ] V1 三因子 + V6 已在 `factor_registry` 注册（`enabled=false` 初始），`factor_value` 有值。
+- [x] V1 三因子 + V6 已在 `factor_registry` 注册（`enabled=false` 初始），`factor_value` 有值。
 - [ ] V2 单测覆盖 `lag_days=1` 取不到断言；启动守卫扫描 `data_sources` 完整性。
 - [ ] V3 T17 产出 E1–E6 可复跑报告；T18 `enabled=false` 回归 diff 全 0。
 - [ ] V4 `data_selfcheck` 作业存在且注入"3 日缺失/成交量连续 0"样本能报警 + 切源。

@@ -137,3 +137,25 @@ predict:
     strength: 0.3
     oi_boost_prob: 0.05
     max_prob: 0.85
+
+# =============================================================================
+# Phase 4/5 新增开关（2026-09-29）
+# 说明：这几项目前由**环境变量**控制（避免本地/云端配置文件分叉），
+#       此处仅登记口径，改配置需同步改 docker-compose.cloud.yml 的 environment。
+# -----------------------------------------------------------------------------
+# scheduler.env:
+#   FACTOR_COMPUTE_ENABLED=1          # 16:20 因子计算（默认开）
+#   FACTOR_COMPUTE_LOOKBACK_DAYS=60   # 增量回溯天数（全量用 FACTOR_COMPUTE_SINCE=2015）
+#   FACTOR_IC_MONITOR_ENABLED=1       # 16:45 滚动 IC 监控（默认开）
+#   FACTOR_IC_WINDOW=20               # 滚动窗口（交易日）
+#   DATA_SELFCHECK_ENABLED=0          # 17:35 数据自检（默认**关**，只写 anomaly_ticket）
+#   DATA_SELFCHECK_MISSING_PCT=0.05
+#   DATA_SELFCHECK_ZERO_VOL_DAYS=3
+#   PORTFOLIO_BRAKE_ENABLED=0         # 组合回撤熔断（默认**关**）
+#   PORTFOLIO_BRAKE_DD_WARN=0.15      # >15% → 半仓（scalar 0.5）
+#   PORTFOLIO_BRAKE_DD_STOP=0.25      # >25% → 清仓（scalar 0.0）
+#   PORTFOLIO_BRAKE_LOOKBACK=250
+#
+# 熔断依赖 portfolio_equity（migrations/004 建表）：
+#   trade_date / equity（累计权益，优先）/ realized_pnl（无 equity 时累加）
+#   表为空或缺失 → scalar 恒为 1.0（等价关闭），绝不阻断决策链。

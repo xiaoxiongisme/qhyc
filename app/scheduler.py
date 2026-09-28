@@ -614,6 +614,11 @@ def _fusion_scan_job() -> None:
                 logger.warning(f"[scheduler] hourly collect failed (沿用已有数据): {e}")
             # 2) 评估全部品种（含入场价/入场ATR/止损位等明细）
             results = evaluate_all(s, settings.main_contracts, f)
+
+            # 2.5) V5 组合回撤熔断（Phase 5）：把「期望手数」按当前回撤缩放后再落库。
+            #      enabled=False 时恒等变换（双向等价），无 portfolio_equity 时亦恒等 —— 不阻断决策链。
+            results = _apply_portfolio_brake(s, results)
+
             is_cold = s.query(FusionPosition).count() == 0
             is_pre = _is_at(now, f.pre_session_times)
 
@@ -1367,6 +1372,53 @@ def _data_selfcheck_job() -> None:
         logger.info(f"[scheduler] data_selfcheck done: {res}")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] data_selfcheck failed: {e}")
+
+
+def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
+    """V5 组合回撤熔断：按当前回撤缩放「期望手数」（Phase 5）。
+
+    设计要点
+    * 默认**关闭**（PORTFOLIO_BRAKE_ENABLED），打开前必须先在 portfolio_equity 里
+      有真实权益曲线（migrations/004 建表），否则恒等返回；
+    * 手数取整用 ceil：1 手 × 0.5 = 0.5 → 1 手（不把 1 手直接砍成 0，
+      "清仓"只由 dd_stop 的 scalar=0.0 触发，语义必须唯一）；
+    * 任何异常都只记录并恒等返回 —— 熔断失效可以，误杀不行。
+    """
+    if os.getenv("PORTFOLIO_BRAKE_ENABLED", "0") != "1" or not results:
+        return results
+    try:
+        import math
+
+        from app.risk.portfolio_brake import (
+            BrakeConfig, apply as _brake_apply, brake_scalar, load_equity_curve,
+        )
+        cfg = BrakeConfig(
+            enabled=True,
+            dd_warn=float(os.getenv("PORTFOLIO_BRAKE_DD_WARN", "0.15")),
+            dd_stop=float(os.getenv("PORTFOLIO_BRAKE_DD_STOP", "0.25")),
+            lookback=int(os.getenv("PORTFOLIO_BRAKE_LOOKBACK", "250")),
+        )
+        equity = load_equity_curve(session=session, lookback=cfg.lookback)
+        if not equity:
+            logger.info("[portfolio_brake] 无权益曲线 → 恒等（等价关闭）")
+            return results
+        sc = brake_scalar(equity, cfg)
+        if sc >= 1.0:
+            return results
+        n_cut = 0
+        for r in results:
+            lots = r.get("lots") or 0
+            if not lots:
+                continue
+            if sc <= 0.0:
+                r["lots"] = 0
+            else:
+                r["lots"] = max(1, int(math.ceil(float(lots) * sc - 1e-9)))
+            n_cut += 1
+        logger.warning(f"[portfolio_brake] 回撤熔断生效 scalar={sc} → 缩放 {n_cut} 个品种手数")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[portfolio_brake] 熔断异常，恒等放行：{e}")
+    return results
 
 
 def _backtest_weekly_job() -> None:

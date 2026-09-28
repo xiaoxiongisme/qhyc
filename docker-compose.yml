@@ -59,7 +59,10 @@ services:
       # 源码/脚本/前端本地挂载：docker 仅提供运行环境，代码改动免重建（重启容器即生效）
       - ./app:/app/app:ro
       - ./scripts:/app/scripts:ro
-      - ./web/dist:/app/web/dist:ro
+      # ❌ 不再挂 ./web/dist：实测镜像内 dist 与宿主 dist 的 index.html md5 不一致
+      #    （d34a38eb vs 6ae90940），即「前端双来源」。统一为**镜像构建产物唯一来源**
+      #    （Dockerfile webbuilder 阶段从 web/ 构建），本地/云端完全一致。
+      #    改前端后需：docker compose build api && docker compose up -d api
       # M8：WB 决策链路源码只读挂载（与 pipeline 容器共享 ./runtime 下的启动快照，
       #     使 /pipeline/run 手动触发与 /pipeline/manifest 可在 api 侧直接执行）
       - ${WB_PIPELINE_PATH}:/app/pipeline_src:ro
