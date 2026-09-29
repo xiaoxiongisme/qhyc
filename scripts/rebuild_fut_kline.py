@@ -180,6 +180,22 @@ def main() -> int:
             )"""))
             print(f"  [dry] created temp {target}", flush=True)
 
+    # ⚠ 安全前置（2026-09-30 实测事故路径）：生产模式是 **先 DELETE 后取源**，
+    # 源表一旦缺失/为空，就会先把 fut_kline 的 cont_adj+continuous 删光再失败
+    # —— 云端这两个 kind 合计 1,992 万行，删了就回不来。必须在 DELETE 之前拦死。
+    # 实测：本地无 minute_bar_adj 表（云端有 5,765 万行），本地跑生产模式即触发此路径。
+    REQUIRED_SOURCES = ("minute_bar_adj",)
+    with eng.connect() as c:
+        for src in REQUIRED_SOURCES:
+            if not c.execute(text(f"select to_regclass('{src}') is not null")).scalar():
+                print(f"  [abort] 源表 {src} 不存在 —— 拒绝执行"
+                      f"（生产模式会先 DELETE fut_kline 再重建，源缺失=删空后失败）", flush=True)
+                return 2
+            if not c.execute(text(f"select exists (select 1 from {src} limit 1)")).scalar():
+                print(f"  [abort] 源表 {src} 为空 —— 拒绝执行", flush=True)
+                return 2
+            print(f"  [preflight] {src} 存在且非空", flush=True)
+
     # 生产模式：清空待重建的 cont_adj / continuous（contract 不删，仅 upsert）
     if not a.dry_run:
         with eng.begin() as c:

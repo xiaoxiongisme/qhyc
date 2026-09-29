@@ -906,6 +906,25 @@ def _rebuild_fut_kline_job() -> None:
     if not script.exists():
         logger.error(f"[scheduler] 找不到重建脚本 {script}")
         return
+    # 前置校验（fail-loud）：脚本生产模式是「先 DELETE fut_kline 的 cont_adj/continuous，
+    # 再从 minute_bar_adj 重建」。源表缺失或为空 ⇒ 删光后重建失败，数据回不来
+    # （云端这两个 kind 合计约 1,992 万行）。实测本地无 minute_bar_adj，属真实事故路径。
+    # 脚本内还有第二道同样的守卫，这里是第一道：让失败发生在删库之前、并留下 ERROR 日志。
+    try:
+        with session_scope() as s:
+            missing = [
+                t for t in ("minute_bar_adj",)
+                if not s.execute(text(f"select to_regclass('{t}') is not null")).scalar()
+            ]
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[scheduler] 重建前置校验异常，跳过本次重建: {e}")
+        return
+    if missing:
+        logger.error(
+            f"[scheduler] 重建前置校验失败：源表 {missing} 不存在，跳过本次重建"
+            f"（避免把 fut_kline 的 cont_adj/continuous 删空后重建失败）"
+        )
+        return
     cmd = [_sys.executable, str(script)]
     logger.info(f"[scheduler] rebuild fut_kline start: {' '.join(cmd)}")
     try:
