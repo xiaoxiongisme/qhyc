@@ -1,0 +1,43 @@
+"""
+API 安全层（评估文档 §8.1 / P0#3：API 鉴权中间件 + 替换占位符 Key）
+
+提供 X-API-Key 校验依赖 ``verify_api_key``，供路由以 ``Depends`` 挂载。
+
+设计原则（防止「上线即打挂生产」）：
+- 仅当部署侧在 ``.env`` 中配置了真实 ``INTEGRATION_API_KEY``（非空、非占位符）时，
+  才真正强制校验；否则退化为「放行」（passthrough）。
+- 这样「是否启用鉴权」完全由部署侧控制：云端填上真实 key 立即生效，
+  未填则行为与改动前完全一致 → 代码侧零风险上线。
+
+参考：评估文档 §8.1。
+"""
+from __future__ import annotations
+
+from fastapi import HTTPException, Security
+from fastapi.security import APIKeyHeader
+
+from app.core.config import get_settings
+
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# 视为「未启用鉴权」的占位符清单
+_PLACEHOLDER_KEYS = {"", "changeme", "your-api-key-here", "FILL_ME_IN", "placeholder"}
+
+
+def _auth_enabled() -> bool:
+    key = (get_settings().env.INTEGRATION_API_KEY or "").strip()
+    return key not in _PLACEHOLDER_KEYS
+
+
+async def verify_api_key(key: str | None = Security(_api_key_header)) -> str | None:
+    """API Key 校验依赖。
+
+    返回有效 key（供路由使用）；未启用鉴权时返回 ``None``（放行）；
+    已启用但缺失/不匹配时抛 ``403``。
+    """
+    if not _auth_enabled():
+        return None  # 鉴权未启用：放行，保持向后兼容
+    expected = get_settings().env.INTEGRATION_API_KEY
+    if key is None or key != expected:
+        raise HTTPException(status_code=403, detail="Invalid or missing API Key")
+    return key
