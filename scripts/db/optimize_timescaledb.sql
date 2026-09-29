@@ -28,10 +28,11 @@ ALTER TABLE fut_kline SET (
 );
 SELECT add_compression_policy('fut_kline', INTERVAL '90 days');
 
+-- 注意：minute_bar 的时间列是 ts（非 trade_datetime），orderby 须用 ts DESC
 ALTER TABLE minute_bar SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'symbol',
-    timescaledb.compress_orderby = 'trade_datetime DESC'
+    timescaledb.compress_orderby = 'ts DESC'
 );
 SELECT add_compression_policy('minute_bar', INTERVAL '30 days');
 
