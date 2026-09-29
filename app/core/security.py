@@ -20,8 +20,11 @@ from app.core.config import get_settings
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-# 视为「未启用鉴权」的占位符清单
-_PLACEHOLDER_KEYS = {"", "changeme", "your-api-key-here", "FILL_ME_IN", "placeholder"}
+# 视为「未启用鉴权」的占位符清单（含历史遗留占位符，避免把已知弱值当真密钥强制）
+_PLACEHOLDER_KEYS = {
+    "", "changeme", "your-api-key-here", "FILL_ME_IN", "placeholder",
+    "dev_placeholder", "dev_placeholder_change_before_m5",
+}
 
 
 def _auth_enabled() -> bool:
