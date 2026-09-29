@@ -47,6 +47,15 @@ NEW_FACTORS = ("f_vol_ratio", "f_vol_z", "f_voldiv_divergence", "f_atr_pctile")
 DECISION_HM = "15:00"
 
 
+def _cut_pre_decision(df: pd.DataFrame, hm: str = DECISION_HM) -> pd.DataFrame:
+    """前视防护核心：丢弃决策时点（hm）及之后的 bar，只保留决策时点之前的数据。
+
+    抽成独立函数以便单测 monkeypatch —— 验证「一旦防护被删，哨兵测试能报警」
+    （2026-09-27 静默退化教训：不能依赖一个「压根没接线」也能通过的测试）。
+    """
+    return df[df["hm"] < hm].copy()
+
+
 def _atr_wilder(h, l, c, n=14):
     m = len(c)
     if m == 0:
@@ -65,6 +74,37 @@ def _atr_wilder(h, l, c, n=14):
     return atr
 
 
+def has_lookahead_guard() -> bool:
+    """T16 启动守卫：用合成数据验证「决策时点后 bar 不会泄漏进当日统计量」。
+
+    构造某合约 30 个正常日 + 最后 1 日：前决策时点 bar 成交量都小（=10），
+    唯独该日 15:00 那根塞入 1000 倍巨量。若防护有效，末日成交量之和应**不含**
+    15:00 那根 → f_vol_ratio 接近且略大于 1（用自身历史中位数）；若防护失效，
+    末日 sum 被巨量稀释，vr 会骤降到 ~0.04。返回 True 表示防护有效。
+    """
+    rows = []
+    n_days = 30
+    for d in range(n_days):
+        day = f"2026-01-{1 + d:02d}"
+        for hm in ("09:00", "10:00", "11:00", "13:30", "14:00", "14:30"):
+            rows.append(dict(day=day, hm=hm, open=100, high=101, low=99,
+                            close=100, volume=10 + d))  # 缓慢爬升，保证中位数有定义
+        # 末日追加 15:00 巨量（决策时点之后，必须被滤掉）
+        if d == n_days - 1:
+            rows.append(dict(day=day, hm="15:00", open=100, high=101, low=99,
+                             close=100, volume=1_000_000))
+    df = pd.DataFrame(rows)
+    df["bucket"] = df["day"] + " " + df["hm"] + ":00"
+    out = build_v_factors(df)
+    if out.empty:
+        return False
+    vr = float(out.iloc[-1]["f_vol_ratio"])
+    # 防护有效：末日 sum≈6*(10+29)=234，历史中位数≈6*19=114，vr≈2（合理比值）。
+    # 防护失效（15:00 巨量漏入）：sum≈1_000_234，vr≈8774（爆炸式偏离）。
+    # 用区间 [0.1, 100] 区分：有效时 vr 落在正常比值带，失效时远超上界。
+    return not np.isnan(vr) and 0.1 < vr < 100
+
+
 def build_v_factors(df: pd.DataFrame) -> pd.DataFrame:
     """对单合约构造日级 V1/V6 因子行。
 
@@ -74,7 +114,7 @@ def build_v_factors(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "day" not in df.columns:
         return pd.DataFrame()
     # 只保留决策时点前的 bar（防前视红线）
-    ds = df[df["hm"] < DECISION_HM].copy()
+    ds = _cut_pre_decision(df)
     if len(ds) < 60:
         return pd.DataFrame()
 

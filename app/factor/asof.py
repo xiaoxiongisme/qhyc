@@ -101,14 +101,13 @@ class FactorContext:
     _cache: dict = field(default_factory=dict)
 
     @classmethod
-    def load(cls, enabled_only: bool = True) -> "FactorContext":
-        eng = get_engine()
+    def from_rows(cls, rows, enabled_only: bool = True) -> "FactorContext":
+        """纯函数式构造：把注册表行 → registry dict（enabled_only 时跳过未启用项）。
+
+        拆出来是为了可测：**`enabled=false` 必须与「该因子从未注册」逐位等价**
+        （PRD T18 双向等价回归）。有 DB 才能测的东西最后一定没人测。
+        """
         reg: dict[str, dict] = {}
-        with eng.connect() as c:
-            rows = c.execute(text(
-                "SELECT factor_id, name, category, data_sources, default_weight, "
-                "max_weight, horizon, lag_days, enabled FROM factor_registry"
-            )).fetchall()
         for r in rows:
             if enabled_only and not r[8]:
                 continue
@@ -116,9 +115,19 @@ class FactorContext:
                 "factor_id": r[0], "name": r[1], "category": r[2],
                 "data_sources": r[3] or [], "default_weight": float(r[4] or 0),
                 "max_weight": float(r[5] or 0.3), "horizon": r[6] or "B",
-                "lag_days": int(r[7] or 0),
+                "lag_days": int(r[7] or 0), "enabled": bool(r[8]),
             }
         return cls(registry=reg)
+
+    @classmethod
+    def load(cls, enabled_only: bool = True) -> "FactorContext":
+        eng = get_engine()
+        with eng.connect() as c:
+            rows = c.execute(text(
+                "SELECT factor_id, name, category, data_sources, default_weight, "
+                "max_weight, horizon, lag_days, enabled FROM factor_registry"
+            )).fetchall()
+        return cls.from_rows(rows, enabled_only=enabled_only)
 
     def lookup(self, factor_id: str, symbol: str, trade_date: _dt.date) -> float | None:
         """返回该 symbol 在 trade_date 可用的最新 z 值；不可用时返回 None。
@@ -196,8 +205,13 @@ def compute_bias_multipliers(
 
 
 def validate_max_weight(registry: dict[str, dict], cap: float = 1.0) -> list[str]:
-    """T6：全因子 max_weight 之和超过 cap → 返回违规因子 id 列表（非空即失败）。"""
-    s = sum(float(m.get("max_weight") or 0.0) for m in registry.values())
+    """T6：全因子 max_weight 之和超过 cap → 返回违规因子 id 列表（非空即失败）。
+
+    只统计**启用**因子：未启用（enabled=false）的因子不占额度，
+    否则「退役一个因子但保留 max_weight 以便回滚」会被误判为超配。
+    """
+    live = {fid: m for fid, m in registry.items() if m.get("enabled") is not False}
+    s = sum(float(m.get("max_weight") or 0.0) for m in live.values())
     if s > cap + 1e-9:
-        return [fid for fid, m in registry.items() if float(m.get("max_weight") or 0.0) > 0]
+        return [fid for fid, m in live.items() if float(m.get("max_weight") or 0.0) > 0]
     return []

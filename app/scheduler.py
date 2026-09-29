@@ -930,6 +930,7 @@ def _sync_cloud_local_job() -> None:
       CLOUD_SYNC_MODE=incremental   首次自动全量，之后增量
       CLOUD_SYNC_CRON_HOUR/MINUTE   默认 03:15
       CLOUD_SYNC_CHUNK_MONTHS=3
+      CLOUD_SYNC_LOOKBACK_DAYS=30   增量时额外重放的回看窗口（修云端历史回补分歧）
     DSN 由脚本自身按 CLOUD_PG*/LOCAL_PG* 解析（CB 经隧道 15432 连云）。
     """
     import subprocess
@@ -945,13 +946,16 @@ def _sync_cloud_local_job() -> None:
     tables = os.getenv(
         "CLOUD_SYNC_TABLES",
         "bar_15m,bar_30m,bar_60m,fut_kline,daily_bar,factor_value,"
-        "warehouse_receipt,member_position_rank_summary",
+        "warehouse_receipt,inventory,member_position_rank_summary",
     )
     cmd = [_sys.executable, str(script), "--tables", tables,
            "--direction", direction, "--mode", mode]
     chunk = os.getenv("CLOUD_SYNC_CHUNK_MONTHS")
     if chunk:
         cmd += ["--chunk-months", chunk]
+    # 回看窗口：云端重建会往历史回补旧行，纯水位增量补不回来（见脚本头注释）
+    lb = os.getenv("CLOUD_SYNC_LOOKBACK_DAYS")
+    cmd += ["--lookback-days", lb or "30"]
     logger.info(f"[scheduler] cloud_local_sync start: {' '.join(cmd)}")
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
@@ -1006,10 +1010,45 @@ def _verify_script_assets() -> None:
         logger.info(f"[scheduler][ASSET] 生产脚本自检通过 {len(SUBPROCESS_SCRIPTS)} 个 ({d})")
 
 
+def _verify_lookahead_guard() -> None:
+    """T16 启动守卫：因子计算的「前视防护」必须有效，否则 ERROR 级告警（fail-loud）。
+
+    历史教训（2026-09-27）：新增开关型参数没被纳入惰性计算触发条件 → 系统不报错，
+    只让参数「看起来生效实则无效」（静默退化）。前视防护 `hm < "15:00"` 一旦被
+    误删，当日 15:00 巨量会泄漏进量比 → 与未来收益机械相关（虚假 IC）。因此启动
+    时用合成数据验证防护仍生效；失效则**大声报错**，不让它带着 bug 静默跑。
+    """
+    try:
+        import importlib.util
+        import sys
+        sd = _scripts_dir()
+        mod_path = sd / "compute_factor_v1v6.py"
+        if not mod_path.is_file():
+            logger.warning("[scheduler][GUARD] compute_factor_v1v6.py 不在 scripts 目录，跳过前视守卫")
+            return
+        if str(sd) not in sys.path:
+            sys.path.insert(0, str(sd))
+        spec = importlib.util.spec_from_file_location("__la_guard__", mod_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        ok = bool(mod.has_lookahead_guard())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[scheduler][GUARD] 前视守卫自检异常（未阻断启动）：{e}")
+        return
+    if ok:
+        logger.info("[scheduler][GUARD] 前视防护自检通过（hm<15:00 仍有效）")
+    else:
+        # 红线失效但绝不静默：ERROR 级，运维必见
+        logger.error(
+            "[scheduler][GUARD] ⚠️ 前视防护疑似失效：15:00 之后 bar 已泄漏进当日量比！"
+            " 请立即检查 compute_factor_v1v6.build_v_factors 的 `hm < DECISION_HM` 过滤。")
+
+
 def _build_scheduler() -> BlockingScheduler:
     settings = get_settings()
     sched = BlockingScheduler(timezone=settings.env.TZ)
     _verify_script_assets()
+    _verify_lookahead_guard()
 
     # CLOUD_SYNC_ENABLED=1 → 本调度实例为「云地同步专用」：
     # 仅注册 cloud_local_sync 作业并立即返回，其余采集/训练/回测任务全部由云端

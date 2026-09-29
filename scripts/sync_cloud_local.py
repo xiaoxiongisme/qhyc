@@ -20,6 +20,14 @@
   python scripts/sync_cloud_local.py --tables bar_15m,bar_30m --mode incremental
   python scripts/sync_cloud_local.py --tables factor_value --direction local2cloud
   python scripts/sync_cloud_local.py --tables bar_15m --dry-run
+  python scripts/sync_cloud_local.py --tables bar_60m --mode incremental --lookback-days 30
+
+回看窗口（--lookback-days，增量模式默认 30 天）
+--------------------------------------------
+云端分钟线是「尾部重算 + 回补」语义：重建时会把过去 N 天整段重算，并把原本缺失的
+**旧日期行**补进去。纯水位增量只拉 > wm 的行，云端回补到 wm 之前的行永远同步不到，
+本地与云端会出现「永久历史分歧」（2026-09-29 实测 bar_60m 差 3,205 行，全在回补窗口内）。
+因此增量每次额外重放 [now-N天, wm] 窗口（先删后拷，幂等）。
 """
 import argparse, sys, io, datetime as _dt, os
 from pathlib import Path
@@ -35,9 +43,17 @@ TIME_CANDIDATES = ("bucket", "trade_date", "trade_datetime", "datetime",
 
 
 def _env_dsn(base, prefix):
+    """按 {prefix}PGHOST/PORT/DBNAME/USER/PASSWORD 覆盖 base。
+
+    注意：docker-compose 里历史上写的是 `{prefix}PGPWD`（少 PASS 几个字母），
+    只认 `{prefix}PGPASSWORD` 会静默回落到默认口令 —— 一旦 .env 改口令，
+    云地同步会用错口令连库并失败。这里两个名字都认，PWD 优先于默认值。
+    """
     out = dict(base)
     for k in ("host", "port", "dbname", "user", "password"):
         v = os.environ.get(f"{prefix}PG{k.upper()}")
+        if v is None and k == "password":
+            v = os.environ.get(f"{prefix}PGPWD")
         if v is not None:
             out[k] = v if k != "port" else int(v)
     return out
@@ -209,7 +225,8 @@ def _snapshot(scur, dcur, dc, table, cols, tcol, chunk_months, dry_run, pk):
     return done
 
 
-def sync_table(src, dst, table, *, chunk_months, mode, dry_run):
+def sync_table(src, dst, table, *, chunk_months, mode, dry_run, lookback_days=0,
+               force_regressed=False):
     sc = psycopg2.connect(**src); scur = sc.cursor()
     dc = psycopg2.connect(**dst); dcur = dc.cursor()
 
@@ -261,11 +278,47 @@ def sync_table(src, dst, table, *, chunk_months, mode, dry_run):
             return
         scur.execute(f"SELECT max(({tcol})::text) FROM {table}")
         new_max = scur.fetchone()[0]
-        if new_max is None or new_max <= wm:
-            print(f"  no new data since wm={wm}, skip", flush=True)
+
+        # ------------------------------------------------------------------
+        # 源端回退守卫（2026-09-29 实测踩出来的坑，比历史分歧更危险）
+        # 云端分钟线重建（adjust_minute）是「先删尾部再重算」：作业跑的过程中
+        # 源表 max(bucket) 会**先变小后变大**。若此刻同步，会把本地整段尾部
+        # 删成云端的中间态 —— 实测 bar_30m 被回滚 7 天（4,883,649 → 4,880,860，
+        # max 09-29 → 09-22），本地凭空少了 7 天数据且不报错。
+        # 因此：源端尾部早于已有水位 = 源在重建/异常 → 直接中止，不动本地。
+        # 确需强制覆盖时用 --force-regressed-src（例如确认云端重建已完成）。
+        # ------------------------------------------------------------------
+        if new_max is not None and new_max < wm and not force_regressed:
+            sc.close(); dc.close()
+            raise SystemExit(
+                f"[ABORT] {table}: src max {new_max} < watermark {wm} — "
+                f"源端尾部回退（多半是云端重建作业正在跑），放弃本次同步以免回滚本地。"
+                f"如需强制：加 --force-regressed-src")
+
+        # ------------------------------------------------------------------
+        # 回看窗口（2026-09-29 实测发现的结构性缺陷）
+        # 云端分钟线/日线是「尾部重算 + 回补」语义：adjust_minute 每次重建会把
+        # 过去 N 天的历史窗口整段重算并**补进旧日期里原本缺失的行**。
+        # 而纯水位增量只拉 > wm 的行 —— 云端往 wm 之前回补的旧行永远同步不到，
+        # 本地与云端会在历史段产生「永久分歧」（实测 bar_60m 差 3,205 行，
+        # 全部落在 2026-09-01..09-22，即云端回补窗口内）。
+        # 解决：每次增量都把 [now - lookback_days, wm] 这段一起重放（先删后拷，幂等）。
+        # 窗口默认 30 天，覆盖云端回补半径；代价只有几万行，可忽略。
+        # ------------------------------------------------------------------
+        start = wm
+        if lookback_days and lookback_days > 0:
+            lb = (_dt.datetime.now() - _dt.timedelta(days=int(lookback_days))).isoformat()
+            if lb < start:
+                start = lb
+            print(f"  lookback {lookback_days}d -> replay from {start}", flush=True)
+
+        if new_max is not None and new_max <= start:
+            print(f"  no new data since {start}, skip", flush=True)
             sc.close(); dc.close()
             return
-        dcur.execute(f"DELETE FROM {table} WHERE ({tcol})::text > %s", (wm,))
+        if new_max is None:
+            new_max = start
+        dcur.execute(f"DELETE FROM {table} WHERE ({tcol})::text > %s", (start,))
         dc.commit()
         need_dedup = _source_has_dups(scur, table, pk)
         tmp = f"tmp_sync_{table}"
@@ -276,14 +329,14 @@ def sync_table(src, dst, table, *, chunk_months, mode, dry_run):
             n = _copy_staging(
                 scur, dcur, dc, table, scols, pk, tmp,
                 f"COPY (SELECT {','.join(scols)} FROM {table} "
-                f"WHERE ({tcol})::text > '{wm}' ORDER BY {tcol}) TO STDOUT")
+                f"WHERE ({tcol})::text > '{start}' ORDER BY {tcol}) TO STDOUT")
         else:
             n = _copy_direct(
                 scur, dcur, dc, table, scols,
                 f"COPY (SELECT {','.join(scols)} FROM {table} "
-                f"WHERE ({tcol})::text > '{wm}' ORDER BY {tcol}) TO STDOUT")
+                f"WHERE ({tcol})::text > '{start}' ORDER BY {tcol}) TO STDOUT")
         set_watermark(dc, table, new_max, n)
-        print(f"[sync {table}] DONE incremental +{n:,} (wm {wm} -> {new_max})", flush=True)
+        print(f"[sync {table}] DONE incremental +{n:,} (wm {wm} -> {new_max}, replay from {start})", flush=True)
         sc.close(); dc.close()
         return
 
@@ -304,6 +357,10 @@ def main():
     ap.add_argument("--mode", default="snapshot", choices=["snapshot", "incremental"])
     ap.add_argument("--chunk-months", type=int, default=3)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--lookback-days", type=int, default=30,
+                    help="增量模式下额外重放的回看窗口天数（修云端往历史回补导致的永久分歧）；0=关闭")
+    ap.add_argument("--force-regressed-src", action="store_true",
+                    help="源端尾部早于水位时仍强制同步（默认中止，防回滚本地）")
     args = ap.parse_args()
 
     LOCAL = _env_dsn(load_creds(), "LOCAL")
@@ -314,7 +371,13 @@ def main():
         dst = LOCAL if args.direction == "cloud2local" else CURRENT_CLOUD
         tag = "cloud->local" if args.direction == "cloud2local" else "local->cloud"
         print(f"=== {t} ({tag}, {args.mode}) ===", flush=True)
-        sync_table(src, dst, t, chunk_months=args.chunk_months, mode=args.mode, dry_run=args.dry_run)
+        try:
+            sync_table(src, dst, t, chunk_months=args.chunk_months, mode=args.mode,
+                       dry_run=args.dry_run, lookback_days=args.lookback_days,
+                       force_regressed=args.force_regressed_src)
+        except SystemExit as e:
+            # 单表失败（如源端回退中止）不应中断其余表的同步
+            print(f"[sync {t}] SKIP: {e}", flush=True)
     print("ALL DONE", flush=True)
 
 

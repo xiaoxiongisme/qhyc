@@ -99,17 +99,21 @@ def all_specs() -> list[StrategySpec]:
     return list(REGISTRY.values())
 
 
-def enabled_keys() -> list[str]:
+def enabled_keys(cfg: Optional[dict] = None) -> list[str]:
     """启用的策略 key 列表。
 
     若 config 中存在 `strategies` 段（形如 {key: {enabled: bool, params: {...}}}），
     以其覆盖注册表默认值 —— 便于"改配置即增减策略"，无需改代码。
+
+    ``cfg`` 可显式传入（测试/非 settings 环境用）；不传则回落到 settings。
+    显式注入是为了做 PRD T18「enabled=false ≡ 从未注册」的双向等价回归。
     """
-    try:
-        from app.core.config import get_settings
-        cfg = getattr(get_settings(), "strategies", None) or {}
-    except Exception:  # noqa: BLE001
-        cfg = {}
+    if cfg is None:
+        try:
+            from app.core.config import get_settings
+            cfg = getattr(get_settings(), "strategies", None) or {}
+        except Exception:  # noqa: BLE001
+            cfg = {}
     out = []
     for k, spec in REGISTRY.items():
         ov = cfg.get(k) if isinstance(cfg, dict) else None

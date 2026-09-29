@@ -180,8 +180,11 @@ def evaluate(eng, fid: str, weight: float, px: pd.DataFrame, args,
         enabled = bool(c.execute(text(
             "SELECT coalesce(enabled,false) FROM factor_registry WHERE factor_id=:f"
         ), {"f": fid}).scalar())
+        # 只统计启用因子的额度：退役（enabled=false）但保留 max_weight 以便回滚的
+        # 因子不应占额度，否则会与 app/factor/asof.validate_max_weight 口径打架。
         s_total = float(c.execute(text(
-            "SELECT coalesce(sum(max_weight),0) FROM factor_registry")).scalar() or 0.0)
+            "SELECT coalesce(sum(max_weight),0) FROM factor_registry "
+            "WHERE enabled")).scalar() or 0.0)
     if not enabled:
         g.check(fid, "E6", mw <= args.max_w, f"新因子 max_weight={mw} > {args.max_w}")
     g.check(fid, "E6", s_total <= 1.0 + 1e-9,
