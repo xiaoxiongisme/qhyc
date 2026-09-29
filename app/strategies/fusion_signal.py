@@ -51,6 +51,33 @@ def _get_factor_ctx() -> FactorContext | None:
             _factor_ctx_cache = False
     return _factor_ctx_cache or None
 
+
+# 中性乘子：与「无因子」(today: ctx=None 的逐位等价行为) 完全一致。
+# cap=1.0 → 加码上限不变；gate=1.0 → 默认 gate_threshold=0.0 下恒放行，等价于今天 gate=1.0。
+# 注：{1.0, 0.0} 在默认 config 下与 {1.0, 1.0} 决策等价；但 gate=1.0 对任一 threshold<=1 都放行，
+# 更严格满足「enabled=false ≡ 逐位等于今天」（今天 ctx=None 的 gate=1.0）。
+NEUTRAL_BIAS = {"position_cap_scalar": 1.0, "entry_gate": 1.0}
+
+
+def get_bias_multipliers(ctx, symbol, trade_date, p, bias=None) -> dict:
+    """因子偏置乘子：短路优先，默认（无因子）路径近乎零成本。
+
+    短路条件（任一即返回中性乘子，跳过一切 DB 查找）：
+      - ctx is None（因子上下文未加载 / 加载失败惰性失效）
+      - symbol / trade_date 缺失（无维度可查）
+      - ctx 中没有任何「启用且类别为 B」的因子（因子禁用 ≡ 因子不存在）
+    仅当确有启用 B 类因子时才做 lookup + compute_bias_multipliers。
+    """
+    if ctx is None or symbol is None or trade_date is None:
+        return NEUTRAL_BIAS
+    b_ids = [fid for fid, m in ctx.registry.items()
+             if m.get("enabled") is not False and m.get("category") == "B"]
+    if not b_ids:
+        return NEUTRAL_BIAS
+    zs = ctx.lookup_many(b_ids, symbol, trade_date)
+    bias = bias or get_settings().factor_bias
+    return compute_bias_multipliers(zs, ctx.registry, bias)
+
 # 全系统统一交易所时区（上海）；DB 会话已设为 Asia/Shanghai，
 # 读出的 timestamptz 为上海感知，故收盘判定一律用上海 now。
 _SH_TZ = ZoneInfo("Asia/Shanghai")
@@ -119,7 +146,7 @@ def fusion_state(o, h, l, c, htf_dir, p) -> int:
     return fusion_state_detail(o, h, l, c, htf_dir, p)["state"]
 
 
-def walk_fusion_states(o, h, l, c, htf_dir, p):
+def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
     """逐根生成融合策略持仓明细（**单一真源**，与 `fusion_state_detail` 同一套循环）。
 
     在每根已收盘 bar `i` 上，只使用 `≤ i` 的数据推断该 bar 收盘后的持仓状态——
@@ -169,19 +196,16 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
     trough = 0.0
     be_done = False
 
-    # ---- 因子偏置乘子（因子接入 PRD §5，V3.4 接入点 T5）----
-    # 以「乘子」方式接入，不重写核心循环：position_cap_scalar 缩放加码上限，
-    # entry_gate 门控新开仓。未传 symbol/trade_date 时保持中性（=原行为）。
-    _bias_cfg = get_settings().factor_bias
-    _eff_cap = max(1, int(round(p.add_max_lots * 1.0)))
-    _entry_gate = 1.0
-    _ctx = _get_factor_ctx()
-    if _ctx is not None and symbol is not None and trade_date is not None:
-        _b_ids = [fid for fid, m in _ctx.registry.items() if m.get("category") == "B"]
-        _zs = _ctx.lookup_many(_b_ids, symbol, trade_date)
-        _b = compute_bias_multipliers(_zs, _ctx.registry, _bias_cfg)
-        _eff_cap = max(1, int(round(p.add_max_lots * _b["position_cap_scalar"])))
-        _entry_gate = _b["entry_gate"]
+    # ---- 因子偏置乘子（短路：默认无因子路径近乎零成本，V3.4 接入点 T5）----
+    # 以「乘子」方式接入，不重写 V3.4 核心循环：position_cap_scalar 缩放加码上限，
+    # entry_gate 门控新开仓。无 ctx / 无 symbol·trade_date / 无启用 B 因子时
+    # get_bias_multipliers 直接返回中性乘子（=今天 ctx=None 的逐位等价行为），跳过全部查找。
+    _b = get_bias_multipliers(_get_factor_ctx(), symbol, trade_date, p)
+    _eff_cap = max(1, int(round(p.add_max_lots * _b["position_cap_scalar"])))
+    _entry_gate = _b["entry_gate"]
+    # gate_threshold 来自 factor_bias 配置（get_settings 为缓存单例，调用成本可忽略）；
+    # 默认无因子路径下仍保持原 L175 的同等成本，不影响「近乎零成本」目标。
+    _gate_threshold = get_settings().factor_bias.gate_threshold
 
     for i in range(2, n):
         if h[i - 1] > h[i - 2] and h[i - 1] > h[i]:
@@ -301,7 +325,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
             if adx_min > 0 and adx_arr[i - 1] < adx_min:
                 s_tl = s_ts = s_bkl = s_bks = False
 
-            if (s_tl or s_bkl) and _entry_gate >= _bias_cfg.gate_threshold:
+            if (s_tl or s_bkl) and _entry_gate >= _gate_threshold:
                 state = 1
                 entry_px = c[i]
                 avg_px = c[i]
@@ -311,7 +335,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p):
                 peak = c[i]
                 trough = c[i]
                 be_done = False
-            elif (s_ts or s_bks) and _entry_gate >= _bias_cfg.gate_threshold:
+            elif (s_ts or s_bks) and _entry_gate >= _gate_threshold:
                 state = 2
                 entry_px = c[i]
                 avg_px = c[i]
@@ -380,7 +404,7 @@ def fusion_state_detail(o, h, l, c, htf_dir, p, symbol=None, trade_date=None) ->
         "entry_atr": None, "peak": None, "trough": None, "be_done": False,
         "be_trigger": None, "init_stop": None, "trail_stop": None, "cur_stop": None,
     }
-    for d in walk_fusion_states(o, h, l, c, htf_dir, p):
+    for d in walk_fusion_states(o, h, l, c, htf_dir, p, symbol=symbol, trade_date=trade_date):
         last = d
     return last
 
