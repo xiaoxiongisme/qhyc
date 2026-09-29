@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.api.routers.health import _readiness
 from app.backtest.engine import BacktestParams, backtest_symbols
+from app.backtest.robustness import run_six_checks
 from app.backtest.fusion_backtest import (
     FusionBacktestParams,
     fusion_params_from_config,
@@ -183,6 +184,72 @@ def run_fusion(req: FusionBacktestRequest, bg: BackgroundTasks):
         bg.add_task(_task)
         return {"status": "scheduled", "message": "融合策略回测在后台执行"}
     return _task()
+
+
+# ----------------------------------------------------------
+# 稳健性闸门（把 futures-backtest-merge 的纪律固化成可调用接口）
+# ----------------------------------------------------------
+#: run_six_checks 的逐笔口径（与 app/strategies/magic_axis.run_magic 输出一致）。
+#: 融合引擎（fusion_backtest._simulate_trades）产出的是 entry_dt/entry_px/pnl 口径，
+#: 无 R/risk（ATR 风险未外露），**不能直接过闸** —— 这里显式校验，避免"闸门假生效"。
+ROBUSTNESS_REQUIRED_FIELDS = ("R", "risk", "ep", "xp", "edt", "xdt", "dir")
+
+
+class RobustnessRequest(BaseModel):
+    trades: list[dict] = Field(
+        ..., description=f"逐笔明细，必须含 {list(ROBUSTNESS_REQUIRED_FIELDS)}；"
+                         f"可选 sym/mult（见 app/strategies/magic_axis.run_magic 输出）"
+    )
+    cost_bp: float = Field(5.0, ge=0, le=100, description="双边成本（bp）")
+    base: Optional[list[dict]] = Field(
+        None, description="基线逐笔（同口径）：传入则额外做「静默退化」判定"
+    )
+    base_params: Optional[dict] = None
+    variant_params: Optional[dict] = None
+
+
+def _missing_fields(trades: list[dict]) -> list[str]:
+    """逐笔口径体检：缺字段一律拒绝，不让闸门在 KeyError 里静默退化。"""
+    if not trades:
+        return list(ROBUSTNESS_REQUIRED_FIELDS)
+    missing: set[str] = set()
+    for t in trades:
+        missing.update(f for f in ROBUSTNESS_REQUIRED_FIELDS if f not in t)
+        if missing:
+            break
+    return sorted(missing)
+
+
+@router.post("/robustness")
+def run_robustness(req: RobustnessRequest):
+    """稳健性六项检验闸门（净利/集中度/分半/逐年/成本/随机入场 + 自助 CI + 对称硬闸门）。
+
+    纯计算、不碰数据库：任何策略只要产出 R/risk/ep/xp/edt/xdt 口径的逐笔即可过闸，
+    供「新策略 enabled 之前先过闸」（PRD 策略注册表约定）调用。
+
+    返回 ``pass_all`` / ``failed``：判定为**建议**，本接口不阻断任何写入。
+    """
+    for label, batch in (("trades", req.trades), ("base", req.base or [])):
+        if label == "base" and not batch:
+            continue
+        miss = _missing_fields(batch)
+        if miss:
+            raise HTTPException(
+                400,
+                detail=f"{label} 缺少必需字段 {miss}；"
+                       f"口径见 app/strategies/magic_axis.run_magic 输出",
+            )
+    try:
+        return run_six_checks(
+            req.trades,
+            cost_bp=req.cost_bp,
+            base=req.base,
+            base_params=req.base_params,
+            variant_params=req.variant_params,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[robustness] failed: {e}")
+        raise HTTPException(500, detail=f"稳健性检验失败：{e}")
 
 
 class FusionMatrixRequest(BaseModel):

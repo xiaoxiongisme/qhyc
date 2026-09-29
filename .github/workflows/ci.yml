@@ -1,0 +1,59 @@
+name: CI
+
+# 最小可守门流水线：测试（阻塞）+ 静态检查（语法/未定义阻塞，风格非阻塞）+ 镜像构建（阻塞）
+# 目的：防止「测试默认跑不起来」「改了代码无人回归」——2026-09-29 排查实录：
+#   python -m pytest tests/ 曾因 scripts 不在 sys.path 而**整轮 0 用例运行**（已由根 conftest.py 修复）。
+
+on:
+  push:
+    branches: ["cb/dev", "main"]
+  pull_request:
+    branches: ["cb/dev", "main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run tests
+        run: python -m pytest tests/ -q
+      - name: Guard — tests must actually run
+        run: |
+          n=$(python -m pytest tests/ -q --collect-only 2>/dev/null | grep -c '::' || true)
+          echo "collected cases: $n"
+          test "$n" -gt 40 || { echo "::error::collected too few cases ($n) — 疑似收集中断"; exit 1; }
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      # 阻塞级只守「会真的炸」的规则：语法错误 + 未定义名 + 重定义。
+      # 不把 F401/F841/F541（未用导入/未用变量/占位符缺失）纳入阻塞 —— 存量 118 项，
+      # 一次性判红只会让 CI 第一天就被忽略。它们的价值在于**能查出 NameError**：
+      # 2026-09-29 首轮接入即查出 13 处 F821（含 scheduler 的 mxt / subprocess / _dt
+      # 三个必然失败的作业），已全部修复，此后该门禁须恒为 0。
+      - name: Ruff (blocking)
+        run: ruff check --select E9,F811,F821,F822 app scripts tests conftest.py
+      # 非阻塞：风格类问题只报告，随改造逐步收敛
+      - name: Ruff (advisory)
+        run: ruff check --exit-zero --select E,F app scripts tests conftest.py
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t qhyc:ci .

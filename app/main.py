@@ -48,11 +48,19 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # 鉴权启用后自动隐藏交互式文档与 openapi 清单：未启用时保持开放，便于本地开发。
+    # 与 verify_api_key 同源判据（真实 key ⇒ 隐藏），避免"配了 key 却仍把接口清单公开"。
+    from app.core.security import auth_enabled
+
+    _docs_on = not auth_enabled()
     app = FastAPI(
         title="期货预测平台 API",
         version=__version__,
         description="国内期货涨跌预测平台（M1 数据层 + M2/M3 预测引擎 + M4 回测 + M5 看板）",
         lifespan=lifespan,
+        docs_url="/docs" if _docs_on else None,
+        redoc_url="/redoc" if _docs_on else None,
+        openapi_url="/openapi.json" if _docs_on else None,
     )
     # API 路由优先注册
     app.include_router(api_router)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -556,7 +557,7 @@ def _collect_hourly_settled(s, f) -> None:
     ).one()
     fp1 = fp()
     wait = settle - age + 3
-    logger.info(f"[fusion] 最新K({mxt:%Y-%m-%d %H:%M}) 刚收盘 {age:.0f}s，等 {wait:.0f}s 定稿后重采")
+    logger.info(f"[fusion] 最新K({mx:%Y-%m-%d %H:%M}) 刚收盘 {age:.0f}s，等 {wait:.0f}s 定稿后重采")
     time.sleep(wait)
     try:
         hc.collect_all(data_length=800)
@@ -566,11 +567,11 @@ def _collect_hourly_settled(s, f) -> None:
     fp2 = fp()
     if fp1 != fp2:
         logger.warning(
-            f"[fusion] ⚠ 定稿复核：{mxt:%Y-%m-%d %H:%M} 这根K的值被数据源改写了 "
+            f"[fusion] ⚠ 定稿复核：{mx:%Y-%m-%d %H:%M} 这根K的值被数据源改写了 "
             f"(根数/收盘和 {fp1} → {fp2})，首采值已覆盖为定稿值"
         )
     else:
-        logger.info(f"[fusion] 定稿复核通过：{mxt:%Y-%m-%d %H:%M} 首采值即为定稿值")
+        logger.info(f"[fusion] 定稿复核通过：{mx:%Y-%m-%d %H:%M} 首采值即为定稿值")
 
 
 def _fusion_scan_job() -> None:
@@ -1655,6 +1656,8 @@ def _spot_basis_job() -> None:
     """
     logger.info("[scheduler] spot_basis collect start")
     try:
+        import datetime as _dt
+
         from app.ingest import spot_basis as SB
 
         settings = get_settings()

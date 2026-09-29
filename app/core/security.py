@@ -13,6 +13,8 @@ API 安全层（评估文档 §8.1 / P0#3：API 鉴权中间件 + 替换占位�
 """
 from __future__ import annotations
 
+import hmac
+
 from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
@@ -27,9 +29,14 @@ _PLACEHOLDER_KEYS = {
 }
 
 
-def _auth_enabled() -> bool:
+def auth_enabled() -> bool:
+    """部署侧是否配置了真实 API Key（对外暴露，供 main.py 决定 /docs 是否开放）。"""
     key = (get_settings().env.INTEGRATION_API_KEY or "").strip()
     return key not in _PLACEHOLDER_KEYS
+
+
+# 兼容旧名（内部使用）
+_auth_enabled = auth_enabled
 
 
 async def verify_api_key(key: str | None = Security(_api_key_header)) -> str | None:
@@ -38,9 +45,10 @@ async def verify_api_key(key: str | None = Security(_api_key_header)) -> str | N
     返回有效 key（供路由使用）；未启用鉴权时返回 ``None``（放行）；
     已启用但缺失/不匹配时抛 ``403``。
     """
-    if not _auth_enabled():
+    if not auth_enabled():
         return None  # 鉴权未启用：放行，保持向后兼容
-    expected = get_settings().env.INTEGRATION_API_KEY
-    if key is None or key != expected:
+    expected = (get_settings().env.INTEGRATION_API_KEY or "").strip()
+    # 常量时间比较，避免按字节逐位比对泄露 key 前缀（计时侧信道）
+    if key is None or not hmac.compare_digest(key, expected):
         raise HTTPException(status_code=403, detail="Invalid or missing API Key")
     return key

@@ -69,7 +69,10 @@ services:
       # M8：简报产物目录（api 只读，供 /pipeline/brief/{date} 读取；写由 pipeline 容器完成）
       - ${QH_BRIEF_PATH}:/app/qh:ro
     ports:
-      - "${API_PORT:-8000}:8000"
+      # 安全：仅绑宿主环回。API 无鉴权时（INTEGRATION_API_KEY 为占位符）不应对局域网开放，
+      # 否则 13 个 POST 写端点（ingest/imports/backtest/update-weights/pipeline/run…）可被任意访问。
+      # 需要外部访问时走 ssh 隧道或反向代理，不要改回 0.0.0.0。
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     command: ["python", "-m", "app.main"]
 
   scheduler:

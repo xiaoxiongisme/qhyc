@@ -22,8 +22,6 @@ from app.core.logging import logger
 
 
 def main(symbol: str = "FG888"):
-    import numpy as np
-
     from app.features.pipeline import features_from_series, load_canonical_series, ret_series
     from app.predictors import MODEL_REGISTRY
 

@@ -224,9 +224,9 @@ def coverage(symbol: Optional[str] = None) -> pd.DataFrame:
         try:
             with _engine().connect() as conn:
                 n, nsym, t0, t1 = conn.execute(text(sql), params).first()
-            rows.append(dict(freq=freq, caliber=caliber, table=r.table,
+            rows.append(dict(freq=freq, caliber=cal, table=r.table,
                              rows=n, symbols=nsym, start=t0, end=t1))
         except Exception as e:  # noqa: BLE001
-            rows.append(dict(freq=freq, caliber=caliber, table=r.table,
+            rows.append(dict(freq=freq, caliber=cal, table=r.table,
                              rows=None, symbols=None, start=None, end=str(e)[:60]))
     return pd.DataFrame(rows)

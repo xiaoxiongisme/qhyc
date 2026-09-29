@@ -83,7 +83,9 @@ services:
       # ⚠ 不要挂 ./config 覆盖镜像内配置：云端若目录为空会把配置盖没。
       #   需要改配置走 env 覆盖，或在服务器上放好 config 再挂。
     ports:
-      - "${API_PORT:-8000}:8000"
+      # 安全：仅绑宿主环回（与本地 compose 同策略）。API 在 key 为占位符时不鉴权，
+      # 绑 0.0.0.0 等于把 13 个 POST 写端点暴露到公网。外部访问走 ssh -L 或反向代理。
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     command: ["python", "-m", "app.main"]
 
   scheduler:

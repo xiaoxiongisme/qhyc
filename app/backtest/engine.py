@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
