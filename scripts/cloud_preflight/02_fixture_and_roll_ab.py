@@ -107,13 +107,13 @@ def compare(cur, sym, freqs, mode, pre_max):
             if k not in ex:
                 rows_eq = False; diffs.append(f"seg_no={k} 仅 A 有"); continue
             a, b = sp[k], ex[k]
-            if (abs(float(a[2]) - float(b[3])) > 1e-6 or
-                abs(float(a[3]) - float(b[4])) > 1e-6 or
-                abs(float(a[4]) - float(b[5])) > 1e-6 or
+            if (abs(float(a[2]) - float(b[2])) > 1e-6 or
+                abs(float(a[3]) - float(b[3])) > 1e-6 or
+                abs(float(a[4]) - float(b[4])) > 1e-6 or
                 a[1] != b[1]):
                 rows_eq = False
-                diffs.append(f"seg_no={k}: start {a[1]} vs {b[1]} | delta {a[2]} vs {b[3]} "
-                             f"| cum {a[3]} vs {b[4]} | shift {a[4]} vs {b[5]}")
+                diffs.append(f"seg_no={k}: start {a[1]} vs {b[1]} | delta {a[2]} vs {b[2]} "
+                             f"| cum {a[3]} vs {b[3]} | shift {a[4]} vs {b[4]}")
         if len(sp_keys) != len(ex_keys):
             rows_eq = False
             diffs.append(f"段数不一致 A={len(sp_keys)} B={len(ex_keys)}")

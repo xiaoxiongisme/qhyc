@@ -83,10 +83,10 @@ BEGIN
         INSERT INTO %I (symbol, bucket, open, high, low, close, volume, open_interest)
         SELECT symbol,
                time_bucket($1, ts) AS bucket,
-               first(open  ORDER BY ts) AS open,
-               max(high)               AS high,
-               min(low)                AS low,
-               last(close ORDER BY ts) AS close,
+               first(open, ts)  AS open,
+               max(high)        AS high,
+               min(low)         AS low,
+               last(close, ts)  AS close,
                sum(volume)             AS volume,
                max(open_interest)      AS open_interest
         FROM minute_bar
