@@ -114,6 +114,14 @@ def compare(cur, sym, freqs, mode, pre_max):
                 rows_eq = False
                 diffs.append(f"seg_no={k}: start {a[1]} vs {b[1]} | delta {a[2]} vs {b[2]} "
                              f"| cum {a[3]} vs {b[3]} | shift {a[4]} vs {b[4]}")
+        # 2026-10-01 新增守卫：n_bars 曾因 sp 的 INSERT 漏列而**整列为 NULL**（见 migrations/010）。
+        # 该列不参与 A/B 数值比对，单独断言非空，避免同类回归再次静默通过。
+        cur.execute("SELECT count(*) FROM roll_segment "
+                    "WHERE symbol=%s AND freq=%s AND n_bars IS NULL", (sym, f))
+        n_null = cur.fetchone()[0]
+        if n_null:
+            rows_eq = False
+            diffs.append(f"n_bars 为 NULL 的段数={n_null}（sp INSERT 漏列？）")
         if len(sp_keys) != len(ex_keys):
             rows_eq = False
             diffs.append(f"段数不一致 A={len(sp_keys)} B={len(ex_keys)}")

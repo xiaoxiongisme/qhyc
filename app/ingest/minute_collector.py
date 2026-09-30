@@ -121,17 +121,25 @@ class MinuteCollector:
         return self._tq_api
 
     # ---------- 公开 API ----------
-    def collect_symbol(self, spec: MainContractSpec, data_length: int = 5000) -> int:
+    def collect_symbol(
+        self, spec: MainContractSpec, data_length: int = 5000, dry_run: bool = False
+    ) -> int:
         rows = self._fetch_tqsdk(spec, data_length=data_length)
         if not rows:
             logger.warning(f"[minute] {spec.symbol} 无数据")
             return 0
+        if dry_run:
+            logger.info(f"[minute] {spec.symbol} DRY-RUN 拉取 {len(rows)} 行（未写库）")
+            return len(rows)
         self._upsert(rows)
         logger.info(f"[minute] {spec.symbol} upserted {len(rows)}")
         return len(rows)
 
     def collect_all(
-        self, only_products: Iterable[str] | None = None, data_length: int = 5000
+        self,
+        only_products: Iterable[str] | None = None,
+        data_length: int = 5000,
+        dry_run: bool = False,
     ) -> list[dict]:
         specs = get_settings().main_contracts
         if only_products:
@@ -140,7 +148,9 @@ class MinuteCollector:
         try:
             for spec in specs:
                 try:
-                    n = self.collect_symbol(spec, data_length=data_length)
+                    n = self.collect_symbol(
+                        spec, data_length=data_length, dry_run=dry_run
+                    )
                     results.append({"symbol": spec.symbol, "rows": n})
                 except Exception as e:
                     logger.exception(f"[minute] {spec.symbol} 异常: {e}")
@@ -235,3 +245,75 @@ class MinuteCollector:
 
 
 __all__ = ["MinuteCollector"]
+
+
+def _main() -> None:
+    """临时独立入口：tqsdk 拉 1 分钟 → upsert 入 minute_bar（幂等，重复跑安全）。
+
+    用法（在 scheduler 容器内执行，本地 docker 即 qhyc 的「本地」部署）：
+        # 1) 先 dry-run 验证：只拉取统计、不写库
+        docker compose exec -T scheduler python -m app.ingest.minute_collector \\
+            --products RB --dry-run
+
+        # 2) 真实写入单品种最近 ~9000 根 1 分钟（免费源硬上限 10000 根）
+        docker compose exec -T scheduler python -m app.ingest.minute_collector \\
+            --products RB
+
+        # 3) 全主连品种（默认 data-length 9000）
+        docker compose exec -T scheduler python -m app.ingest.minute_collector
+
+    说明：
+    - 免费 tqsdk 连续合约 K 线硬上限 10000 根；1 分钟 ≈ 最近 ~21 交易日，无法回溯更早。
+    - upsert 用 ON CONFLICT (symbol, ts) DO NOTHING，已存在行跳过，可反复跑。
+    - 本入口仅供临时/手动补采；常规实时采集仍由 scheduler._minute_and_bars_job 负责。
+    """
+    import argparse
+
+    from app.core.db import session_scope
+
+    p = argparse.ArgumentParser(
+        description="临时 1 分钟采集（tqsdk → minute_bar，幂等 upsert）"
+    )
+    p.add_argument(
+        "--products",
+        help="逗号分隔品种码，如 RB,FG；省略=全部主连",
+        default=None,
+    )
+    p.add_argument(
+        "--data-length",
+        type=int,
+        default=9000,
+        help="tqsdk 单次拉取根数（免费源硬上限 10000；默认 9000≈最近 ~21 交易日）",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只拉取统计、不写库（用于先验证连通与行数）",
+    )
+    args = p.parse_args()
+
+    only = (
+        [x.strip().upper() for x in args.products.split(",") if x.strip()]
+        if args.products
+        else None
+    )
+
+    with session_scope() as s:
+        mc = MinuteCollector(s, prefer="tqsdk")
+        results = mc.collect_all(
+            only_products=only, data_length=args.data_length, dry_run=args.dry_run
+        )
+
+    ok = [r for r in results if "error" not in r]
+    err = [r for r in results if "error" in r]
+    total = sum(r.get("rows", 0) for r in ok)
+    tag = " [DRY-RUN 未写库]" if args.dry_run else ""
+    print(
+        f"[minute] 完成: 成功 {len(ok)}/{len(results)} 品种, 累计 {total} 行{tag}"
+    )
+    for r in err:
+        print(f"  ! {r['symbol']}: {r['error']}")
+
+
+if __name__ == "__main__":
+    _main()
