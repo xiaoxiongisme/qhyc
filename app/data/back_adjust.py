@@ -72,7 +72,9 @@ def map_offset(ts: pd.Series, segs: pd.DataFrame) -> pd.Series:
     if segs.empty:
         return pd.Series(0.0, index=ts.index)
     starts = pd.to_datetime(segs['seg_start']).tolist()
-    offs = segs['cum_offset'].astype(float).tolist()
+    # 接入 price_shift 常量抬升（见 apply_positivity）：后复权价 = raw + cum_offset + shift
+    # 修复前 map_offset 只用 cum_offset，导致 positivity 抬升形同虚设、长 backwardation 品种仍为负价
+    offs = _level(segs)
     idx = pd.to_datetime(ts)
     # searchsorted(side='right') - 1 → 最后一个 seg_start <= ts 的段
     # 注意：Series.searchsorted 返回的就是 ndarray，不能再 .to_numpy()
