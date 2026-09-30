@@ -66,8 +66,9 @@ BEGIN
         RETURN;
     END IF;
 
+    -- ⚠ 目标列名必须与 bar_* 真实 schema 一致：load_1min.py 定义的是 open_interest（非 oi）
     EXECUTE format($q$
-        INSERT INTO %I (symbol, bucket, open, high, low, close, volume, oi)
+        INSERT INTO %I (symbol, bucket, open, high, low, close, volume, open_interest)
         SELECT symbol,
                time_bucket($1, ts) AS bucket,
                first(open  ORDER BY ts) AS open,
@@ -75,13 +76,13 @@ BEGIN
                min(low)                AS low,
                last(close ORDER BY ts) AS close,
                sum(volume)             AS volume,
-               max(oi)                 AS oi
+               max(open_interest)      AS open_interest
         FROM minute_bar
         WHERE symbol ~ '^[A-Za-z]+8888?$'          -- 仅主连/指数连
         GROUP BY symbol, time_bucket($1, ts)
         ON CONFLICT (symbol, bucket) DO UPDATE
            SET open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-               close=EXCLUDED.close, volume=EXCLUDED.volume, oi=EXCLUDED.oi
+               close=EXCLUDED.close, volume=EXCLUDED.volume, open_interest=EXCLUDED.open_interest
         $q$, v_table)
         USING (v_interval::interval);
 
