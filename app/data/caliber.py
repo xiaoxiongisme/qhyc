@@ -25,14 +25,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-#: 合法口径（回测基准为 continuous）
-CALIBERS = ("continuous", "cont_adj", "contract")
+#: 合法口径
+#:   回测基准自 2026-09-30 起改为 **back_adj（等差后复权）**（用户拍板）；
+#:   cont_adj（加法前复权）因会产生负价（I888 最低 −1058.5，51.4% bar 为负）被废弃。
+CALIBERS = ("continuous", "back_adj", "cont_adj", "contract")
 
 #: 周期枚举（与 fut_kline.freq / bar_* 对齐）
 FREQS = ("1m", "5m", "15m", "30m", "60m", "hourly", "daily")
 
-#: 回测与对账的默认口径（PRD 铁律）
-DEFAULT_CALIBER = "continuous"
+#: 回测与对账的默认口径
+#: 2026-09-30 用户拍板：**改用等差后复权**。
+#: 依据（84 品种实测）：前复权 13 个品种历史价转负、且每次换月需全历史重写；
+#:   等差后复权把负价降到 3 个品种、ATR 零失真、且**只追加不必重算**。
+#: 注意：已有策略建议显式声明 caliber，避免依赖默认值。
+DEFAULT_CALIBER = "back_adj"
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,9 @@ class Route:
     #: 是否需要在 symbol 上做 888/8888 等后缀约束
     symbol_transform: str = ""
     note: str = ""
+    #: 复权方式："" = 不复权；"back" = **等差后复权**（套 roll_segment.cum_offset）
+    #: 由 app.data.back_adjust.apply_back_adjust 执行
+    adj: str = ""
 
 
 #: 路由表：(freq, caliber) -> Route
@@ -65,16 +74,26 @@ ROUTES: dict[tuple[str, str], Route] = {
     # —— 5 分钟 ——
     ("5m", "continuous"): Route("bar_5m", time_col="bucket",
                                 note="5 分钟未复权主连（888）"),
+    ("5m", "back_adj"):   Route("bar_5m", time_col="bucket", adj="back",
+                                note="5 分钟等差后复权（bar_5m + roll_segment）"),
     # —— 15 / 30 / 60 分钟 ——
     ("15m", "continuous"): Route("bar_15m", time_col="bucket", note="15m 未复权主连"),
     ("30m", "continuous"): Route("bar_30m", time_col="bucket", note="30m 未复权主连"),
     ("60m", "continuous"): Route("bar_60m", time_col="bucket", note="60m 未复权主连"),
+    ("15m", "back_adj"):   Route("bar_15m", time_col="bucket", adj="back",
+                                note="15m 等差后复权（bar_15m + roll_segment）"),
+    ("30m", "back_adj"):   Route("bar_30m", time_col="bucket", adj="back",
+                                note="30m 等差后复权"),
+    ("60m", "back_adj"):   Route("bar_60m", time_col="bucket", adj="back",
+                                note="60m 等差后复权"),
+    # 已废弃：加法前复权（会产生负价，见 scripts/deprecate_cont_adj.py）
     ("15m", "cont_adj"):   Route("fut_kline", where="freq='min15' AND kind='cont_adj'",
-                                 time_col="trade_datetime", note="15m 前复权（symbol=XXX888）"),
+                                 time_col="trade_datetime",
+                                 note="DEPRECATED 前复权：会产生负价且须全量重算"),
     ("30m", "cont_adj"):   Route("fut_kline", where="freq='min30' AND kind='cont_adj'",
-                                 time_col="trade_datetime", note="30m 前复权"),
+                                 time_col="trade_datetime", note="DEPRECATED 前复权"),
     ("60m", "cont_adj"):   Route("fut_kline", where="freq='min60' AND kind='cont_adj'",
-                                 time_col="trade_datetime", note="60m 前复权"),
+                                 time_col="trade_datetime", note="DEPRECATED 前复权"),
     # —— 小时线：融合策略主周期，必须单一源（akshare），杜绝双源混读 ——
     ("hourly", "continuous"): Route("hourly_bar", where="src='akshare'",
                                     time_col="trade_datetime",

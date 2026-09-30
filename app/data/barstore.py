@@ -135,13 +135,16 @@ def load(symbol: str, freq: str = "hourly",
     Args:
         symbol: 品种（如 FG）或完整符号（如 FG888 / KQ.m@CZCE.FG）
         freq:   1m/5m/15m/30m/60m/hourly/daily
-        caliber: continuous（默认，回测基准） / cont_adj（统计校验） / contract
+        caliber: continuous（未复权） / back_adj（**默认**，等差后复权）
+                 / cont_adj（前复权，已废弃） / contract
         start, end: 时间下界/上界（含）
         limit: 只取最近 N 根（按时间倒序后取尾部）
         resolve: 是否把 symbol 解析为首选符号（False = 严格按给定符号取）
 
     Returns:
-        DataFrame，列为 ts/open/high/low/close/volume/oi，按 ts 升序。
+        DataFrame，列为 ts/open/high/low/close/volume/oi，按 ts 升序；
+        caliber=back_adj 时**额外带一列 `adj_offset`**（该 bar 的复权偏移），
+        执行层下单前用 `real = adj - adj_offset` 反解真实合约价。
         无数据时返回**空 DataFrame**（不抛异常）。
     """
     route = get_route(freq, caliber)
@@ -164,19 +167,27 @@ def load(symbol: str, freq: str = "hourly",
     if limit:
         sql += f" LIMIT {int(limit)}"
 
-    with _engine().connect() as conn:
+    # 降级版本：bar_15m / bar_30m / bar_60m 这些未复权区间棒**没有 oi 列**
+    sql_no_oi = sql.replace(", volume, oi FROM", ", volume FROM")
+
+    df, last_err, level = None, None, 0
+    for attempt, s in enumerate((sql, sql_no_oi)):
         try:
-            df = pd.read_sql(text(sql), conn, params=params)
+            # **每次都开独立连接**：PG 里一条语句报错会把整个事务置为 aborted，
+            # 在同一连接上重试只会得到 InFailedSqlTransaction（实测踩过，
+            # 旧写法 `with connect(): try/except 再 pd.read_sql` 必然二次失败）
+            with _engine().connect() as conn:
+                df = pd.read_sql(text(s), conn, params=params)
+            level = attempt
+            break
         except Exception as e:  # noqa: BLE001
-            # 列名差异兜底：部分表无 oi 列
-            logger.warning(f"[barstore] {route.table} 取数降级（{e}），尝试无 oi 列")
-            sql2 = (f"SELECT {route.time_col} AS ts, open, high, low, close, "
-                    f"volume FROM {route.table} "
-                    f"WHERE {' AND '.join(where)} ORDER BY {route.time_col} {order}")
-            if limit:
-                sql2 += f" LIMIT {int(limit)}"
-            df = pd.read_sql(text(sql2), conn, params=params)
-            df["oi"] = 0
+            last_err = e
+    if df is None:
+        raise last_err
+    if level:
+        logger.warning(f"[barstore] {route.table} 无 oi 列，已降级取数（oi 置 0）")
+    if "oi" not in df.columns:
+        df["oi"] = 0
 
     if df.empty:
         return pd.DataFrame(columns=list(BASE_COLS))
@@ -190,7 +201,33 @@ def load(symbol: str, freq: str = "hourly",
         if c not in df.columns:
             df[c] = 0
     df["ts"] = pd.to_datetime(df["ts"])
-    return df[list(BASE_COLS)].sort_values("ts").reset_index(drop=True)
+    out = df[list(BASE_COLS)].sort_values("ts").reset_index(drop=True)
+
+    # —— 复权：套 roll_segment 的累积偏移 ——
+    # **必须在这里显式触发**：route.adj 是新增字段，若上层拿到 Route 自己拼 SQL
+    # 而此处不改，就会出现「口径写着 back_adj、取到的其实是未复权」的静默退化。
+    if route.adj:
+        out = _apply_adj(out, route.adj, sym, freq)
+    return out
+
+
+def _apply_adj(df: pd.DataFrame, adj: str, symbol: str, freq: str) -> pd.DataFrame:
+    """按 route.adj 对已取到的未复权序列做复权。
+
+    目前只支持 adj='back'（等差后复权）。返回列 = BASE_COLS + ['adj_offset']，
+    `adj_offset` 供执行层反解真实合约价（`real = adj - adj_offset`）。
+    """
+    if adj != "back":
+        raise ValueError(f"未知复权方式 {adj!r}（只支持 'back'）")
+    from app.data.back_adjust import apply_back_adjust  # 局部导入避免循环依赖
+
+    if df.empty:
+        return df.assign(adj_offset=pd.Series(dtype=float))
+    f = {"5m": "min5", "15m": "min15", "30m": "min30", "60m": "min60"}.get(freq, freq)
+    with _engine().connect() as conn:
+        adj_df = apply_back_adjust(df, symbol, f, session=conn, time_col="ts")
+    # adj_offset 追加在最末：老代码用 df[list(BASE_COLS)] 或按名取列不受影响
+    return adj_df[list(BASE_COLS) + ["adj_offset"]].reset_index(drop=True)
 
 
 def load_many(symbols: list[str], freq: str = "hourly",
