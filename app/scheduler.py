@@ -33,6 +33,28 @@ from app.core.logging import logger, setup_logging
 from app.ingest.orchestrator import IngestOrchestrator
 from app.repositories.task_repo import TaskRepository
 from app.core.db import get_engine
+
+
+def _switch_on(switch_key: str, env_name: str | None = None, default: bool = False) -> bool:
+    """读功能开关：优先 cfg_feature_switch（迁移 008），表缺失/异常时回退 env。
+
+    迁移 008 应用后由数据库控制；迁移前（表不存在）行为与现在完全一致（env 为准）。
+    回退路径绝不抛错，避免熔断误杀。
+    """
+    try:
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("SELECT enabled FROM cfg_feature_switch WHERE switch_key = :k"),
+                {"k": switch_key}).scalar()
+            if row is not None:
+                return bool(row)
+    except Exception:  # noqa: BLE001  表不存在 / 连接失败 → 回退
+        pass
+    if env_name is not None:
+        return os.getenv(env_name, "1" if default else "0") == "1"
+    return default
+
+
 from app.strategies.fusion_signal import (
     ensure_fusion_table,
     evaluate_all,
@@ -1307,7 +1329,7 @@ def _build_scheduler() -> BlockingScheduler:
     # ---- 因子层（Phase 4 / 新 PRD T22）-------------------------------------
     # 顺序：收盘(15:00) → 16:20 因子计算 → 16:45 IC 监控 → 17:35 数据自检。
     # 三者都用 subprocess 隔离（耗时长 / 需独立 DB 连接），且脚本自带幂等。
-    if os.getenv("FACTOR_COMPUTE_ENABLED", "1") == "1":
+    if _switch_on("factor_v1v6_enabled", "FACTOR_COMPUTE_ENABLED", default=True):
         sched.add_job(
             _factor_v1v6_job,
             trigger=CronTrigger(hour=16, minute=20, timezone=settings.env.TZ),
@@ -1319,7 +1341,7 @@ def _build_scheduler() -> BlockingScheduler:
         )
         logger.info("[scheduler] registered cron 16:20 (factor_v1v6_daily)")
 
-    if os.getenv("FACTOR_IC_MONITOR_ENABLED", "1") == "1":
+    if _switch_on("factor_ic_monitor_enabled", "FACTOR_IC_MONITOR_ENABLED", default=True):
         sched.add_job(
             _factor_ic_monitor_job,
             trigger=CronTrigger(hour=16, minute=45, timezone=settings.env.TZ),
@@ -1334,7 +1356,7 @@ def _build_scheduler() -> BlockingScheduler:
     # ---- 数据自检（Phase 5 / 新 PRD T19，V4）--------------------------------
     # 默认关闭（SelfCheckConfig.enabled=False），由 DATA_SELFCHECK_ENABLED=1 开启；
     # 只写 anomaly_ticket 工单，**不阻塞**决策链。
-    if os.getenv("DATA_SELFCHECK_ENABLED", "0") == "1":
+    if _switch_on("data_selfcheck_enabled", "DATA_SELFCHECK_ENABLED", default=False):
         sched.add_job(
             _data_selfcheck_job,
             trigger=CronTrigger(hour=17, minute=35, timezone=settings.env.TZ),
@@ -1443,7 +1465,7 @@ def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
       "清仓"只由 dd_stop 的 scalar=0.0 触发，语义必须唯一）；
     * 任何异常都只记录并恒等返回 —— 熔断失效可以，误杀不行。
     """
-    if os.getenv("PORTFOLIO_BRAKE_ENABLED", "0") != "1" or not results:
+    if not _switch_on("portfolio_brake_enabled", "PORTFOLIO_BRAKE_ENABLED", default=False) or not results:
         return results
     try:
         import math

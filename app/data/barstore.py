@@ -121,6 +121,53 @@ def namespace_conflicts() -> list[dict]:
             for r in rows]
 
 
+def variety_of(symbol: str) -> str:
+    """给定任意符号（品种/主连/合约），返回其品种代码（CU/AU/FG）。
+
+    走 dim_symbol → dim_contract 两路解析，全部失败则原样返回 symbol 的产品前缀。
+    上层只需拿品种代码，所有 888/8888/KQ.m@ 转换由此屏蔽。
+    """
+    with _engine().connect() as conn:
+        row = conn.execute(
+            text("SELECT product FROM dim_symbol WHERE symbol = :s"),
+            {"s": symbol}).first()
+        if row:
+            return row[0]
+        row = conn.execute(
+            text("SELECT variety_code FROM dim_contract WHERE contract_code = :s"),
+            {"s": symbol}).first()
+        if row:
+            return row[0]
+    # 兜底：直接取字母前缀（AP2701 → AP）
+    import re
+    m = re.match(r"^([A-Za-z]+)", symbol)
+    return m.group(1).upper() if m else symbol
+
+
+def resolve_contract(contract_code: str) -> dict:
+    """按标准合约码（AP2701）查合约配置表，返回生命周期/主力归属。
+
+    返回字段：contract_code, variety_code, exchange, delivery_year, delivery_month,
+             list_date, last_trade_date, main_symbol, is_main, is_active。
+    dim_contract 未迁移时返回空 dict（调用方自行降级到 dim_symbol）。
+    """
+    try:
+        with _engine().connect() as conn:
+            row = conn.execute(text(
+                "SELECT contract_code, variety_code, exchange, delivery_year, delivery_month, "
+                "       list_date, last_trade_date, main_symbol, is_main, is_active "
+                "FROM dim_contract WHERE contract_code = :c"
+            ), {"c": contract_code}).first()
+        if row:
+            cols = ("contract_code", "variety_code", "exchange", "delivery_year",
+                    "delivery_month", "list_date", "last_trade_date", "main_symbol",
+                    "is_main", "is_active")
+            return dict(zip(cols, row))
+    except Exception:  # noqa: BLE001  dim_contract 未迁移 → 降级
+        pass
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # 取数
 # ---------------------------------------------------------------------------

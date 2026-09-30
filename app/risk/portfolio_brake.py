@@ -33,6 +33,30 @@ class BrakeConfig:
     lookback: int = 250        # 峰值回看窗口（交易日）
 
 
+def load_brake_config() -> BrakeConfig:
+    """从 cfg_feature_switch（迁移 008）读取熔断配置；表缺失/异常时退回默认（关闭）。
+
+    调用方（scheduler._apply_portfolio_brake）改用本函数即可由数据库控制启停，
+    无需改 env / 改代码。enabled 与阈值 dd_warn/dd_stop/lookback 均可经库内
+    UPDATE cfg_feature_switch 调整（value 列存 JSON，形如 {"dd_warn":0.15,...}）。
+    """
+    from app.core.feature_switch import is_enabled, get_value
+
+    enabled = is_enabled("portfolio_brake_enabled", default=False)
+    cfg = BrakeConfig(enabled=enabled)
+    raw = get_value("portfolio_brake_enabled")
+    if raw:
+        try:
+            import json
+            kv = json.loads(raw) if raw.strip().startswith("{") else {}
+            cfg.dd_warn = float(kv.get("dd_warn", cfg.dd_warn))
+            cfg.dd_stop = float(kv.get("dd_stop", cfg.dd_stop))
+            cfg.lookback = int(kv.get("lookback", cfg.lookback))
+        except (ValueError, TypeError):
+            logger.warning("[portfolio_brake] value 解析失败，用默认值")
+    return cfg
+
+
 def max_drawdown(equity: list[float]) -> float:
     """权益序列的最大回撤（正数，如 0.18 表示 -18%）。"""
     if not equity:
