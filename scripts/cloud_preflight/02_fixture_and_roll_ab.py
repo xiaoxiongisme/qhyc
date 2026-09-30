@@ -5,15 +5,12 @@
 测试品种 ZZ888/ZZ8888（插入并清理，绝不污染真实数据）；real 模式对真实品种跑 sp
 （仅追加），对比后删除新增段以还原。
 
-已知分歧（如实报告，不假装相等）：
-  1) 检测锚点：B 固定 15m 锚定再映射；A 直接在目标 freq 跑双门。
-     → 真实数据 30m/60m 换月位置会不一致（B 注释实测 30/60m 段数少 17%）。
-       synthetic 干净数据位置一致，无法暴露此分歧，需 --mode real 看 30m/60m。
-  2) roll_delta 基准：B 用锚点 gap=open[i]-close[i-1]；A 用 cc=close[i]-close[i-1]。
-  3) price_shift：B 用 ceil 正数抬升（仅当 min<=0）；A 用 abs(min cum_offset)。
-  4) src_freq：B 恒 min15；A 用 p_freq。
+忠实移植说明（2026-09-30 用户拍板：以 15m 锚定原版为准，不得简化）：
+  sp_build_l2_roll_segment 现已**忠实移植** build_roll_segments.py（252/252 验收）：
+  固定 15m 锚点、delta 取锚点 gap、双门 |cc|>(amp+1e-6) & |Δ8888|<0.40|cc|、
+  src_freq 恒 min15、price_shift 默认 0。两侧为同一算法，A/B 应**逐行相等**。
 
-退出码：0=仅已知分歧、min15 位置一致；2=min15 换月位置不一致（双门移植有真 bug）。
+退出码：0=全部字段逐行相等（含 roll_delta/cum_offset/price_shift）；2=存在不一致（回归）。
 """
 import argparse, os, sys, importlib.util
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -79,7 +76,8 @@ def compute_expected(cur, brs, sym, freqs):
             continue
         _, roll, delta_ev = brs.map_roll_to_freq(g, events, FREQ_MIN[f])
         segs = brs.build_segments(g, roll, delta_ev)
-        brs.apply_positivity(g, segs)
+        # 默认不调 apply_positivity（与原版默认不带 --positivity 一致），
+        # 使 A/B 在默认 positivity 关闭时 price_shift 均=0，可严格逐行比对。
         for s in segs:
             cur.execute("INSERT INTO roll_expected VALUES (%s,%s,%s,%s,%s,%s,%s)",
                         (sym, f, s['seg_no'], s['seg_start'], s['roll_delta'],
@@ -89,6 +87,7 @@ def compute_expected(cur, brs, sym, freqs):
 def compare(cur, sym, freqs, mode, pre_max):
     print("\n" + "=" * 96)
     print(" L2 A/B 对拍判定（A=sp_build_l2_roll_segment / B=build_roll_segments.py）")
+    print("  忠实移植：两侧应逐行相等（默认 positivity 关闭，price_shift 均=0）")
     print("=" * 96)
     exit_code = 0
     for f in freqs:
@@ -99,28 +98,35 @@ def compare(cur, sym, freqs, mode, pre_max):
                     "WHERE symbol=%s AND freq=%s ORDER BY seg_no", (sym, f))
         ex = {r[0]: r for r in cur.fetchall()}
         pm = pre_max.get(f, -1)
-        sp_pos = set(v[1] for v in sp.values())
-        ex_pos = set(v[1] for k, v in ex.items() if mode == 'synthetic' or k > pm)
-        pos_match = (sp_pos == ex_pos)
-        sp_delta = [sp[k][2] for k in sorted(sp) if (mode == 'synthetic' or k > pm)]
-        ex_delta = [ex[k][3] for k in sorted(ex) if (mode == 'synthetic' or k > pm)]
-        delta_eq = (len(sp_delta) == len(ex_delta)
-                    and all(abs(float(a) - float(b)) < 1e-6 for a, b in zip(sp_delta, ex_delta)))
-        sp_ps = set(round(float(v[4]), 2) for v in sp.values())
-        ex_ps = set(round(float(v[4]), 2) for v in ex.values())
-        print(f"\n[{f}] 段数 A={len(sp)} B={len(ex)} | 位置一致={pos_match} | delta基准一致={delta_eq}")
-        print(f"    A price_shift={sp_ps}  B price_shift={ex_ps}")
-        if not pos_match:
-            if f == 'min15':
-                print("    ❌ min15 位置不一致 → 双门移植存在真 bug，退出码 2")
-                exit_code = 2
-            else:
-                print(f"    ⚠ {f} 位置不一致：预期（已知分歧#1 锚点），非 bug")
-        if not delta_eq:
-            print(f"    ⚠ delta 基准不同（已知分歧#2：A用cc / B用gap），示例 A={sp_delta[:3]} B={ex_delta[:3]}")
+        # 增量模式只对「新增段」严格比对（历史段已由 Python 生成，不在 sp 增量范围内）
+        sp_keys = [k for k in sorted(sp) if mode == 'synthetic' or k > pm]
+        ex_keys = [k for k in sorted(ex) if mode == 'synthetic' or k > pm]
+        rows_eq = True
+        diffs = []
+        for k in sp_keys:
+            if k not in ex:
+                rows_eq = False; diffs.append(f"seg_no={k} 仅 A 有"); continue
+            a, b = sp[k], ex[k]
+            if (abs(float(a[2]) - float(b[3])) > 1e-6 or
+                abs(float(a[3]) - float(b[4])) > 1e-6 or
+                abs(float(a[4]) - float(b[5])) > 1e-6 or
+                a[1] != b[1]):
+                rows_eq = False
+                diffs.append(f"seg_no={k}: start {a[1]} vs {b[1]} | delta {a[2]} vs {b[3]} "
+                             f"| cum {a[3]} vs {b[4]} | shift {a[4]} vs {b[5]}")
+        if len(sp_keys) != len(ex_keys):
+            rows_eq = False
+            diffs.append(f"段数不一致 A={len(sp_keys)} B={len(ex_keys)}")
+        print(f"\n[{f}] 比对段数={len(sp_keys)} | 逐行相等={rows_eq}")
+        for d in diffs[:10]:
+            print("    ❌", d)
+        if not rows_eq:
+            exit_code = 2
     print("\n" + "=" * 96)
     if exit_code == 0:
-        print(" 判定：min15 位置一致（双门数学自洽）。其余差异均为「已知分歧」，需产品决策。")
+        print(" 判定：A/B 逐行完全相等 → 忠实移植校验通过，可退役 Python（保留为基准）。")
+    else:
+        print(" 判定：存在不一致 → 回归，必须先修 sp，切勿退役 Python。")
     print("=" * 96)
     return exit_code
 

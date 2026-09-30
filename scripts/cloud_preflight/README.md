@@ -5,18 +5,22 @@
 
 ## 重要发现（写本 harness 时确认）
 
-### 发现 1 · `sp_build_l2_roll_segment` 不是 Python 版（`build_roll_segments.py` 已 252/252 验收）的忠实移植
-逐条比对，有 4 处实质差异：
+### 发现 1（已修复）· `sp_build_l2_roll_segment` 原先是简化版，现已忠实移植
+初版 009 写 sp 时把双门检测"凭印象重写"而非逐行移植，漏掉了你踩坑固化的三道硬约束：
+15m 锚定、`gap=open[i]-close[i-1]`、price_shift 的 ceil 公式。2026-09-30 你拍板「以 15m 锚定
+原版为准，不得简化/改变/添加」后，009 的 sp 已改为**忠实移植** `build_roll_segments.py`（252/252 验收）：
 
-| 维度 | Python 基准（验收版） | sp 版（009） | 后果 |
+| 维度 | Python 基准（验收版） | sp 版（009，修复后） | 状态 |
 |---|---|---|---|
-| 检测锚点 | **统一 15m 锚定**再映射到目标 freq | 直接在目标 freq 跑双门（无固定锚） | 真实数据上 30m/60m 换月位置不一致（Python 注释实测 30/60m 段数少 17%） |
-| roll_delta 基准 | **锚点 gap = `open[i]-close[i-1]`** | `cc = close[i]-close[i-1]` | 各周期累积偏移量级发散 |
-| price_shift | `ceil((-min+0.01·range)/100)·100`，仅当 min≤0 | `abs(min(cum_offset))` 对所有行 | 数值与触发条件都不同 |
-| src_freq | 恒 `min15` | 等于 `p_freq` | 治理口径不一致 |
+| 检测锚点 | 统一 15m 锚定再映射 | 固定 `bar_15m` 锚点 + 包含关系映射到目标 freq | ✅ 一致 |
+| roll_delta 基准 | 锚点 gap = `open[i]-close[i-1]` | 同左（映射落点用锚点 gap） | ✅ 一致 |
+| 双门 | `\|cc\|>(amp+1e-6)` & `\|Δ8888\|<0.40\|cc\|` | 同左 | ✅ 一致 |
+| price_shift | ceil 公式，仅当 min≤0，默认不调 | `p_positivity` 默认 false → 0；true 时取 ceil 公式 | ✅ 一致（默认） |
+| src_freq | 恒 `min15` | 恒 `'min15'` | ✅ 一致 |
+| cum_offset | `-Σdelta`，段 0=0 | 同左；append-only 增量接龙 | ✅ 一致 |
 
-**结论**：二者不是「同一算法的两个实现」，不能直接行级相等 A/B。
-本 harness 改为比对 **换月位置（seg_start）一致性 + cum_offset 相对形状**，并把上述差异显式列为「已知分歧、需产品决策」。
+**结论**：两侧为同一算法，A/B 应**逐行相等**。本 harness（`02`）现在做严格逐行比对，
+任何不一致即退出码 2（视为回归，必须先修 sp，不得退役 Python）。
 
 ### 发现 2 · `sp_build_l1_from_minute` 列名 bug（`oi` → `open_interest`）
 `009` 原 INSERT 列名写成 `oi`，但 `bar_5m` 真实列是 `open_interest`（`scripts/load_1min.py:125`）。
@@ -43,17 +47,16 @@ bash scripts/cloud_preflight/run_preflight.sh real --symbol RB888 --freqs min15,
 ```
 
 ## 如何解读 `02` 的输出
-- `[min15] 位置一致=true` + 退出码 0 → 双门数学本身自洽（A/B 在 min15 上同源）
-- `delta 基准一致=false` → 已知分歧#2（A 用 cc / B 用 gap），属预期
-- `price_shift` A≠B → 已知分歧#3，属预期
-- `[min30]/[min60] 位置一致=false` → 已知分歧#1（锚点），**非 bug**，正是需要产品拍板的项
-- 若 `[min15] 位置一致=false` → 双门移植有真 bug，退出码 2，必须先修
+- 退出码 0 + `逐行相等=true` → 忠实移植校验通过，可退役 Python（保留为基准）。
+- `❌ seg_no=K: ... delta/cum/shift/start 不一致` → 回归，退出码 2，**必须先修 sp**，切勿退役 Python。
+- 注意：默认 sp 不带 positivity → price_shift 两侧均=0；若要验证 ceil 抬升分支，
+  让 sp 传 `p_positivity=true`、Python 传 `--positivity` 后单独再比一次。
+- 增量模式（`--mode real`）仅比对「新增段」（`seg_no > 跑前最大值`），历史段不在 sp 增量范围。
 
-## 需要你拍板的决策
-1. **sp 是否要忠实移植 Python**（加 15m 锚定 + gap delta + ceil 正数抬升）？
-   - 选「是」→ 改 009，使 A/B 可退化为相等校验，之后才能退役 Python（保留为基准）。
-   - 选「否」→ 接受 sp 为「简化独立实现」，则「A/B 对拍通过」的说法不成立，需重写为「独立再验证」，并明确以哪一侧为权威。
-2. 无论选哪个，**2026 补采前必须先在 staging 跑通本 harness**（尤其 `03` 验证 `oi` 已修）。
+## 决策状态
+1. ✅ **已拍板（2026-09-30）**：sp 以 15m 锚定原版为准做忠实移植，不得简化/改变/添加。
+   009 已改完，A/B 现应逐行相等；退役 Python 的前提是 `02` 在 staging 跑出退出码 0。
+2. ⏳ 2026 补采前仍须先在 staging 跑通本 harness（尤其 `03` 验证 `oi` 已修、`02` 验证 A/B 相等）。
 
 ## ⚠ 安全
 - `synthetic` 模式用测试品种 `ZZ888/ZZ8888`，插入后全程 `DELETE` 清理，不污染真实数据。

@@ -9,15 +9,27 @@
 --   L2 = 由 L1 产生的换月 offset（roll_segment，只追加不删）
 --
 -- 提供的过程
---   sp_build_l1_from_minute(p_freq)   L0(1m) → L1(Xm) 经典 time_bucket 聚合（当前 1m 缺失→安全 no-op）
---   sp_normalize_l1_symbols()        L1 符号审计：报告 bar_* 中无法经 dim_symbol 解析为 888/8888 的符号
---   sp_refresh_dim_contract_dates()  由 contract_daily 回填 dim_contract 生命周期（只增改）
---   sp_build_l2_roll_segment(p_freq) L1 → L2 换月 offset（append-only，移植双门检测；**需云端 A/B 验证**）
+--   sp_build_l1_from_minute(p_freq)       L0(1m) → L1(Xm) 经典 time_bucket 聚合（当前 1m 缺失→安全 no-op）
+--   sp_normalize_l1_symbols()            L1 符号审计：报告 bar_* 中无法经 dim_symbol 解析为 888/8888 的符号
+--   sp_refresh_dim_contract_dates()      由 contract_daily 回填 dim_contract 生命周期（只增改）
+--   sp_build_l2_roll_segment(p_freq[, p_positivity])
+--        L1 → L2 换月 offset（append-only，**忠实移植** scripts/build_roll_segments.py）。
+--        与原版逐项对齐；任何偏离都视为回归，须经云端 02 预检 A/B 逐行相等复核。
+--        硬约束（来自 PRD + 用户踩坑 + 252/252 验收，不得简化/改变/添加）：
+--          ★ 换月检测固定 15m 锚点（ANCHOR_FREQ='min15'），再映射到目标 freq（含关系映射）
+--          ★ delta 取锚点 gap = open[i]-close[i-1]（非 cc，否则各周期偏移发散，实测差 1560 点）
+--          ★ 双门：is_large = |cc| > (amp+1e-6)；ratio = |Δ8888| < 0.40|cc|；roll = 二者皆真
+--          ★ cum_offset(k) = -Σ_{j<=k} delta(j)；段 0 偏移恒 0，历史段永不重算
+--          ★ price_shift 默认 0（与原版默认不带 --positivity 一致）；仅 p_positivity=true 时
+--            取 ceil((-min+0.01·range)/100)·100（仅当 min(low+cum)<=0）
+--          ★ src_freq 恒 'min15'
 --
 -- ⚠ 验证要求（无本地 DB 可连，本迁移只保证 DDL 合法，逻辑需在云端 dry-run）
---   sp_build_l2_roll_segment 必须经 scripts/build_roll_segments.py 双门结果 A/B 对拍，
---   通过后再退役 Python（保留为校验基准）。L2 为 append-only，错误运行只会产生需复核的段，
---   可用 DELETE FROM roll_segment WHERE symbol=? AND freq=? AND seg_start > 已知正确末段 安全回退。
+--   sp_build_l2_roll_segment 与 scripts/build_roll_segments.py（252/252 验收）为同一算法，
+--   云端预检 02_fixture_and_roll_ab.py 应得出**逐行相等**的 A/B 结论（默认 positivity 关闭时）。
+--   唯一预期差异：sp 的 p_positivity 开关（默认关，与原版默认一致）。
+--   L2 为 append-only，错跑只产生需复核的段，可
+--     DELETE FROM roll_segment WHERE symbol=? AND freq=? AND seg_no>已知正确末段 安全回退。
 -- =============================================================================
 
 BEGIN;
@@ -143,111 +155,165 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- sp_build_l2_roll_segment：L1 → L2 换月 offset（append-only）
---   移植 scripts/build_roll_segments.py 双门检测（振幅门 + 指数连比率门 0.40）。
---   输出：roll_segment（symbol, freq, seg_no, seg_start, roll_ts, roll_delta, cum_offset）
---   策略：只 INSERT「比当前最大 seg_start 更新的段」，历史段绝不触碰（append-only）。
---
---   双门（与 Python 版对齐，需云端 A/B）：
---     cc        = close[i] - close[i-1]                  （close-to-close 跳空）
---     amp       = high[i] - low[i];  prev_amp = 上一根 amp
---     is_large  = |cc| > (amp + prev_amp)
---     idx_delta = |index_close[i] - index_close[i-1]|    （8888 指数连）
---     ratio_ok  = idx_delta < 0.40 * |cc|
---     roll      = is_large AND ratio_ok
---   cum_offset(k) = -Σ_{j<=k} roll_delta(j)；段 0（最早）= 0，历史永不改变。
+-- sp_build_l2_roll_segment：L1 → L2 换月 offset（append-only，**忠实移植**）
+--   与 scripts/build_roll_segments.py（252/252 验收）逐项对齐，硬约束见文件头。
+--   落地：首跑（该 sym/freq 无段）全量插入；增量只插 seg_start > 已有最大 seg_start
+--        的段，cum_offset 接龙（= 末段 cum_offset − 新累计 roll_delta）。
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE PROCEDURE sp_build_l2_roll_segment(p_freq text DEFAULT 'min15')
+CREATE OR REPLACE PROCEDURE sp_build_l2_roll_segment(p_freq text DEFAULT 'min15',
+                                                    p_positivity boolean DEFAULT false)
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_table   text := l1_table_of(p_freq);
-    v_src_n   bigint;
-    v_sym     text;
-    v_max_seg int;
+    v_table     text := l1_table_of(p_freq);
+    v_anchor    text := 'bar_15m';                 -- 固定锚点，与 Python ANCHOR_FREQ 一致
+    v_fallback  text := CASE p_freq WHEN 'min5' THEN '5 minutes' WHEN 'min15' THEN '15 minutes'
+                                     WHEN 'min30' THEN '30 minutes' WHEN 'min60' THEN '60 minutes' END;
+    v_sym       text;
+    v_anchor_n  bigint;
+    v_idx_n     bigint;
+    v_max_seg   int;
     v_max_start timestamptz;
-    v_sql     text;
+    v_base_co   numeric;
+    v_cte       text;
+    v_ins_n     int;
 BEGIN
-    IF v_table IS NULL THEN
-        RAISE EXCEPTION 'sp_build_l2_roll_segment: 不支持的 freq=%', p_freq;
+    IF v_table IS NULL OR v_fallback IS NULL THEN
+        RAISE EXCEPTION 'sp_build_l2_roll_segment: 不支持的 freq=%（仅 min5/15/30/60）', p_freq;
+    END IF;
+    -- 15m 锚点是硬依赖：缺失则无法锚定，拒绝执行（fail-loud）
+    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=v_anchor) THEN
+        RAISE EXCEPTION 'sp_build_l2_roll_segment: 锚点表 % 不存在，15m 锚定无法进行，拒绝执行', v_anchor;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=v_table) THEN
-        RAISE EXCEPTION 'sp_build_l2_roll_segment: 源表 % 不存在，拒绝执行', v_table;
-    END IF;
-    EXECUTE format('SELECT count(*) FROM %I WHERE symbol ~ ''^[A-Za-z]+888$''', v_table) INTO v_src_n;
-    IF v_src_n = 0 THEN
-        RAISE EXCEPTION 'sp_build_l2_roll_segment: % 主连(888)为 0 行，拒绝执行', v_table;
+        RAISE EXCEPTION 'sp_build_l2_roll_segment: 目标表 % 不存在，拒绝执行', v_table;
     END IF;
 
     FOR v_sym IN
         EXECUTE format('SELECT DISTINCT symbol FROM %I WHERE symbol ~ ''^[A-Za-z]+888$'' ORDER BY symbol', v_table)
     LOOP
+        -- 锚点品种自身需足够 15m 数据；不足则跳过（与原版 len<100 skip 一致）
+        EXECUTE format('SELECT count(*) FROM %I WHERE symbol=%L', v_anchor, v_sym) INTO v_anchor_n;
+        IF v_anchor_n < 100 THEN
+            RAISE NOTICE '[L2] % 15m 锚点不足 100 行，跳过', v_sym; CONTINUE;
+        END IF;
+        -- 8888 指数连须存在，否则无法判 ratio 门（原版：无 8888 整体 skip）
+        EXECUTE format('SELECT count(*) FROM %I WHERE symbol=%L', v_anchor, replace(v_sym,'888','8888')) INTO v_idx_n;
+        IF v_idx_n = 0 THEN
+            RAISE NOTICE '[L2] % 无 8888 指数连，跳过', v_sym; CONTINUE;
+        END IF;
+
+        -- 共享 CTE：15m 锚定检测 → 映射到目标 bar → 切段 → cum_offset → 可选 positivity
+        -- 用美元引号，内部单引号无需转义；动态值经 format(%1$L/%2$I/%3$L) 注入
+        -- ⚠ 必须置于循环内 v_sym 已赋值之后（CTE 引用 %1$L=v_sym）
+        v_cte := format($c$
+WITH anchor AS (
+    SELECT m.bucket AS a_ts,
+           (m.open - lag(m.close) OVER (ORDER BY m.bucket)) AS gap,
+           (m.close - lag(m.close) OVER (ORDER BY m.bucket)) AS cc,
+           ((m.high - m.low) + coalesce(lag(m.high - m.low) OVER (ORDER BY m.bucket), 0)) AS amp,
+           abs(i.close - lag(i.close) OVER (ORDER BY i.bucket)) AS idx_delta
+    FROM bar_15m m
+    LEFT JOIN bar_15m i ON i.bucket = m.bucket AND i.symbol = replace(m.symbol, '888', '8888')
+    WHERE m.symbol = %1$L
+),
+roll_events AS (
+    SELECT a_ts, gap FROM anchor
+    WHERE cc IS NOT NULL
+      AND abs(cc) > (amp + 1e-6)
+      AND coalesce(idx_delta, 1e9) < 0.40 * abs(cc)
+),
+target AS (
+    SELECT bucket, lead(bucket) OVER (ORDER BY bucket) AS next_bucket
+    FROM %2$I WHERE symbol = %1$L
+),
+mapped AS (
+    SELECT t.bucket AS bar_ts, e.gap
+    FROM target t
+    JOIN roll_events e
+      ON e.a_ts >= t.bucket
+     AND e.a_ts < coalesce(t.next_bucket, t.bucket + %3$L::interval)
+),
+roll_bars AS ( SELECT bar_ts, sum(gap) AS delta_ev FROM mapped GROUP BY bar_ts ),
+all_bars AS (
+    SELECT bucket, row_number() OVER (ORDER BY bucket) - 1 AS rn
+    FROM %2$I WHERE symbol = %1$L
+),
+flags AS (
+    SELECT a.bucket,
+           CASE WHEN rb.delta_ev IS NOT NULL THEN true ELSE false END AS is_roll,
+           coalesce(rb.delta_ev, 0) AS delta_ev
+    FROM all_bars a LEFT JOIN roll_bars rb ON rb.bar_ts = a.bucket
+),
+segs AS (
+    SELECT bucket, delta_ev, is_roll,
+           count(*) FILTER (WHERE is_roll) OVER (ORDER BY bucket) AS seg_no
+    FROM flags
+),
+seg_final AS (
+    SELECT seg_no, min(bucket) AS seg_start, lead(min(bucket)) OVER (ORDER BY seg_no) AS seg_end,
+           (array_agg(delta_ev ORDER BY bucket))[1] AS first_delta, count(*) AS n_bars
+    FROM segs GROUP BY seg_no
+),
+full_segs AS (
+    SELECT seg_no, seg_start, seg_end, n_bars,
+           CASE WHEN seg_no = 0 THEN 0::numeric ELSE round(first_delta,4) END AS roll_delta,
+           -sum(CASE WHEN seg_no=0 THEN 0::numeric ELSE round(first_delta,4) END)
+               OVER (ORDER BY seg_no) AS cum_offset
+    FROM seg_final
+),
+low_off AS (
+    SELECT l.low + (
+        SELECT s.cum_offset FROM full_segs s
+        WHERE s.seg_start <= l.bucket AND (s.seg_end IS NULL OR l.bucket < s.seg_end)
+        ORDER BY s.seg_start DESC LIMIT 1) AS v
+    FROM %2$I l WHERE l.symbol = %1$L
+),
+shift_calc AS (
+    SELECT CASE WHEN min(v) <= 0 THEN
+        ceil((-min(v) + 0.01 * greatest((SELECT max(low)-min(low) FROM %2$I WHERE symbol=%1$L), 1.0)) / 100.0) * 100.0
+    ELSE 0 END AS shift FROM low_off
+)
+$c$, v_sym, v_table, v_fallback);
+
+        -- 既有段（append-only 起点）
         SELECT max(seg_no), max(seg_start) INTO v_max_seg, v_max_start
           FROM roll_segment WHERE symbol = v_sym AND freq = p_freq;
         v_max_seg   := COALESCE(v_max_seg, -1);
         v_max_start := COALESCE(v_max_start, '-infinity');
 
-        v_sql := format($q$
-            WITH main AS (
-                SELECT bucket, open, high, low, close,
-                       lag(close)  OVER w AS prev_close,
-                       lag(high)   OVER w - lag(low) OVER w AS prev_amp
-                FROM %I WHERE symbol = %L
-                WINDOW w AS (ORDER BY bucket)
-            ),
-            idx AS (
-                SELECT bucket, close AS idx_close,
-                       lag(close) OVER (ORDER BY bucket) AS idx_prev
-                FROM %I WHERE symbol = %L
-            ),
-            joined AS (
-                SELECT m.bucket, m.close, m.prev_close,
-                       (m.high - m.low) AS amp, m.prev_amp,
-                       (i.idx_close - i.idx_prev) AS idx_delta
-                FROM main m LEFT JOIN idx i ON i.bucket = m.bucket
-            ),
-            events AS (
-                SELECT bucket,
-                       (close - prev_close) AS cc,
-                       (abs(close - prev_close) > (COALESCE(amp,0) + COALESCE(prev_amp,0)))
-                           AND (COALESCE(abs(idx_delta), 1e9) < 0.40 * abs(close - prev_close))
-                           AS is_roll
-                FROM joined WHERE prev_close IS NOT NULL
-            ),
-            new_rolls AS (
-                SELECT bucket AS roll_ts, cc AS roll_delta
-                FROM events WHERE is_roll AND bucket > %L::timestamptz
-            ),
-            numbered AS (
-                SELECT roll_ts, roll_delta,
-                       row_number() OVER (ORDER BY roll_ts) - 1 AS off
-                FROM new_rolls
-            )
-            INSERT INTO roll_segment
-                (symbol, freq, seg_no, seg_start, seg_end, roll_ts, roll_delta, cum_offset,
-                 src_freq, updated_at)
-            SELECT %L, %L,
-                   $1 + 1 + n.off,
-                   nr.roll_ts,
-                   lead(nr.roll_ts) OVER (ORDER BY nr.roll_ts),
-                   nr.roll_ts,
-                   nr.roll_delta,
-                   -(COALESCE((SELECT sum(roll_delta) FROM roll_segment
-                               WHERE symbol=%L AND freq=%L), 0)
-                     + sum(nr.roll_delta) OVER (ORDER BY nr.roll_ts)),
-                   %L, now()
-            FROM numbered n JOIN new_rolls nr USING (roll_ts);
-        $q$, v_table, v_sym, v_table, replace(v_sym,'888','8888'), v_max_start,
-               v_sym, p_freq, v_sym, p_freq, p_freq);
-
-        EXECUTE v_sql USING v_max_seg;
-
-        EXECUTE format($u$
-            UPDATE roll_segment r SET price_shift = (
-                SELECT abs(min(cum_offset)) FROM roll_segment WHERE symbol=%L AND freq=%L)
-             WHERE r.symbol=%L AND r.freq=%L
-            $u$, v_sym, p_freq, v_sym, p_freq);
+        IF v_max_seg < 0 THEN
+            -- 首跑：全量插入（seg_no 沿用 full_segs 计算值）
+            EXECUTE format(
+                'INSERT INTO roll_segment (symbol, freq, seg_no, seg_start, seg_end, roll_ts, '
+                'roll_delta, cum_offset, price_shift, src_freq, updated_at) '
+                || v_cte ||
+                ' SELECT %1$L, %2$L, fs.seg_no, fs.seg_start, fs.seg_end, fs.seg_start, '
+                'fs.roll_delta, fs.cum_offset, CASE WHEN %3$L THEN sc.shift ELSE 0 END, '
+                '''min15'', now() FROM full_segs fs CROSS JOIN shift_calc sc',
+                v_sym, p_freq, p_positivity);
+            GET DIAGNOSTICS v_ins_n = ROW_COUNT;
+            RAISE NOTICE '[L2] %/% 首跑插入 % 段（忠实移植·15m 锚定）', v_sym, p_freq, v_ins_n;
+        ELSE
+            -- 增量：只插新段，cum_offset 接龙（= 末段 cum − 新累计 roll_delta）
+            SELECT cum_offset INTO v_base_co
+              FROM roll_segment WHERE symbol = v_sym AND freq = p_freq AND seg_no = v_max_seg;
+            v_base_co := COALESCE(v_base_co, 0);
+            EXECUTE format(
+                'INSERT INTO roll_segment (symbol, freq, seg_no, seg_start, seg_end, roll_ts, '
+                'roll_delta, cum_offset, price_shift, src_freq, updated_at) '
+                || v_cte ||
+                ', new_segs AS (SELECT *, row_number() OVER (ORDER BY seg_start) - 1 AS new_off '
+                'FROM full_segs WHERE seg_start > %1$L::timestamptz) '
+                'SELECT %2$L, %3$L, %4$L + 1 + ns.new_off, ns.seg_start, ns.seg_end, ns.seg_start, '
+                'ns.roll_delta, (%5$L) - sum(ns.roll_delta) OVER (ORDER BY ns.seg_start), '
+                'CASE WHEN %6$L THEN sc.shift ELSE 0 END, ''min15'', now() '
+                'FROM new_segs ns CROSS JOIN shift_calc sc',
+                v_max_start, v_sym, p_freq, v_max_seg, v_base_co, p_positivity);
+            GET DIAGNOSTICS v_ins_n = ROW_COUNT;
+            RAISE NOTICE '[L2] %/% 增量插入 % 段（接龙末段 seg_no=%）', v_sym, p_freq, v_ins_n, v_max_seg;
+        END IF;
     END LOOP;
-    RAISE NOTICE '[L2] roll_segment(%s) 刷新完成（append-only）', p_freq;
+    RAISE NOTICE '[L2] roll_segment(%s) 刷新完成（append-only，忠实移植 15m 锚定）', p_freq;
 END;
 $$;
 
