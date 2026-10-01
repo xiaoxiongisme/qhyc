@@ -41,6 +41,21 @@ from pgconn import (  # noqa: E402
 LOCK_KEY = "adjust_minute"
 
 
+def _norm_since(since):
+    """增量起点统一为带时区的 Timestamp。
+
+    调度端传 naive ISO 串（datetime.now()，容器 TZ=Asia/Shanghai），而
+    minute_bar.ts 是 timestamptz（aware）——直接比较会抛
+    "can't subtract offset-naive and offset-aware datetimes"，且被 per-symbol
+    try/except 吞掉：实测 2026-09-25 起云端每夜 04:30 静默失败、写入 0 行。
+    naive 一律按上海时区本地化；aware 原样返回。
+    """
+    ts = pd.Timestamp(since)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize('Asia/Shanghai')
+    return ts
+
+
 def load_15m_roll_buckets(cur, sym):
     """复用 15m 双门检测，返回该品种换月 15m bucket(Timestamp)列表。"""
     s8888 = sym[:-3] + '8888'
@@ -108,15 +123,17 @@ def process_symbol(cur, sym, since=None):
     n_roll = int(roll.sum())
 
     full = True
+    since_ts = None
     if since is not None:
-        ts_np = pd.to_datetime(g['ts']).to_numpy()
-        full = bool((roll & (ts_np >= np.datetime64(pd.Timestamp(since)))).any())
+        since_ts = _norm_since(since)
+        ts_series = pd.to_datetime(g['ts'])  # DB timestamptz → aware
+        full = bool((roll & (ts_series >= since_ts).to_numpy()).any())
 
     if full:
         g2, _ = forward_adjust(g, cc, roll)
         mode = f'full(roll={n_roll})'
     else:
-        mask = (pd.to_datetime(g['ts']) >= pd.Timestamp(since)).to_numpy()
+        mask = (pd.to_datetime(g['ts']) >= since_ts).to_numpy()
         g2 = g[mask].reset_index(drop=True)
         # since 后无换月 → 新 bar cum=0，复权价=原价
         g2, _ = forward_adjust(g2, np.zeros(len(g2)), np.zeros(len(g2), dtype=bool))
@@ -127,7 +144,8 @@ def process_symbol(cur, sym, since=None):
     if full:
         cur.execute("DELETE FROM minute_bar_adj WHERE symbol=%s", (sym,))
     else:
-        cur.execute("DELETE FROM minute_bar_adj WHERE symbol=%s AND ts >= %s", (sym, since))
+        cur.execute("DELETE FROM minute_bar_adj WHERE symbol=%s AND ts >= %s",
+                    (sym, since_ts))
     buf = io.StringIO()
     for r in g2.itertuples():
         o = 0 if r.open is None else float(r.open)

@@ -41,7 +41,11 @@ VALUES
     ('CZCE',  '郑商所', '郑州商品交易所',          true),
     ('CFFEX', '中金所', '中国金融期货交易所',      false),
     ('INE',   '上期能源', '上海国际能源交易中心',  true),
-    ('GFEX',  '广期所', '广州期货交易所',          true)
+    ('GFEX',  '广期所', '广州期货交易所',          true),
+    -- 2026-10-01 勘误：云端 dim_symbol 存在 exchange='XX' 的采集占位 10 行
+    -- （BB/FB/JR/LG/LR/ME/PM/RI/TC/ZC，KQ.m@XX.*，冷门/退市品种未识别交易所）。
+    -- dim_variety 回填链会把该值带进来，若无父行则 FK 违反、整个迁移回滚（云端实测）。
+    ('XX',    '未知',   '未识别交易所（采集占位）', false)
 ON CONFLICT (exchange_code) DO UPDATE
     SET exchange_name = EXCLUDED.exchange_name,
         full_name     = COALESCE(EXCLUDED.full_name, dim_exchange.full_name),
