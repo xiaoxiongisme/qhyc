@@ -394,7 +394,10 @@ class FutKlineRebuildConfig(BaseModel):
     enabled: bool = True
     run_hour: int = 5
     run_minute: int = 0
-    timeout_sec: int = 7200
+    # 2026-10-01 云端 dry-run 实测：cont_adj 5 频段全量聚合 ~77 分钟 + continuous
+    # + 生产模式前置 DELETE（1,992 万行）≈ 贴着 7200s 上限，工作日 05:00 还有采集
+    # 作业抢 IO——超时中断会留下「DELETE 后半重建」状态直到次日。调至 6h（3 倍余量）。
+    timeout_sec: int = 21600
 
 
 class FactorBiasConfig(BaseModel):
