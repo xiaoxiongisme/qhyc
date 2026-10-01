@@ -39,7 +39,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import close_all_sessions
 
 FN_TO_NATIVE = r"""
 CREATE OR REPLACE FUNCTION to_native_symbol(std TEXT, ex TEXT) RETURNS TEXT AS $$
@@ -78,7 +79,7 @@ CONT_SOURCES = [
 ]
 
 
-BATCH = 20  # 每批品种数：按频率分块，每频率全表仅被扫 (品种数/BATCH) 次
+BATCH = 8  # 每批品种数：3GB 容器内 20/批触发 cgroup OOM（2026-10-01 实测），降为 8
 
 
 def _batch(iterable, n):
@@ -146,10 +147,27 @@ ON CONFLICT (freq,kind,symbol,trade_datetime) DO UPDATE SET
 
 
 def build_engine(dsn: str | None):
-    if dsn:
-        return create_engine(dsn)
-    from app.core.db import get_engine
-    return get_engine()
+    """2026-10-01 云端 OOM 实测：timescaledb 容器 mem_limit=3GB，20 品种/批的
+    全历史聚合 INSERT 使 backend 峰值内存打满 cgroup（16:15 OOM kill postgres
+    backend，生产重建在 min30 中途崩退）。会话 work_mem 24MB（hash/sort 溢盘换
+    稳定）+ BATCH 20→8 双管齐下。
+
+    注意 get_engine() 是全局共享 engine：借用前先关掉本进程已占用的池连接，
+    避免与调度器进程内其它会话争抢内存。"""
+    if not dsn:
+        close_all_sessions()
+        from app.core.db import get_engine
+        eng = get_engine()
+    else:
+        eng = create_engine(dsn)
+
+    @event.listens_for(eng, "connect")
+    def _low_mem(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("SET work_mem = '24MB'")
+        cur.close()
+
+    return eng
 
 
 def main() -> int:
