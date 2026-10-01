@@ -49,6 +49,25 @@ _COL_ALIAS = {
     "oi": "oi",
 }
 
+#: 各物理表实际持仓量列名（information_schema 实测 2026-10-01）。
+#:   bar_5m/15m/30m/60m、minute_bar          → open_interest
+#:   fut_kline/hourly_bar/daily_bar/contract_daily → oi
+#:   minute_bar_adj                           → 两者皆无
+#: 旧代码写死 `SELECT ... oi FROM bar_5m` 会对分钟表报错并降级成 oi=0，
+#: 静默丢弃真实持仓量；SELECT 必须按物理列名取（见 load()）。
+_OI_COL = {
+    "bar_5m": "open_interest",
+    "bar_15m": "open_interest",
+    "bar_30m": "open_interest",
+    "bar_60m": "open_interest",
+    "minute_bar": "open_interest",
+    "minute_bar_adj": None,   # 无持仓列 → oi 恒 0
+    "fut_kline": "oi",
+    "hourly_bar": "oi",
+    "daily_bar": "oi",
+    "contract_daily": "oi",
+}
+
 
 class SymbolNotFoundError(LookupError):
     """symbol 在 dim_symbol 中不存在（或无法解析到唯一首选符号）。"""
@@ -208,14 +227,25 @@ def load(symbol: str, freq: str = "hourly",
         params["end"] = end
 
     order = "DESC" if limit else "ASC"
-    sql = (f"SELECT {route.time_col} AS ts, open, high, low, close, "
-           f"volume, oi FROM {route.table} "
-           f"WHERE {' AND '.join(where)} ORDER BY {route.time_col} {order}")
-    if limit:
-        sql += f" LIMIT {int(limit)}"
 
-    # 降级版本：bar_15m / bar_30m / bar_60m 这些未复权区间棒**没有 oi 列**
-    sql_no_oi = sql.replace(", volume, oi FROM", ", volume FROM")
+    # 按物理表选对持仓列名（information_schema 实测；见 _OI_COL 注释）。
+    # 写死 `oi` 会让分钟表 SELECT 报错并降级成 oi=0，静默丢弃真实持仓。
+    oi_col = _OI_COL.get(route.table)   # 未知表 → None，直接走无 oi 分支
+    if oi_col:
+        sql = (f"SELECT {route.time_col} AS ts, open, high, low, close, "
+               f"volume, {oi_col} AS oi FROM {route.table} "
+               f"WHERE {' AND '.join(where)} ORDER BY {route.time_col} {order}")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        # 防御：若该列实际不存在（schema 漂移），退化为不带 oi（下游补 0）
+        sql_no_oi = sql.replace(f", {oi_col} AS oi FROM", ", volume FROM")
+    else:
+        sql = (f"SELECT {route.time_col} AS ts, open, high, low, close, "
+               f"volume FROM {route.table} "
+               f"WHERE {' AND '.join(where)} ORDER BY {route.time_col} {order}")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        sql_no_oi = sql
 
     df, last_err, level = None, None, 0
     for attempt, s in enumerate((sql, sql_no_oi)):
