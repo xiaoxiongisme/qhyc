@@ -165,6 +165,10 @@ def build_engine(dsn: str | None):
     def _low_mem(dbapi_conn, _record):
         cur = dbapi_conn.cursor()
         cur.execute("SET work_mem = '24MB'")
+        # 2026-10-01 云端实测：minute_bar_adj ~4170 个日 chunk，8 品种批的查询计划
+        # 生成 5402 个 JIT 函数、大部分 chunk actual rows=0，EXPLAIN ANALYZE 单批
+        # SELECT 185s 中 JIT 编译占大头 —— 高 chunk 数场景 jit 纯属开销，off。
+        cur.execute("SET jit = off")
         cur.close()
 
     return eng
