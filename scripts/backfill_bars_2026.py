@@ -68,15 +68,22 @@ _5M_FREE_FLOOR = date(2026, 3, 2)
 
 
 def _resolve(symbol: str) -> dict | None:
-    """品种码 → (exchange, main_symbol, product) via dim_variety。"""
+    """品种码或 888 主连符号 → (exchange, main_symbol, product) via dim_variety。
+
+    2026-10-01 增强：同时接受两种命名形态——`JR`（variety_code）与 `JR888`
+    （main_symbol 形态，字典两态并存：1300 行不带 888 + 73 行带 888）。888 形态
+    按后缀剥离查品种行，product 统一取品种码（_kq_symbol/_pull_akshare_daily
+    需要的是品种码；此前传 888 符号会拼出 sina 码 `WR8880` 这类无效入参）。
+    """
     try:
         from app.core.db import get_engine
         from sqlalchemy import text
+        code = symbol[:-3] if symbol.endswith("888") and len(symbol) > 3 else symbol
         with get_engine().connect() as conn:
             row = conn.execute(
                 text("SELECT exchange, main_symbol FROM dim_variety "
                      "WHERE variety_code = :v AND is_active"),
-                {"v": symbol},
+                {"v": code},
             ).first()
         if not row:
             return None
@@ -88,8 +95,7 @@ def _resolve(symbol: str) -> dict | None:
             # exchange 缺失同样无法拼 KQ 符号（KQ.m@{exchange}.{prod}），一并拒绝
             logger.warning(f"[resolve] {symbol} 字典缺 exchange/main_symbol，跳过")
             return None
-        product = symbol  # variety_code 即产品大写码，如 RB / FG / CU
-        return {"exchange": exchange, "main_symbol": main, "product": product}
+        return {"exchange": exchange, "main_symbol": main, "product": code}
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[resolve] {symbol} 解析失败: {e}")
         return None
@@ -210,13 +216,29 @@ def collect_frequency(symbol: str, freq: str, start: str, end: str,
     end_d = datetime.strptime(end, "%Y-%m-%d").date()
 
     if freq == "daily":
-        rows = _pull_akshare_daily(s["product"], start_d, end_d)
+        # 双源合并（2026-10-01 实测）：akshare sina 对僵尸品种可能返回空（JR/LR/PM/RI/WH/ZC
+        # 零行）、部分缺段（WR 17 / BB 57 / RS 178 天）、甚至抛异常（WR0 Length mismatch）；
+        # tqsdk 主连日线均齐全（唯一例外 LR 止于 01-16，属源限制）。策略：akshare 先写
+        # （src='backfill'），tqsdk 无条件跟进补缺（src='backfill_tq'），DO NOTHING 先到先得、
+        # 幂等可重跑；1 万根上限对日线 ≈ 40 年，无免费回溯问题。
+        try:
+            rows = _pull_akshare_daily(s["product"], start_d, end_d)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[daily] {symbol}: akshare 异常({type(e).__name__})，仅用 tqsdk")
+            rows = []
         if verify or session is None:
-            logger.info(f"[verify] {symbol} daily 拉取 {len(rows)} 行 "
+            logger.info(f"[verify] {symbol} daily akshare {len(rows)} 行 "
                         f"({rows[0]['trade_date'] if rows else '-'}~{rows[-1]['trade_date'] if rows else '-'})")
             return len(rows)
-        _upsert_daily(s["main_symbol"], rows, session)
-        return len(rows)
+        _upsert_daily(s["main_symbol"], rows, session, src="backfill")
+        kq = _kq_symbol(s["exchange"], s["product"])
+        tq = _pull_tqsdk(kq, 86400, start_d, end_d)
+        tq_rows = [{"trade_date": r["bucket"].date(), "open": r["open"], "high": r["high"],
+                    "low": r["low"], "close": r["close"], "volume": r["volume"], "oi": r["oi"]}
+                   for r in tq]
+        _upsert_daily(s["main_symbol"], tq_rows, session, src="backfill_tq")
+        logger.info(f"[daily] {symbol}: akshare {len(rows)} + tqsdk {len(tq_rows)} 行（DO NOTHING 合并）")
+        return max(len(rows), len(tq_rows))
 
     # 5m 免费源最深只到 2026-03-02，早于该日的区间拉不到（留缺口）
     eff_start = max(start_d, _5M_FREE_FLOOR) if freq == "5m" else start_d
@@ -253,7 +275,7 @@ def _upsert_bar(table: str, symbol: str, rows: list[dict], session) -> None:
     logger.info(f"  [ok] {symbol} {table} upsert {len(rows)} 行")
 
 
-def _upsert_daily(symbol: str, rows: list[dict], session) -> None:
+def _upsert_daily(symbol: str, rows: list[dict], session, src: str = "backfill") -> None:
     from sqlalchemy import text
     if not rows:
         return
@@ -261,12 +283,12 @@ def _upsert_daily(symbol: str, rows: list[dict], session) -> None:
     # 原写法导致 82 品种 daily 全部 UndefinedColumn 失败（分钟线不受影响，故此前未暴露）。
     sql = text("""
         INSERT INTO daily_bar (symbol, trade_date, open, high, low, close, volume, oi, src)
-        VALUES (:symbol, :trade_date, :open, :high, :low, :close, :volume, :oi, 'backfill')
+        VALUES (:symbol, :trade_date, :open, :high, :low, :close, :volume, :oi, :src)
         ON CONFLICT (symbol, trade_date) DO NOTHING
     """)
     params = [{"symbol": symbol, "trade_date": r["trade_date"], "open": r["open"],
                "high": r["high"], "low": r["low"], "close": r["close"],
-               "volume": r["volume"], "oi": r["oi"]} for r in rows]
+               "volume": r["volume"], "oi": r["oi"], "src": src} for r in rows]
     for i in range(0, len(params), 2000):
         session.execute(sql, params[i:i + 2000])
     session.commit()
