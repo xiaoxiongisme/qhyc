@@ -7,6 +7,7 @@ from app.api.routers import (
     bars,
     calendar,
     dashboard,
+    execution,   # P0-1 执行反解层
     fusion,      # 融合策略推送留痕（防漏看回查）
     health,
     imports,
@@ -38,6 +39,8 @@ api_router.include_router(backtest.router, prefix="/backtest", tags=["backtest"]
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"], dependencies=_auth)
 api_router.include_router(position.router, prefix="", tags=["position"], dependencies=_auth)  # §18.4/§18.5 M6a
 api_router.include_router(fusion.router, prefix="", tags=["fusion"], dependencies=_auth)
+# P0-1 执行反解层（docs/PRD_P0-1_执行反解层_20261002.md）
+api_router.include_router(execution.router, prefix="/execution", tags=["execution"], dependencies=_auth)
 # M8 决策链路容器化（docs/M8_决策链路容器化_PRD_20260922.md §8）
 api_router.include_router(pipeline.router, prefix="/pipeline", tags=["pipeline"], dependencies=_auth)
 

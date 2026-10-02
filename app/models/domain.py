@@ -42,6 +42,8 @@ class FuturesSymbol(Base):
     exchange: Mapped[str] = mapped_column(Text, nullable=False)
     unit: Mapped[str | None] = mapped_column(Text)
     multiplier: Mapped[Decimal | None] = mapped_column(Numeric20)
+    # P0-1 执行反解层：最小变动价位（tick 对齐校验用；迁移 012 新增，数值由 seed_price_tick.py 派生）
+    price_tick: Mapped[Decimal | None] = mapped_column(Numeric12, nullable=True)
     product: Mapped[str | None] = mapped_column(Text)
     is_main: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     main_symbol: Mapped[str | None] = mapped_column(Text)
