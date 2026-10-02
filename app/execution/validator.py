@@ -31,6 +31,12 @@ def fetch_market_price(session: Session, real_symbol: str, when) -> tuple[Option
 
     bar_*/hourly_bar 仅存 888 连续序列、无真实合约分钟/小时线，故一致性闸使用日频参照。
     返回 (price, granularity)；取不到返回 (None, None)。
+
+    键形式：contract_daily 以「原生写法」存储（CZCE 4 位大写 FG2701、SHFE/DCE 小写 rb2510），
+    而 main_contract_map.underlying 保存的正是该原生键，故优先直接用 real_symbol；
+    并以 to_native / 大小写作为兜底（覆盖个别大小写不一致）。
+    ⚠️ 2026-10-02 修正：此前直接用 to_native 会令 CZCE 退化成 3 位（FG701），与
+    contract_daily 的 4 位存储（FG2701）不符 → 永远取不到价。现已改为优先 real_symbol。
     """
     d = when.date() if isinstance(when, datetime) else when
     try:
@@ -39,17 +45,26 @@ def fetch_market_price(session: Session, real_symbol: str, when) -> tuple[Option
             d = when.date()
     except Exception:
         pass
-    # contract_daily 中真实合约为原生大小写（SHFE/DCE 小写 rb2701，CZCE 大写 FG2701），
-    # 须按交易所归一化后再查，否则 SHFE/DCE 会查不到盘口价。
     meta = real_contract_metadata(session, real_symbol)
-    native = to_native(real_symbol, meta.get("exchange")) if meta.get("exchange") else real_symbol
-    row = session.execute(
-        text("SELECT close FROM contract_daily WHERE symbol=:s AND trade_date <= :d "
-             "ORDER BY trade_date DESC LIMIT 1"),
-        {"s": native, "d": d}).fetchone()
-    if row is None or row[0] is None:
-        return None, None
-    return float(row[0]), "daily"
+    ex = meta.get("exchange")
+    candidates = [real_symbol]
+    if ex:
+        candidates.append(to_native(real_symbol, ex))
+    candidates += [real_symbol.lower(), real_symbol.upper()]
+    seen: set[str] = set()
+    forms: list[str] = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            forms.append(c)
+    for form in forms:
+        row = session.execute(
+            text("SELECT close FROM contract_daily WHERE symbol=:s AND trade_date <= :d "
+                 "ORDER BY trade_date DESC LIMIT 1"),
+            {"s": form, "d": d}).fetchone()
+        if row is not None and row[0] is not None:
+            return float(row[0]), "daily"
+    return None, None
 
 
 def check_tick(price: float, tick: Optional[float]) -> list[str]:
