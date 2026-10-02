@@ -11,6 +11,12 @@ FROM node:20-alpine AS webbuilder
 WORKDIR /build
 # 依赖先行（缓存层）；国内网络走 npmmirror，可用 --build-arg 覆盖
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+# ⚠ 前端鉴权（整改 P2 / PRD §9）：看板必须在构建期注入 VITE_API_KEY，
+# 否则带 X-API-Key 头的请求会因缺 key 被后端 403。云端重建时通过
+#   docker compose build --build-arg VITE_API_KEY=<与 INTEGRATION_API_KEY 一致>
+# 透传；不传则留空（此时看板所有 API 会 403，需补配）。
+ARG VITE_API_KEY=""
+ENV VITE_API_KEY=$VITE_API_KEY
 COPY web/package.json ./
 # 不复制 Windows 生成的 package-lock.json：否则 npm 会据此生成指向
 # node.exe 的 bin 链接，在 alpine 下报 “node.exe: not found”

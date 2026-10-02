@@ -128,8 +128,24 @@ def _htf_direction(c: np.ndarray, ema_k: int) -> np.ndarray:
     return np.concatenate([[0], dir_raw[:-1]])
 
 
+def _atr(df: pd.DataFrame, n: int) -> pd.Series:
+    """Wilder RMA 口径 ATR（与引擎 `atr_n` 同口径）。
+
+    用途：给成交打 **R 单位**。融合 `_simulate_trades` 原本只产出价格单位的 pnl，
+    无法喂 `app.backtest.robustness`（其 `run_six_checks` 依赖 `R`/`risk`）。
+    """
+    h = df["high"].astype(float)
+    l = df["low"].astype(float)
+    c = df["close"].astype(float)
+    pc = c.shift(1)
+    tr = pd.concat([(h - l), (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
+    if len(tr):
+        tr.iloc[0] = float(h.iloc[0] - l.iloc[0])
+    return tr.ewm(alpha=1.0 / max(1, int(n)), adjust=False).mean()
+
+
 def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
-    """信号层：消费 walk_fusion_states，输出 per-bar (dt, close, state)。
+    """信号层：消费 walk_fusion_states，输出 per-bar (dt, close, state, atr)。
 
     注意对齐：生成器从 i=2 开始（前两根为预热），故 state[k] 对应 df 行 k+2。
     """
@@ -147,6 +163,8 @@ def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
     out = df.reset_index(drop=True).copy()
     out["state"] = states
     out["lots"] = lots_arr
+    # 波动率基准：用于把成交归一化为 R（robustness 六项检查的硬要求）
+    out["atr"] = _atr(out, getattr(p, "atr_n", 14)).to_numpy(dtype=float)
     return out
 
 
@@ -163,27 +181,53 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[d
     closes = states_df["close"].to_numpy(float)
     states = states_df["state"].to_numpy()
     lots_arr = states_df["lots"].to_numpy()
+    atr_arr = (states_df["atr"].to_numpy(dtype=float)
+               if "atr" in states_df.columns else np.full(len(states), np.nan))
+    with np.errstate(all="ignore"):
+        _m = np.nanmean(atr_arr) if len(atr_arr) else float("nan")
+        atr_mean = float(_m) if np.isfinite(_m) else 0.0
     cost_frac = p.cost_bp / 10000.0  # 整段双边成本（小数）
+    mult = float(getattr(p, "mult", 1.0) or 1.0)
     trades: list[dict] = []
-    open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon}
+    open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon, atr}
     pos = 0                      # 当前持仓方向 0/1/2
 
-    def _close_all(i: int) -> None:
-        for lt in open_lots:
-            dirn = 1.0 if pos == 1 else -1.0
-            gross = dirn * (closes[i] - lt["entry_px"])
-            pnl = gross - cost_frac * lt["entry_px"]
-            trades.append({
-                "symbol": None,
-                "side": "LONG" if pos == 1 else "SHORT",
-                "entry_dt": dts[lt["entry_i"]], "exit_dt": dts[i],
-                "entry_px": round(float(lt["entry_px"]), 4),
-                "exit_px": round(float(closes[i]), 4),
-                "pnl": round(float(pnl), 4),
-                "pnl_pct": round(float(pnl / lt["entry_px"] * 100.0), 4) if lt["entry_px"] else 0.0,
-                "addon": lt["addon"],
-            })
-        open_lots.clear()
+    def _atr_at(i: int) -> float:
+        v = float(atr_arr[i]) if i < len(atr_arr) else float("nan")
+        if not np.isfinite(v) or v <= 0:
+            v = atr_mean
+        return v
+
+    def _trade(lt: dict, i: int, open_pos: bool = False) -> dict:
+        dirn = 1.0 if pos == 1 else -1.0
+        ep = float(lt["entry_px"])
+        xp = float(closes[i])
+        gross = dirn * (xp - ep)
+        pnl = gross - cost_frac * ep
+        _a = lt.get("atr")
+        risk = float(p.sl_atr * _a) if (_a and np.isfinite(_a) and _a > 0) else 0.0
+        r_unit = float(dirn * (xp - ep) / risk) if risk > 0 else 0.0
+        t = {
+            "symbol": None,
+            "side": "LONG" if pos == 1 else "SHORT",
+            "entry_dt": dts[lt["entry_i"]], "exit_dt": dts[i],
+            "entry_px": round(ep, 4),
+            "exit_px": round(xp, 4),
+            "pnl": round(float(pnl), 4),
+            "pnl_pct": round(float(pnl / ep * 100.0), 4) if ep else 0.0,
+            "addon": lt["addon"],
+            # —— robustness 六项检查口径（R / risk / 进出场时价）——
+            # ⚠ 这几个字段**禁止 round**：robustness.price_sign_symmetry 用
+            #   abs_tol=1e-9 校验价格取负对称性，任何舍入都会被误判为不一致。
+            "atr": float(_a or 0.0),
+            "risk": risk, "R": r_unit,
+            "ep": ep, "xp": xp,
+            "edt": dts[lt["entry_i"]], "xdt": dts[i],
+            "dir": dirn, "mult": mult,
+        }
+        if open_pos:
+            t["open"] = True
+        return t
 
     for i in range(len(states)):
         tgt = int(states[i])
@@ -191,33 +235,51 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[d
         # P1 加码：持仓中引擎手数增加 → 当根收盘加开对应手数
         if pos != 0 and tgt == pos and cur_lots > len(open_lots):
             for _ in range(cur_lots - len(open_lots)):
-                open_lots.append({"entry_px": float(closes[i]), "entry_i": i, "addon": True})
+                open_lots.append({"entry_px": float(closes[i]), "entry_i": i,
+                                  "addon": True, "atr": _atr_at(i)})
         if tgt != pos:
             if open_lots:
-                _close_all(i)
+                for lt in open_lots:
+                    trades.append(_trade(lt, i))
+                open_lots.clear()
             if tgt != 0:
                 pos = tgt
-                open_lots.append({"entry_px": float(closes[i]), "entry_i": i, "addon": False})
+                open_lots.append({"entry_px": float(closes[i]), "entry_i": i,
+                                  "addon": False, "atr": _atr_at(i)})
             else:
                 pos = 0
     # 末尾仍持仓：以最后收盘价强平（标记未实现，不计入已平仓统计）
     if pos != 0 and open_lots:
         i = len(states) - 1
         for lt in open_lots:
-            dirn = 1.0 if pos == 1 else -1.0
-            gross = dirn * (closes[i] - lt["entry_px"])
-            pnl = gross - cost_frac * lt["entry_px"]
-            trades.append({
-                "symbol": None, "side": "LONG" if pos == 1 else "SHORT",
-                "entry_dt": dts[lt["entry_i"]], "exit_dt": dts[i],
-                "entry_px": round(float(lt["entry_px"]), 4),
-                "exit_px": round(float(closes[i]), 4),
-                "pnl": round(float(pnl), 4),
-                "pnl_pct": round(float(pnl / lt["entry_px"] * 100.0), 4) if lt["entry_px"] else 0.0,
-                "addon": lt["addon"], "open": True,
-            })
+            trades.append(_trade(lt, i, open_pos=True))
         open_lots.clear()
     return trades
+
+
+def to_robustness_trades(trades: list[dict], mult: float = 1.0) -> list[dict]:
+    """把融合成交适配为 ``app.backtest.robustness`` 的输入口径。
+
+    ``run_six_checks`` 依赖 ``R/risk/ep/xp/edt/xdt/dir``；融合成交原本只有价格单位
+    pnl，直接喂入会缺字段。本函数**只补字段、不改任何既有数值**，并剔除未平仓
+    （open=True）与 risk<=0 的成交——把检验作用域严格限定在已平仓样本。
+    """
+    out: list[dict] = []
+    for t in trades:
+        if t.get("open"):
+            continue
+        risk = float(t.get("risk") or 0.0)
+        if not np.isfinite(risk) or risk <= 0:
+            continue
+        d = dict(t)
+        d["mult"] = float(t.get("mult") or mult)
+        d.setdefault("sym", t.get("symbol"))
+        for k in ("edt", "xdt"):
+            v = d.get(k)
+            if v is not None and hasattr(v, "isoformat"):
+                d[k] = str(v)
+        out.append(d)
+    return out
 
 
 def _metrics_from_trades(trades: list[dict]) -> dict:
@@ -264,10 +326,13 @@ def _jittered_params(p: FusionBacktestParams, seed: int, jitter: float) -> Fusio
 def run_fusion_backtest(session, symbols: list[str] | None = None,
                         params: FusionBacktestParams | None = None,
                         start: date | None = None, end: date | None = None,
-                        seeds: list[int] | None = None) -> dict:
+                        seeds: list[int] | None = None,
+                        include_trades: bool = False) -> dict:
     """执行融合策略回测（信号层 walk-forward + 组合层 FIFO 重放）。
 
     seeds：非空则对每个 seed 跑一遍（用 seed_jitter 扰动），最终指标取均值。
+    include_trades：True 时额外返回逐笔成交 `trades`（walk-forward / 六项检查需要）。
+    默认 False —— 保持既有 API 返回体不变（避免逐笔数据放大响应体）。
     """
     settings = get_settings()
     if params is None:
@@ -306,6 +371,8 @@ def run_fusion_backtest(session, symbols: list[str] | None = None,
     agg = _metrics_from_trades(all_trades)
     agg["per_symbol"] = per_symbol
     agg["skipped"] = skipped
+    if include_trades:
+        agg["trades"] = all_trades
     agg["params"] = {k: getattr(params, k) for k in params.__dataclass_fields__}
     agg["seeds"] = seed_list
     return agg

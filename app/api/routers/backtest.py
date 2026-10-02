@@ -65,34 +65,48 @@ def list_backtests(limit: int = 20, run_id: str | None = None):
     """回测结果列表（最新 run 或指定 run）"""
     from sqlalchemy import select
     from app.models import BacktestResult
-    from app.core.db import get_engine
+    # ⚠ 必须是 ORM Session 而非 Core Connection：实测（2026-10-02）
+    #   `get_engine().connect()` 下 `select(BacktestResult).scalars()` 返回的是
+    #   **首列字符串**（run_id），后面 r.by_state 直接 AttributeError → GET
+    #   /backtest 500。ORM Session 才实例化实体。
+    from app.core.db import session_scope
 
-    with get_engine().connect() as conn:
+    with session_scope() as sess:
         if run_id:
-            rows = conn.execute(
+            rows = sess.execute(
                 select(BacktestResult).where(BacktestResult.run_id == run_id)
             ).scalars().all()
         else:
-            latest = conn.execute(
+            latest = sess.execute(
                 select(BacktestResult.run_id).order_by(BacktestResult.created_at.desc()).limit(1)
             ).scalar()
             if not latest:
                 return {"run_id": None, "results": []}
-            rows = conn.execute(
+            rows = sess.execute(
                 select(BacktestResult).where(BacktestResult.run_id == latest)
             ).scalars().all()
             run_id = latest
 
-    from sqlalchemy.orm import Session as _S
+    import json as _json
 
     out = []
     for r in rows:
+        # by_state 在库里是 JSON/文本列：可能是 dict（JSONB）也可能是 str，
+        # 直接 .get() 会在 str 上抛 AttributeError（GET /backtest 500 的根因）。
         bs = r.by_state or {}
+        if isinstance(bs, str):
+            try:
+                bs = _json.loads(bs)
+            except Exception:
+                bs = {}
+        if not isinstance(bs, dict):
+            bs = {}
         out.append(
             {
                 "run_id": r.run_id,
                 "model": r.model,
-                "window": r.window,
+                # 注意：模型字段是 window_len（window 为 PG 保留字，见 domain.py）
+                "window": r.window_len,
                 "start_date": r.start_date.isoformat() if r.start_date else None,
                 "end_date": r.end_date.isoformat() if r.end_date else None,
                 "dir_acc": float(r.dir_acc) if r.dir_acc is not None else None,

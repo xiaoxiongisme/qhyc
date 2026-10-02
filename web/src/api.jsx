@@ -1,6 +1,17 @@
 // 统一 API 客户端：同源部署（FastAPI 静态托管），相对路径即可
+//
+// ⚠ 鉴权（整改优先级 P2 / PRD §9）：后端除 /health 外的全部路由都要求
+//   `X-API-Key` 头（守卫式：仅当 .env 配了真实 INTEGRATION_API_KEY 才强制）。
+//   前端必须带上该头，否则看板所有接口都会 403。
+//   构建期注入：VITE_API_KEY（见 web/.env.example）。
+const API_KEY = import.meta.env.VITE_API_KEY || "";
+
+export function authHeaders(extra = {}) {
+  return API_KEY ? { "X-API-Key": API_KEY, ...extra } : { ...extra };
+}
+
 export async function getJSON(path) {
-  const res = await fetch(path);
+  const res = await fetch(path, { headers: authHeaders() });
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -15,7 +26,7 @@ export async function getJSON(path) {
 export async function postJSON(path, body = {}) {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (!res.ok) {

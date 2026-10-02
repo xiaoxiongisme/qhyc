@@ -25,6 +25,7 @@ _SH_TZ = ZoneInfo("Asia/Shanghai")
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
@@ -33,6 +34,11 @@ from app.core.logging import logger, setup_logging
 from app.ingest.orchestrator import IngestOrchestrator
 from app.repositories.task_repo import TaskRepository
 from app.core.db import get_engine
+from app.ops import (
+    alert_config_from_env,
+    backup_config_from_env,
+    install_scheduler_listener,
+)
 
 
 def _switch_on(switch_key: str, env_name: str | None = None, default: bool = False) -> bool:
@@ -1370,12 +1376,97 @@ def _build_scheduler() -> BlockingScheduler:
     else:
         logger.info("[scheduler] data_selfcheck 停用（DATA_SELFCHECK_ENABLED!=1）")
 
+    # ---- 运维层（整改 P1-1 备份 / P1-2 告警）--------------------------------
+    # 备份：rebuild 大事务前必须有一次可回滚的备份；容器内无 pg_dump/dockr，
+    #       故走 app.ops.backup 的 COPY 流式逻辑备份（小表优先）。
+    # 告警：资源/数据新鲜度/DB uptime 定期巡检 + 作业失败事件监听。
+    try:
+        _bcfg = backup_config_from_env()
+        if _bcfg.enabled:
+            sched.add_job(
+                _backup_daily_job,
+                trigger=CronTrigger(hour=_bcfg.run_hour, minute=_bcfg.run_minute,
+                                    timezone=settings.env.TZ),
+                id="ops_backup_daily",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=3600,
+            )
+            logger.info(f"[scheduler] registered backup daily "
+                        f"{_bcfg.run_hour:02d}:{_bcfg.run_minute:02d} → {_bcfg.dir}")
+        else:
+            logger.info("[scheduler] ops backup 停用（BACKUP_ENABLED!=1）")
+    except Exception as e:
+        logger.exception(f"[scheduler] backup 作业注册失败: {e}")
+
+    try:
+        _acfg = alert_config_from_env()
+        if _acfg.enabled:
+            sched.add_job(
+                _alert_check_job,
+                trigger=IntervalTrigger(minutes=max(1, int(_acfg.interval_min))),
+                id="ops_alert_check",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=600,
+            )
+            install_scheduler_listener(sched, _acfg)
+            logger.info(f"[scheduler] registered alert check every "
+                        f"{_acfg.interval_min}min")
+        else:
+            logger.info("[scheduler] alerting 停用（ALERT_ENABLED!=1）")
+    except Exception as e:
+        logger.exception(f"[scheduler] 告警作业注册失败: {e}")
+
     return sched
 
 
 # ---------------------------------------------------------------------------
 # Phase 4/5 新增作业
 # ---------------------------------------------------------------------------
+def _backup_daily_job() -> None:
+    """运维 P1-1：每日定时备份（逻辑备份 + 保留策略 + 可选异地）。
+
+    容器内没有 pg_dump / docker CLI（实测 2026-10-02），因此由 app.ops.backup
+    用 psycopg COPY 流式导出关键小表（字典/配置/登记/权重/工单）。
+    备份失败会主动告警——因为 rebuild 前的可回滚点是最后一道防线。
+    """
+    from app.ops.backup import backup_config_from_env, run_backup
+
+    cfg = backup_config_from_env()
+    try:
+        with session_scope() as s:
+            rep = run_backup(session=s, cfg=cfg)
+        if not rep.get("ok"):
+            send_notify("[qhyc] CRIT 备份异常",
+                        "失败表：{0}\n目录：{1}".format(rep.get("failed"), rep.get("dir")))
+        else:
+            logger.info(f"[scheduler] backup ok rows={rep.get('total_rows')} "
+                        f"dir={rep.get('dir')}")
+    except Exception as e:
+        logger.exception(f"[scheduler] backup failed: {e}")
+        send_notify("[qhyc] CRIT 备份失败", str(e)[:500])
+
+
+def _alert_check_job() -> None:
+    """运维 P1-2：定期巡检（资源/数据新鲜度/DB uptime/静默），异常即告警。"""
+    from app.ops.alerting import alert_config_from_env, check_all
+
+    cfg = alert_config_from_env()
+    try:
+        with session_scope() as s:
+            rep = check_all(session=s, cfg=cfg)
+        n = len(rep.get("findings", []))
+        if n:
+            logger.warning(f"[scheduler] alert findings={n} :: {rep.get('summary')}")
+        else:
+            logger.info("[scheduler] alert check ok")
+    except Exception as e:
+        logger.exception(f"[scheduler] alert check failed: {e}")
+
+
 def _factor_v1v6_job() -> None:
     """V1/V6 因子每日增量计算（T22）。
 

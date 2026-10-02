@@ -7,6 +7,7 @@ import Quality from "./pages/Quality.jsx";
 import Volatility from "./pages/Volatility.jsx";
 import Fusion from "./pages/Fusion.jsx";
 import FusionBacktest from "./pages/FusionBacktest.jsx";
+import Anomalies from "./pages/Anomalies.jsx";
 
 const TABS = [
   { key: "overview", label: "品种总览", comp: Overview },
@@ -15,6 +16,7 @@ const TABS = [
   { key: "volatility", label: "波动率", comp: Volatility },
   { key: "backtest", label: "回测面板", comp: Backtest },
   { key: "quality", label: "数据质量", comp: Quality },
+  { key: "anomalies", label: "异常工单", comp: Anomalies },
   { key: "fusion", label: "融合信号", comp: Fusion },
   { key: "fusion_bt", label: "融合回测", comp: FusionBacktest },
 ];
