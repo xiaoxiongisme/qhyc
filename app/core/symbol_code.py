@@ -135,12 +135,19 @@ def to_std(
     否则跨年会补错年份。
     """
     raw = str(symbol or "").strip()
-    # 主连码 / 天勤码 / 指数码 —— 非「合约码」命名空间，原样返回
-    # （``KQ.m@`` 的 ``m`` 大小写敏感，绝不能整体 upper）
+    # 主连码 / 天勤码 / 指数码 —— 非「合约码」命名空间，仅去空白后转大写返回
+    # （``KQ.m@`` 的 ``m`` 大小写敏感，绝不能整体 upper —— 那是天勤主连命名空间）
     if not raw or "@" in raw or "." in raw or ":" in raw:
         return raw
     if is_continuous(raw):
-        return raw
+        # ⚠️ 2026-10-02 修正：连续码此前**原样返回**，导致「标准态=大写」在 888 命名空间失效
+        # （to_std("rb888") == "rb888"）。于是任何小写 888 进入归一链后，下游所有
+        # `symbol = :s` 精确匹配（futures_symbol / dim_symbol / roll_segment / bar_*）
+        # 对它**静默 miss**；再叠加各处「取不到就默认 0.0 / 1.0」的回退，
+        # 会把乘数静默退化成 1.0（螺纹 10→1、沪金 1000→1）并污染 P&L —— 见
+        # tasklog/2026/2026-10-02_2245_CB_*.md 取证 F-0/F-1/F-2。
+        # 库内 888 连续码统一大写登记（futures_symbol: RB888/AG888/…），故此处转大写是对齐真源。
+        return raw.upper()
     s = raw.upper()
     prod, num = split(s)
     if prod is None:

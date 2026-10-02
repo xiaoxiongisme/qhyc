@@ -187,6 +187,84 @@ def resolve_contract(contract_code: str) -> dict:
     return {}
 
 
+class VarietySpecNotFoundError(LookupError):
+    """品种规格（乘数/tick 等）查不到或为空 —— **必须报错，绝不允许静默取默认值**。
+
+    历史事故：多处用 ``specs.get(key, {}).get("multiplier", 1.0)`` 静默兜底，
+    大小写/形态不匹配时乘数退化为 1.0（螺纹 10→1、沪金 1000→1），
+    直接污染 P&L 与 notional，且不报错不告警。见 tasklog 2026-10-02 取证 F-1/F-2。
+    """
+
+
+#: 品种规格缓存（品种数 ~70，变动极少；TTL 兜住运营改乘数/tick 后 5 分钟内生效）
+_SPEC_TTL_SEC = 300.0
+_spec_cache: dict[str, tuple[float, dict]] = {}
+
+
+def variety_spec(symbol: str, *, use_cache: bool = True) -> dict:
+    """取品种级规格（乘数 / tick / 交易所 / 报价单位），**唯一真源 = ``dim_variety``**。
+
+    入参接受任意形态与大小写（``rb888`` / ``RB888`` / ``RB2701`` / ``rb2601`` / ``RB``），
+    内部一律归一到**大写品种码**再查库 —— 归一由 DB 字典（``dim_symbol`` /
+    ``dim_contract`` / ``dim_variety``）负责，代码不再自带品种表。
+
+    返回字段：``variety_code, variety_name, exchange, multiplier, tick_size, quote_unit, main_symbol``
+
+    Raises:
+        VarietySpecNotFoundError: 品种未登记、已下线（is_active=false）或乘数/tick 为空。
+            **刻意不提供默认值** —— 乘数错一次就是 P&L 错一整轮回测。
+    """
+    import time
+
+    code = variety_of(symbol)
+    if not code:
+        raise VarietySpecNotFoundError(f"无法从 {symbol!r} 解析出品种码")
+
+    now = time.time()
+    if use_cache:
+        hit = _spec_cache.get(code)
+        if hit and now - hit[0] < _SPEC_TTL_SEC:
+            return hit[1]
+
+    with _engine().connect() as conn:
+        row = conn.execute(text(
+            "SELECT variety_code, variety_name, exchange, multiplier, tick_size, "
+            "       quote_unit, main_symbol, is_active "
+            "FROM dim_variety WHERE upper(variety_code) = upper(:c)"
+        ), {"c": code}).first()
+
+    if row is None:
+        raise VarietySpecNotFoundError(
+            f"dim_variety 中没有品种 {code!r}（由 {symbol!r} 解析）。"
+            f"请先跑 migrations/007_dim_tables.sql + scripts/seed_variety_specs.py --apply")
+    if not row[7]:
+        raise VarietySpecNotFoundError(
+            f"品种 {code!r}（由 {symbol!r} 解析）在 dim_variety 中 is_active=false。"
+            f"若是 007 误建的「888 连续码冒充品种码」脏行，请改用纯品种码重查")
+    if row[3] is None:
+        raise VarietySpecNotFoundError(
+            f"品种 {code!r} 的 multiplier 为空 —— 禁止以 1.0 兜底（会让 P&L 数量级出错）。"
+            f"请跑 scripts/seed_variety_specs.py --apply 播种")
+
+    spec = {
+        "variety_code": row[0], "variety_name": row[1], "exchange": row[2],
+        "multiplier": float(row[3]), "tick_size": float(row[4]) if row[4] is not None else None,
+        "quote_unit": row[5], "main_symbol": row[6],
+    }
+    _spec_cache[code] = (now, spec)
+    return spec
+
+
+def multiplier_of(symbol: str) -> float:
+    """便捷取乘数；查不到即抛 :class:`VarietySpecNotFoundError`（不返回默认值）。"""
+    return variety_spec(symbol)["multiplier"]
+
+
+def tick_of(symbol: str) -> float | None:
+    """便捷取最小变动价位；``None`` 表示字典未播种（允许跳过 tick 对齐校验）。"""
+    return variety_spec(symbol)["tick_size"]
+
+
 # ---------------------------------------------------------------------------
 # 取数
 # ---------------------------------------------------------------------------
