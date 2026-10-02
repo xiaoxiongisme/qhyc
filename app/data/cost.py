@@ -155,6 +155,73 @@ def fee_yuan_per_lot(symbol, action, price, *, contract=None, on_date=None, kind
     return ex + markup
 
 
+def cost_coefficients(symbol, *, contract=None, on_date=None, kind="FUTURE",
+                      close_action="CLOSE_YEST") -> dict:
+    """把一次开平成本分解为「固定项 + 按价格比例项 + 滑点」，供回测逐笔高效求值。
+
+    回测里每笔交易都要算成本，逐笔查库不可接受；而费率只有两种形态
+    （固定值 / 按成交额‰），故可一次解析、之后按价格闭式求值：
+
+        cost_yuan(price) = fixed_yuan
+                        + price x multiplier x pct_rate / 1000
+                        + slip_yuan
+
+    滑点为**每边** ``slip_ticks x tick_size x multiplier``，开平两次故乘 2。
+    """
+    from app.data.barstore import variety_spec
+    sp = variety_spec(symbol)
+    tick, mult = sp.get("tick_size"), sp["multiplier"]
+
+    o = fee_per_lot(symbol, "OPEN", contract=contract, on_date=on_date, kind=kind)
+    if not close_action_available(symbol, close_action, contract=contract,
+                                  on_date=on_date, kind=kind):
+        if close_action != "CLOSE_YEST":
+            close_action = "CLOSE_YEST"
+        if not close_action_available(symbol, close_action, contract=contract,
+                                      on_date=on_date, kind=kind):
+            raise CostNotFoundError(f"{sp['variety_code']}: 开仓与平昨费率均缺失")
+
+    fixed_yuan = 0.0
+    pct_rate = 0.0
+    for act in ("OPEN", close_action):
+        tc = fee_per_lot(symbol, act, contract=contract, on_date=on_date, kind=kind)
+        if tc.fee_type == "PCT":
+            pct_rate += tc.exchange_fee_yuan
+        elif tc.fee_type == "FIXED":
+            fixed_yuan += tc.exchange_fee_yuan
+        # FREE = 0
+        if tc.broker_markup_type == "FIXED":
+            fixed_yuan += tc.broker_markup_yuan
+        elif tc.broker_markup_type == "PCT":
+            pct_rate += tc.broker_markup_yuan
+    slip_yuan = 2.0 * (o.slip_ticks or 0) * (tick or 0) * mult
+    return {
+        "variety_code": sp["variety_code"],
+        "multiplier": mult,
+        "tick_size": tick,
+        "fixed_yuan": fixed_yuan,
+        "pct_rate": pct_rate,
+        "slip_yuan": slip_yuan,
+        "slip_ticks_per_side": o.slip_ticks,
+        "close_action": close_action,
+        "open_scope": o.scope_kind,
+    }
+
+
+def cost_yuan_at(coefficients: dict, price: float) -> float:
+    """按 ``cost_coefficients`` 给定系数求某个成交价的一次开平成本（元/手）。"""
+    c = coefficients
+    return (c["fixed_yuan"]
+            + float(price) * c["multiplier"] * c["pct_rate"] / 1000.0
+            + c["slip_yuan"])
+
+
+def cost_points_at(coefficients: dict, price: float) -> float:
+    """同上，但折成**点数**（除以乘数），以便与回测的点数口径 pnl 相减。"""
+    m = coefficients["multiplier"]
+    return cost_yuan_at(coefficients, price) / m if m else float("nan")
+
+
 def close_action_available(symbol, action, *, contract=None, on_date=None,
                            kind="FUTURE") -> bool:
     """该动作是否有费率（供回测降级判断，不抛错）。"""

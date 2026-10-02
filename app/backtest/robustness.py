@@ -33,9 +33,16 @@ def trade_pnl(t: dict, cost_bp: float = 5.0) -> float:
     """单笔净¥：R × risk × mult − 往返成本。
 
     ¥ = R × risk(2×ATR) × mult − bp/2/1e4 × (ep+xp) × mult
+
+    ⚠ 2026-10-03（用户拍板"真乘数口径"）：若交易记录里带 ``cost_yuan``
+    （由 ``fusion_backtest`` 从库内真实费率算出的整段开平成本），则**优先用它**，
+    不再退回 bp 假设 —— bp 假设对螺纹实测低估约 8 倍。
+    ``mult`` 取自 ``dim_variety``（真乘数），不再是恒定的 1.0。
     """
-    mult = t.get("mult", 1.0)
+    mult = t.get("mult", 1.0) or 1.0
     gross = t["R"] * t["risk"] * mult
+    if t.get("cost_yuan") is not None:
+        return gross - float(t["cost_yuan"])
     cost = cost_bp / 2.0 / 1e4 * (t["ep"] + t["xp"]) * mult
     return gross - cost
 

@@ -168,7 +168,8 @@ def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
     return out
 
 
-def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[dict]:
+def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
+                      symbol: str | None = None) -> list[dict]:
     """组合层：把 state + lots 序列重放成**逐手**成交（close-only，单品种单方向）。
 
     规则（V3.4 口径，PRD §16/§17）：
@@ -176,6 +177,15 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[d
     - P1 阶梯加码：持仓期间引擎 lots 由 L→L+1（浮盈门槛门控），视为当根收盘**加开 1 手**；
     - 离场/反手时把全部在手按当根收盘价平掉（每手独立计 pnl，成本按各自开仓名义扣）；
     - 每手带 `addon` 标记（首仓=False / 加码=True），指标层单独统计 `n_addons`。
+
+    ⚠ 乘数与成本口径（2026-10-03 修正，用户拍板"真乘数口径"）
+      此前 ``mult = getattr(p, "mult", 1.0)`` —— ``FusionBacktestParams`` **没有 mult
+      字段**，故恒为 1.0；而 robust��ness 的 ``trade_pnl`` 按 ``R×risk×mult`` 折元，
+      等于把「点数」直接当「元」。螺纹乘数 10 → 净利低估 10×、沪金 1000 → 1000×。
+      现改为：从 ``dim_variety`` 取**真乘数**，并把每笔的**真实成本**（元）算好后
+      以点数形式扣减（``cost_points = cost_yuan / mult``）。
+      成本来源为 ``dim_trading_cost``（交易所费率 + 券商 1 分 + 滑点 1 跳/边），
+      缺费率即抛错，**不再退回固定 bp 假设**（原 cost_bp=1.3 对螺纹低估约 8 倍）。
     """
     dts = states_df["dt"].to_numpy()
     closes = states_df["close"].to_numpy(float)
@@ -186,8 +196,15 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[d
     with np.errstate(all="ignore"):
         _m = np.nanmean(atr_arr) if len(atr_arr) else float("nan")
         atr_mean = float(_m) if np.isfinite(_m) else 0.0
-    cost_frac = p.cost_bp / 10000.0  # 整段双边成本（小数）
-    mult = float(getattr(p, "mult", 1.0) or 1.0)
+    cost_frac = p.cost_bp / 10000.0  # 旧：固定基点假设（仅当无 symbol 时兜底）
+    # —— 真乘数 + 真成本（dict）——
+    cost_coef = None
+    if symbol:
+        from app.data.cost import cost_coefficients, cost_points_at
+        cost_coef = cost_coefficients(symbol, close_action="CLOSE_YEST")
+        mult = float(cost_coef["multiplier"])
+    else:
+        mult = float(getattr(p, "mult", 1.0) or 1.0)
     trades: list[dict] = []
     open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon, atr}
     pos = 0                      # 当前持仓方向 0/1/2
@@ -203,7 +220,13 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[d
         ep = float(lt["entry_px"])
         xp = float(closes[i])
         gross = dirn * (xp - ep)
-        pnl = gross - cost_frac * ep
+        # 成本：优先用库内真实费率（交易所+券商1分+滑点1跳/边），折成点数扣减
+        if cost_coef is not None:
+            cost_pts = cost_points_at(cost_coef, ep)
+        else:
+            cost_pts = cost_frac * ep
+        cost_yuan = cost_pts * mult
+        pnl = gross - cost_pts
         _a = lt.get("atr")
         risk = float(p.sl_atr * _a) if (_a and np.isfinite(_a) and _a > 0) else 0.0
         r_unit = float(dirn * (xp - ep) / risk) if risk > 0 else 0.0
@@ -224,6 +247,10 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams) -> list[d
             "ep": ep, "xp": xp,
             "edt": dts[lt["entry_i"]], "xdt": dts[i],
             "dir": dirn, "mult": mult,
+            # 真实成本（元/手，整段开平）：robustness 优先用此字段，
+            # 避免退回 bp 假设（真实费率与 bp 假设可差数倍）
+            "cost_yuan": cost_yuan,
+            "cost_points": cost_pts,
         }
         if open_pos:
             t["open"] = True
@@ -355,7 +382,7 @@ def run_fusion_backtest(session, symbols: list[str] | None = None,
             if pp.lookback_bars and len(df) > pp.lookback_bars:
                 df = df.iloc[-pp.lookback_bars:]
             states_df = _generate_states(df, pp)
-            tr = _simulate_trades(states_df, pp)
+            tr = _simulate_trades(states_df, pp, symbol=sym)
             for t in tr:
                 t["symbol"] = sym
             sym_trades.extend(tr)
