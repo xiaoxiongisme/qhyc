@@ -157,6 +157,16 @@ def main() -> int:
             "AND fs.unit IS NOT NULL AND (dv.quote_unit IS DISTINCT FROM fs.unit)"))
         print(f"[done] dim_variety.quote_unit 修复 {r3.rowcount} 行")
 
+        # 品种中文名：007 把中文名写在了 888 脏行上（已下线），正常行需从
+        # futures_symbol.name 按 product 回填。中文名是「费率表中文名 → 品种码」
+        # 映射的真源（见 scripts/export_variety_names.py），缺了它外部解析会落空。
+        r3b = s.execute(text(
+            "UPDATE dim_variety dv SET variety_name = fs.name, updated_at=now() "
+            "FROM futures_symbol fs WHERE fs.product = dv.variety_code "
+            "AND fs.name IS NOT NULL AND fs.name <> '' "
+            "AND (dv.variety_name IS DISTINCT FROM fs.name)"))
+        print(f"[done] dim_variety.variety_name 回填 {r3b.rowcount} 行")
+
         # 下线 007 误建的「888 连续码冒充品种码」脏行：variety_code 不该以 888 结尾
         r4 = s.execute(text(
             "UPDATE dim_variety SET is_active=false, "
