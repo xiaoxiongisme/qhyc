@@ -1,0 +1,213 @@
+﻿# -*- coding: utf-8 -*-
+"""交易成本解析：唯一权威 = 库表 ``dim_trading_cost``（迁移 013/014）。
+
+为什么需要
+----------
+回测与执行此前各用各的成本口径（``cost_pct`` 百分比、``fee_per_lot`` 死数据、多份
+``SPEC`` 副本），彼此不可比；且费率实际是「三动作 × 两类型 × 合约范围」的组合，
+无法用一个标量表达。本模块把复杂度收进库表，调用方只问「这次成交多少钱」。
+
+口径（用户拍板）
+----------------
+* 实际成本 = **交易所标准 + 券商加收 1 分/手**，滑点 **1 跳/边**（014 迁移）。
+* 三动作不可合并：OPEN / CLOSE_YEST / CLOSE_TODAY（苹果开仓 5、平今 20）。
+* 两类费率：FIXED(元/手) 与 PCT(‰，按成交额)。调用方不必判断量纲。
+* 合约范围：交易所对特定合约给不同费率（碳酸锂 0.8‰，2601~2702 为 3.2‰），
+  按 CONTRACTS > MONTHS > ALL 取最具体的一条。
+
+**未知即报错**：查不到抛 :class:`CostNotFoundError`，绝不按 0 成本静默计算
+——把「未知」当「免费」会系统性低估回测成本。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from typing import Optional
+
+from sqlalchemy import text
+
+from app.core.db import session_scope
+
+__all__ = ["TradingCost", "CostNotFoundError", "fee_per_lot",
+           "fee_yuan_per_lot", "round_trip_cost"]
+
+_SCOPE_RANK = {"CONTRACTS": 3, "MONTHS": 2, "ALL": 1}
+
+
+class CostNotFoundError(LookupError):
+    """费率不存在或范围不匹配 —— 必须报错，禁止按 0 计。"""
+
+
+@dataclass(frozen=True)
+class TradingCost:
+    variety_code: str
+    action: str
+    fee_type: str
+    fee_value: float
+    exchange_fee_yuan: float
+    broker_markup_type: str
+    broker_markup_yuan: float
+    slip_ticks: float
+    scope_kind: str
+    effective_from: date
+    source: str
+    note: Optional[str] = None
+
+    @property
+    def fee_yuan(self) -> float:
+        return self.exchange_fee_yuan + self.broker_markup_yuan
+
+
+def _variety(symbol: str) -> str:
+    from app.data.barstore import variety_of
+    vc = variety_of(symbol)
+    if not vc:
+        raise CostNotFoundError(f"cannot resolve variety from {symbol!r}")
+    return vc.upper()
+
+
+def _contract_parts(contract):
+    if not contract:
+        return None, None
+    from app.core.symbol_code import to_std
+    s = to_std(contract)
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) < 4:
+        return None, None
+    return [digits[-4:]], int(digits[-2:])
+
+
+def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
+    """取「一次成交(一手)」的成本要素。未知即抛 CostNotFoundError。
+
+    :param action: OPEN / CLOSE_YEST / CLOSE_TODAY
+    :param contract: 具体合约码，用于命中「特定合约」费率；None 则只按全范围
+    :param on_date: 费率生效日，默认今天。**回测历史务必显式传入** ——
+        否则会用今天的费率算历史（滚动表的意义就在这里）。
+    """
+    action = action.upper()
+    if action not in ("OPEN", "CLOSE_YEST", "CLOSE_TODAY"):
+        raise ValueError(f"bad action {action!r}")
+    vc = _variety(symbol)
+    d = on_date or date.today()
+    c4, cmonth = _contract_parts(contract)
+
+    with session_scope() as s:
+        rows = s.execute(text(
+            "SELECT scope_kind, scope_months, scope_contracts, fee_type, fee_value, "
+            "       exchange_fee_value, broker_markup_type, broker_markup_value, "
+            "       slip_ticks, effective_from, source, note "
+            "FROM dim_trading_cost "
+            "WHERE upper(variety_code) = :vc AND instrument_kind = :kind AND action = :act "
+            "  AND effective_from <= :d AND (effective_to IS NULL OR effective_to > :d)"),
+            {"vc": vc, "kind": kind, "act": action, "d": d}).fetchall()
+
+    if not rows:
+        raise CostNotFoundError(
+            f"{vc}/{action}: no fee row in dim_trading_cost at {d}. "
+            f"REFUSING to compute as 0 cost - run build_cost_dict.py + load_cost_dict.py --apply")
+
+    best = None
+    for r in rows:
+        sk = r[0]
+        if sk == "CONTRACTS":
+            lst = [x.upper() for x in (r[2] or [])]
+            if not (c4 and any(x.endswith(tuple(c4)) for x in lst)):
+                continue
+        elif sk == "MONTHS":
+            if cmonth is None or cmonth not in (r[1] or []):
+                continue
+        rank = _SCOPE_RANK.get(sk, 0)
+        if best is None or rank > best[0]:
+            best = (rank, r)
+
+    if best is None:
+        raise CostNotFoundError(
+            f"{vc}/{action} at {d}: fee rows exist but none applies to contract={contract!r}. "
+            f"REFUSING to compute as 0 cost.")
+
+    r = best[1]
+    ex_src = r[5] if r[5] is not None else r[4]
+    return TradingCost(
+        variety_code=vc, action=action, fee_type=r[3], fee_value=float(r[4] or 0),
+        exchange_fee_yuan=float(ex_src or 0),
+        broker_markup_type=r[6] or "NONE",
+        broker_markup_yuan=(float(r[7] or 0) if (r[6] or "NONE") in ("FIXED", "PCT") else 0.0),
+        slip_ticks=float(r[8] or 0), scope_kind=r[0], effective_from=r[9],
+        source=r[10], note=r[11])
+
+
+def fee_yuan_per_lot(symbol, action, price, *, contract=None, on_date=None, kind="FUTURE"):
+    """折算成「元/手」。PCT 按成交额(price x multiplier) x ‰；FIXED 直接取值。"""
+    from app.data.barstore import variety_spec
+    tc = fee_per_lot(symbol, action, contract=contract, on_date=on_date, kind=kind)
+    if tc.fee_type == "FREE":
+        ex = 0.0
+    elif tc.fee_type == "PCT":
+        mult = variety_spec(symbol)["multiplier"]
+        ex = float(price) * mult * tc.exchange_fee_yuan / 1000.0
+    else:
+        ex = tc.exchange_fee_yuan
+    markup = tc.broker_markup_yuan
+    if tc.broker_markup_type == "PCT":
+        mult = variety_spec(symbol)["multiplier"]
+        markup = float(price) * mult * tc.broker_markup_yuan / 1000.0
+    return ex + markup
+
+
+def close_action_available(symbol, action, *, contract=None, on_date=None,
+                           kind="FUTURE") -> bool:
+    """该动作是否有费率（供回测降级判断，不抛错）。"""
+    try:
+        fee_per_lot(symbol, action, contract=contract, on_date=on_date, kind=kind)
+        return True
+    except CostNotFoundError:
+        return False
+
+
+def round_trip_cost(symbol, price, *, contract=None, on_date=None, lots=1,
+                    kind="FUTURE", close_action="CLOSE_YEST", strict=False):
+    """一次完整开平的总成本（元）。
+
+    组成：开仓费 + 平仓费 + 滑点（**每边 1 跳**，故开平各一次 = 2 x slip_ticks x
+    tick_size x multiplier x 手数）。
+
+    :param close_action: 默认 ``CLOSE_YEST``。**注意**：手续费来源文件对多数品种
+        **未给平今费率**（当前 166 个动作里仅 81 个有 CLOSE_TODAY），若强用平今会在
+        回测中大面积报「费率未知」。K 线级回测按「隔日平仓」建模更贴近实际，故默认
+        平昨；确需当日平仓时显式传 ``close_action="CLOSE_TODAY"``。
+    :param strict: True 时缺该动作费率即抛错（实盘校验用，不接受任何降级）。
+    """
+    from app.data.barstore import variety_spec
+    sp = variety_spec(symbol)
+    tick, mult = sp.get("tick_size"), sp["multiplier"]
+    o = fee_per_lot(symbol, "OPEN", contract=contract, on_date=on_date, kind=kind)
+
+    if not close_action_available(symbol, close_action, contract=contract,
+                                  on_date=on_date, kind=kind):
+        if strict or close_action == "CLOSE_YEST":
+            raise CostNotFoundError(
+                f"{sp['variety_code']}: 平仓动作 {close_action} 无费率"
+                f"{'（strict=True，不接受降级）' if strict else ''}")
+        close_action = "CLOSE_YEST"
+        if not close_action_available(symbol, close_action, contract=contract,
+                                      on_date=on_date, kind=kind):
+            raise CostNotFoundError(
+                f"{sp['variety_code']}: 连平昨费率也缺失，无法计算成本")
+
+    fee_open = fee_yuan_per_lot(symbol, "OPEN", price, contract=contract,
+                                on_date=on_date, kind=kind)
+    fee_close = fee_yuan_per_lot(symbol, close_action, price, contract=contract,
+                                 on_date=on_date, kind=kind)
+    slip_per_side = (o.slip_ticks or 0) * (tick or 0) * mult
+    return {
+        "fee_open": fee_open * lots,
+        "fee_close": fee_close * lots,
+        "slippage": 2 * slip_per_side * lots,
+        "total": (fee_open + fee_close + 2 * slip_per_side) * lots,
+        "open_scope": o.scope_kind,
+        "close_action": close_action,
+        "slip_ticks_per_side": o.slip_ticks,
+        "tick_size": tick,
+        "multiplier": mult,
+    }
