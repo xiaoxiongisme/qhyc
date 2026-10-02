@@ -15,7 +15,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.symbol_code import to_native
+from app.core.symbol_code import to_std
 from app.execution.roll_policy import real_contract_metadata
 
 #: 实时盘口容差（默认 0.5%）
@@ -26,17 +26,48 @@ DAILY_TOL = float(__import__("os").getenv("DAILY_PRICE_TOL", "0.02"))
 BLOCK_TOL = float(__import__("os").getenv("PRICE_BLOCK_TOL", "0.05"))
 
 
+def contract_daily_keys(session: Session, real_symbol: str) -> list[str]:
+    """经 ``contract_code_map`` 字典解析 contract_daily 的真实键（单一真源）。
+
+    contract_daily 内原生码形态不统一（CZCE 4 位大写 ``FG2701``、SHFE/DCE 小写 ``rb2510``），
+    而 ``contract_code_map.observed_native`` 记录的就是该合约在库内**实际被存成**的形态
+    （由 ``app.ingest.contract_code build`` 扫描 contract_daily 自身得到）。
+    优先用字典解析；若字典缺失该行，再用 std / 大小写兜底，避免依赖 ``to_native`` 的
+    3 位 CZCE 启发式（那只适用于天勤订阅码，不等于 contract_daily 存储键）。
+    """
+    std = to_std(real_symbol)
+    cands: list[str] = [std, real_symbol]
+    row = session.execute(
+        text("SELECT observed_native FROM contract_code_map WHERE std_symbol=:s"),
+        {"s": std},
+    ).fetchone()
+    if row and row[0]:
+        for v in str(row[0]).split(","):
+            v = v.strip()
+            if v:
+                cands.append(v)
+    cands += [real_symbol.upper(), real_symbol.lower(), std.upper(), std.lower()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in cands:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
 def fetch_market_price(session: Session, real_symbol: str, when) -> tuple[Optional[float], Optional[str]]:
-    """真实合约价取自 contract_daily（日频，原生大小写符号）。
+    """真实合约价取自 contract_daily（日频）。
 
     bar_*/hourly_bar 仅存 888 连续序列、无真实合约分钟/小时线，故一致性闸使用日频参照。
     返回 (price, granularity)；取不到返回 (None, None)。
 
-    键形式：contract_daily 以「原生写法」存储（CZCE 4 位大写 FG2701、SHFE/DCE 小写 rb2510），
-    而 main_contract_map.underlying 保存的正是该原生键，故优先直接用 real_symbol；
-    并以 to_native / 大小写作为兜底（覆盖个别大小写不一致）。
-    ⚠️ 2026-10-02 修正：此前直接用 to_native 会令 CZCE 退化成 3 位（FG701），与
-    contract_daily 的 4 位存储（FG2701）不符 → 永远取不到价。现已改为优先 real_symbol。
+    ⚠️ 2026-10-02 两次修正：
+      1) 此前用 ``to_native`` 把 CZCE ``FG2701`` 退化成 3 位 ``FG701``，与 contract_daily
+         的 4 位存储不符 → 永远取不到价；
+      2) 改用 ``contract_code_map.observed_native``（字典单一真源）解析键，大小写仅兜底。
+         更耐久的做法是跑 ``app.ingest.contract_code normalize --apply`` 把 contract_daily.symbol
+         物理归一为 4 位标准码，届时此处可直接用 ``to_std(real_symbol)``。
     """
     d = when.date() if isinstance(when, datetime) else when
     try:
@@ -45,19 +76,7 @@ def fetch_market_price(session: Session, real_symbol: str, when) -> tuple[Option
             d = when.date()
     except Exception:
         pass
-    meta = real_contract_metadata(session, real_symbol)
-    ex = meta.get("exchange")
-    candidates = [real_symbol]
-    if ex:
-        candidates.append(to_native(real_symbol, ex))
-    candidates += [real_symbol.lower(), real_symbol.upper()]
-    seen: set[str] = set()
-    forms: list[str] = []
-    for c in candidates:
-        if c and c not in seen:
-            seen.add(c)
-            forms.append(c)
-    for form in forms:
+    for form in contract_daily_keys(session, real_symbol):
         row = session.execute(
             text("SELECT close FROM contract_daily WHERE symbol=:s AND trade_date <= :d "
                  "ORDER BY trade_date DESC LIMIT 1"),
@@ -79,18 +98,23 @@ def check_tick(price: float, tick: Optional[float]) -> list[str]:
 
 
 def check_consistency(price: float, market: Optional[float], real_symbol: str,
-                      granularity: Optional[str]) -> list[str]:
-    """盘口一致性安全闸：偏差 > 硬阈值 → 阻断；> 软阈值 → 告警。"""
+                      granularity: Optional[str]) -> tuple[list[str], list[str]]:
+    """盘口一致性安全闸：偏差 > 硬阈值 → 阻断；> 软阈值 → 告警。
+
+    返回 (warnings, blocking_reasons)。
+    ⚠️ 2026-10-02 修正：此前 validate 把本函数返回值一律并入 blocks，
+    导致软偏差（应仅告警）被误判为阻断。现改为显式返回 (warns, blocks)。
+    """
     if market is None:
-        return [f"取不到 {real_symbol} 盘口价（contract_daily 无数据），跳过一致性校验（建议人工核对）"]
+        return [], [f"取不到 {real_symbol} 盘口价（contract_daily 无数据），跳过一致性校验（建议人工核对）"]
     dev = abs(price - market) / max(market, 1e-9)
     if dev > BLOCK_TOL:
-        return [f"反解价 {price:.2f} 与盘口 {market:.2f} 偏差 {dev:.2%} "
-                f"> 硬阈值 {BLOCK_TOL:.2%}：可能偏移/换月映射错误"]
+        return [], [f"反解价 {price:.2f} 与盘口 {market:.2f} 偏差 {dev:.2%} "
+                    f"> 硬阈值 {BLOCK_TOL:.2%}：可能偏移/换月映射错误"]
     soft = DAILY_TOL if granularity == "daily" else PRICE_TOL
     if dev > soft:
-        return [f"反解价 {price:.2f} 与盘口 {market:.2f} 偏差 {dev:.2%}（>容差 {soft:.2%}，建议核对）"]
-    return []
+        return [f"反解价 {price:.2f} 与盘口 {market:.2f} 偏差 {dev:.2%}（>容差 {soft:.2%}，建议核对）"], []
+    return [], []
 
 
 def check_limit(session: Session, real_symbol: str, price: float, when) -> list[str]:
@@ -129,6 +153,8 @@ def validate(session: Session, real_symbol: str, price: float,
     warns += check_tick(price, meta["price_tick"])
 
     market, gran = fetch_market_price(session, real_symbol, when)
-    blocks += check_consistency(price, market, real_symbol, gran)
+    c_warns, c_blocks = check_consistency(price, market, real_symbol, gran)
+    warns += c_warns
+    blocks += c_blocks
     warns += check_limit(session, real_symbol, price, when)
     return warns, blocks
