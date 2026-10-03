@@ -13,14 +13,22 @@ import pandas as pd
 
 from app.core.exceptions import IngestError
 from app.core.logging import logger
+from app.ingest.resilience import (  # G1 韧性层
+    DEFAULT_MAX_ATTEMPTS, DegradedResult, bars_consistency_check,
+    cache_get, resilient_fetch)
 from app.ingest.utils import attach_returns, normalize_ak_daily
 
 
 class AkShareSource:
-    """akshare 拉取日线"""
+    """akshare 拉取日线（经 G1 韧性层：退避重试 / 断路器 / 缓存降级 / 脏数据拦截）"""
 
     def __init__(self, exchange: str):
         self.exchange = exchange.upper()
+
+    #: 上一成功批次（按 symbol），供跨批次一致性校验 —— 替代被删的 tqsdk 双源比对
+    _last_good: dict[str, list] = {}
+    #: 降级标记（本次结果非实时），调用方应据此告警
+    degraded: DegradedResult | None = None
 
     # ---------- 公开 API ----------
     def fetch_daily(
@@ -40,21 +48,56 @@ class AkShareSource:
         )
         return rows
 
+    # ---------- 交易日历（G4：改期货专属日历源） ----------
     def fetch_calendar(self, exchange: str, year: int) -> pd.DataFrame:
-        """拉取某年某交易所交易日历（用于缺失检测 §4.3）"""
+        """交易日历。
+        ⚠ G4（评审 §2.5，P1 数据正确性）：``tool_trade_date_hist_sina`` 是**股票**日历，
+        期货作息与之不同（中金所 09:15 开盘、国债/股指无夜盘、节假日提前收盘、各所夜盘
+        时段不一），套用会系统性错，并污染护栏与门禁的时间边界。
+        现优先用 **期货专属** ``futures_rule(trade_date)``（国泰君安，按日返回各所各品种
+        日历 + 保证金比例），失败才回退股票日历并**明确告警**。
+        """
         import akshare as ak  # type: ignore
 
-        try:
-            df = ak.tool_trade_date_hist_sina()  # 通用 sina 日历
-            # sina 接口返回全市场日期；过滤 is_open
-            df = df.copy()
-            df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-            df = df[(df["trade_date"] >= date(year, 1, 1)) & (df["trade_date"] <= date(year, 12, 31))]
-            return df
-        except Exception as e:
-            logger.warning(f"[akshare] trade_date_hist_sina 失败 {e}，使用降级方案")
-            # 降级：调用新浪原始数据
-            raise
+        out = resilient_fetch(
+            f"calendar:{exchange}:{year}",
+            lambda: self._futures_calendar(ak, exchange, year),
+            cache_ttl=7 * 86400.0,
+            max_attempts=2,
+        )
+        if out.ok and out.value is not None and not out.value.empty:
+            return out.value
+        logger.warning(
+            f"[calendar] 期货专属日历不可用（{out.error}），**回退股票日历** —— "
+            f"该结果对中金所/国债/节假日前后可能有偏差（G4 已知遗留）")
+        df = ak.tool_trade_date_hist_sina()
+        df = df.copy()
+        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+        df = df[(df["trade_date"] >= date(year, 1, 1))
+                & (df["trade_date"] <= date(year, 12, 31))]
+        return df
+
+    @staticmethod
+    def _futures_calendar(ak, exchange: str, year: int) -> pd.DataFrame:
+        """akshare 期货专属日历：按交易日查询各所各品种日历。"""
+        days = pd.date_range(date(year, 1, 1), date(year, 12, 31), freq="D")
+        frames = []
+        for d in days:
+            try:
+                f = ak.futures_rule(trade_date=d.strftime("%Y%m%d"))
+            except Exception:  # noqa: BLE001  当日无数据/接口波动 → 跳过
+                continue
+            if f is None or f.empty:
+                continue
+            f = f.copy()
+            f["trade_date"] = d.date()
+            frames.append(f)
+        if not frames:
+            return pd.DataFrame()
+        out = pd.concat(frames, ignore_index=True)
+        # 统一列名：仅保留日期与交易所/品种相关列
+        keep = [c for c in out.columns if c in ("trade_date", "交易所", "品种", "保证金比例")]
+        return out[keep]
 
     # ---------- 内部 ----------
     @staticmethod
@@ -68,15 +111,39 @@ class AkShareSource:
     def _call_akshare(
         self, symbol: str, start: date, end: date
     ) -> pd.DataFrame:
+        """经 G1 韧性层拉取。
+
+        与改造前的差异：
+        * 原先**单次调用**，失败即抛、空结果静默返回 ``DataFrame()``（评审 §4.2 点名的
+          静默失败模式）→ 现为退避重试 + 断路器 + 缓存降级；
+        * 原先无脏数据拦截 → 现用「与上一成功批次一致性」校验替代被删的 tqsdk 比对层；
+        * 降级结果通过 ``self.degraded`` **显式暴露**，调用方必须决定是否接受。
+        """
         import akshare as ak  # type: ignore
 
-        # 新浪主连代码：FG0/SA0（库内统一用 FG888，调用前转换）
         sina_symbol = self.to_sina_symbol(symbol)
-        try:
-            df = ak.futures_main_sina(symbol=sina_symbol)
-        except Exception as e:
-            raise IngestError(f"akshare.futures_main_sina({symbol}) 失败: {e}") from e
+        self.degraded = None
+        out = resilient_fetch(
+            f"daily:{sina_symbol}",
+            lambda: ak.futures_main_sina(symbol=sina_symbol),
+            cache_ttl=6 * 3600.0,
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
+            validate=bars_consistency_check,
+            previous=self._last_good.get(symbol),
+        )
 
+        if not out.ok:
+            # 绝不静默：抛错由上层记 anomaly_ticket 并告警（评审 §4.2）
+            raise IngestError(
+                f"akshare.futures_main_sina({symbol}) 经 {out.attempts} 次重试仍失败: "
+                f"{out.error}")
+        if out.degraded:
+            self.degraded = out.degraded
+            logger.warning(
+                f"[akshare] {symbol} **降级数据**（{out.degraded.reason}，陈旧 "
+                f"{out.degraded.stale_seconds:.0f}s）—— 调用方需显式确认可用")
+
+        df = out.value
         if df is None or df.empty:
             return pd.DataFrame()
 
@@ -94,24 +161,24 @@ class AkShareSource:
     # ---------- 工具：识别交易所对应代码 ----------
     @staticmethod
     def detect_exchange(product: str) -> str:
-        """由品种代码推断交易所（内置规则）"""
-        czce = {"FG", "SA", "SR", "CF", "TA", "MA", "RM", "OI", "AP", "PK"}
-        shfe = {"RB", "CU", "AU", "AG", "AL", "ZN", "PB", "SN", "NI", "SS", "FU", "BU"}
-        dce = {"M", "Y", "I", "JM", "J", "P", "C", "A", "B", "L", "V", "PP", "EG", "EB"}
-        cffex = {"IF", "IC", "IH", "T", "TF", "TS"}
-        ine = {"SC", "NR", "LU", "BC"}
-        p = product.upper()
-        if p in czce:
-            return "CZCE"
-        if p in shfe:
-            return "SHFE"
-        if p in dce:
-            return "DCE"
-        if p in cffex:
-            return "CFFEX"
-        if p in ine:
-            return "INE"
-        return "UNKNOWN"
+        """由品种代码取交易所 —— **唯一真源 = ``dim_variety`` 字典**。
+
+        ⚠ 改造前此处是 70+ 条硬编码品种表（与 ``local_importer._PRODUCT_EXCHANGE``
+        ``inventory.PRODUCT_TO_EM_SYM`` ``scheduler._TICKS`` 构成四份重复真源），
+        交易所/品种新增都会失效且**静默返回 UNKNOWN**。
+        现改为读库；库内缺失时**抛错**（而非返回 UNKNOWN 让上层静默走错分支）。
+        """
+        p = str(product or "").upper().strip()
+        if not p:
+            raise IngestError("detect_exchange: 品种码为空")
+        try:
+            from app.data.barstore import variety_spec
+            return variety_spec(p)["exchange"] or "UNKNOWN"
+        except Exception as e:  # noqa: BLE001
+            raise IngestError(
+                f"detect_exchange({p}): dim_variety 字典查不到交易所（{e}）。"
+                f"请先跑 migrations/007 + scripts/seed_variety_specs.py --apply；"
+                f"**拒绝返回 UNKNOWN** —— 静默兜底会让后续采集走错分支。") from e
 
 
 __all__ = ["AkShareSource"]
