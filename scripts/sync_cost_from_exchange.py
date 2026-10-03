@@ -91,6 +91,17 @@ def upsert(s, vc, ex, act, ft, fv, note, src):
       造成同一品种动作出现两条口径（如 SA 同时有 PCT 2‰ 与 FIXED 4.0）。
       现改为：闭合旧行(effective_to=APPLY_DAY) + 插入新行，保证任一时刻每个键只有一条有效。
     """
+    # ── 修复（2026-10-03）：同日重跑必须能「复活」被闭合的行 ──────────────
+    # 场景：首轮写入 doc 行(effective_from=APPLY_DAY) → 018 去重把它闭合(同日起) →
+    #       重跑时 INSERT 命中 uq_dim_trading_cost(键含 effective_from) 的
+    #       ON CONFLICT DO NOTHING → 静默跳过 → 该键**永远没有有效行**
+    #       （实测 BZ/EB/PL 的 CLOSE_TODAY 因此丢失，日内成本被按隔夜计）
+    s.execute(text(
+        "UPDATE dim_trading_cost SET effective_to = NULL, updated_at = now() "
+        "WHERE variety_code = :v AND instrument_kind = 'FUTURE' AND action = :a "
+        "  AND scope_kind = 'ALL' AND effective_from = CAST(:ed AS DATE) "
+        "  AND effective_to IS NOT NULL"),
+        {"v": vc, "a": act, "ed": APPLY_DAY})
     prev = s.execute(text(
         "SELECT fee_value, source, effective_from FROM dim_trading_cost "
         "WHERE variety_code=:v AND instrument_kind='FUTURE' AND action=:a "
@@ -153,6 +164,33 @@ def main():
 
     n_cz = 0
     with session_scope() as s:
+        # ---- BZ/EB/PL：用户指定第三方文档基准（2026-06-27/28），逐品种核实后写入 ----
+        #   BZ 纯苯  万分之1(=0.1permille) 比例值，开/平昨/**平今均万分之1**（平今不翻倍也不免）
+        #           ⚠ 单位教训：文档原文是「万分之1」，其算式 186930×0.0001=18.69 元可反证。
+        #             此前误按「1permille」入库使成本虚高 10 倍（实测 433.88 vs 应为 97.38）。
+        #           乘数经汇总表核对为 30 吨/手（文档正文误写 10，其自身算式用的 30 才对）
+        #   EB 苯乙烯 3 元/手 固定值，平今同 3（不免不翻倍）  ← 与交易所通知一致
+        #   PL 丙烯  3 元/手 固定值，平昨 3、**平今 0 免收**；交易所 = **郑商所**（汇总表 ffill 核实，
+        #             此前误写 DCE）。⚠ PL 与交易所通知的 1permille 冲突，按用户裁定采用文档值。
+        doc_rows = [
+            ("BZ", "DCE", "OPEN", "PCT", 0.1),
+            ("BZ", "DCE", "CLOSE_YEST", "PCT", 0.1),
+            ("BZ", "DCE", "CLOSE_TODAY", "PCT", 0.1),
+            ("EB", "DCE", "OPEN", "FIXED", 3.0),
+            ("EB", "DCE", "CLOSE_YEST", "FIXED", 3.0),
+            ("EB", "DCE", "CLOSE_TODAY", "FIXED", 3.0),
+            ("PL", "CZCE", "OPEN", "FIXED", 3.0),
+            ("PL", "CZCE", "CLOSE_YEST", "FIXED", 3.0),
+            ("PL", "CZCE", "CLOSE_TODAY", "FREE", 0.0),
+        ]
+        for vc, ex, act, ft, fv in doc_rows:
+            note = ("BZ/EB/PL 第三方文档 2026-06-27/28（用户裁定采用）"
+                    + ("; BZ=万分之1(0.1permille)非1permille" if vc == "BZ" else "")
+                    + ("; 注意PL与交易所通知1permille冲突，待交易所公告复核"
+                       if vc == "PL" else ""))
+            upsert(s, vc, ex, act, ft, fv, note, "doc_20260627")
+        print("[done] BZ/EB/PL rows from user docs: BZ 1permille(3 actions) / "
+              "EB 3(3 actions) / PL 3+3+close-today-free")
         # ---- 沪金 AU：用户指定第三方文档基准（2026-06-12，主力 au2608）----
         #   开仓 20 / 平昨 20 / 平今 0（免收）；文档另注「主力 20、其他 10」
         #   （属合约范围限定，当前按主力写 ALL，差异记入 note）
