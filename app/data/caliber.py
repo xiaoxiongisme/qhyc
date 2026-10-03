@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.core.logging import logger
+
 #: 合法口径
 #:   回测基准自 2026-09-30 起改为 **back_adj（等差后复权）**（用户拍板）；
 #:   cont_adj（加法前复权）因会产生负价（I888 最低 −1058.5，51.4% bar 为负）被废弃。
@@ -114,6 +116,26 @@ ROUTES: dict[tuple[str, str], Route] = {
 
 class CaliberError(ValueError):
     """口径/周期组合不合法或尚未登记。"""
+
+
+def default_caliber_for(freq: str, *, warn: bool = True) -> str:
+    """**按周期渐进**的默认口径（评审补强 **G3 / P0**）。
+
+    背景：PRD §B9 曾定默认口径为 ``cont_adj``，但 §B2 承认 ``roll_segment``
+    **只有 min5/15/30/60 段、缺日线/小时线段** → 默认口径一生效，日线/小时线
+    就因无段而 fail-loud，等于「默认口径对自身最重要的日线源先坏」。
+
+    处置：默认口径**只对已构建 offset 段的周期**生效；未覆盖的周期显式回退到
+    ``continuous`` 并**告警**（**绝不静默返回 raw** —— 静默回落是本项目最主要的
+    缺陷类型）。段补齐后（B2 完成）自动生效，无需改代码。
+    """
+    if freq in FREQS and (freq, DEFAULT_CALIBER) in ROUTES:
+        return DEFAULT_CALIBER
+    if warn:
+        logger.warning(
+            f"[caliber] freq={freq} 尚无 {DEFAULT_CALIBER} 段（roll_segment 未覆盖该周期），"
+            f"**显式回退 continuous**（未复权）。回测若依赖复权价须先为该周期建段。")
+    return "continuous"
 
 
 def get_route(freq: str, caliber: str) -> Route:
