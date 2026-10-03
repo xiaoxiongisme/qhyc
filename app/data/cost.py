@@ -52,6 +52,11 @@ class TradingCost:
     effective_from: date
     source: str
     note: Optional[str] = None
+    #: 本次取费率的**口径日**（= 传入的 as_of，或降级时的当期）
+    fee_as_of: Optional[date] = None
+    #: True 表示该 as_of 无历史费率、已按用户裁定退到**当期**费率。
+    #: ⚠ 必须可观测 —— 静默降级是本项目最主要的缺陷类型。
+    fell_back_to_current: bool = False
 
     @property
     def fee_yuan(self) -> float:
@@ -103,9 +108,27 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
             {"vc": vc, "kind": kind, "act": action, "d": d}).fetchall()
 
     if not rows:
-        raise CostNotFoundError(
-            f"{vc}/{action}: no fee row in dim_trading_cost at {d}. "
-            f"REFUSING to compute as 0 cost - run build_cost_dict.py + load_cost_dict.py --apply")
+        # ── 用户 2026-10-03 裁定：「没有历史费率就按当前费率计算」────────────────
+        # 费率表最早 effective_from = 2026-03-11（交易所通知日），更早的回测无历史行。
+        # 口径选择：退到**当期有效行**，而不是报错。
+        # ⚠ 但降级必须**可观测**（返回对象带 fee_as_of / fell_back_to_current），
+        #   否则就成了本项目最典型的「静默失效」陷阱（见 memory: 静默失效是主要缺陷类型）。
+        cur = s.execute(text(
+            "SELECT scope_kind, scope_months, scope_contracts, fee_type, fee_value, "
+            "       exchange_fee_value, broker_markup_type, broker_markup_value, "
+            "       slip_ticks, effective_from, source, note "
+            "FROM dim_trading_cost "
+            "WHERE upper(variety_code) = :vc AND instrument_kind = :kind AND action = :act "
+            "  AND effective_to IS NULL"),
+            {"vc": vc, "kind": kind, "act": action}).fetchall()
+        if not cur:
+            raise CostNotFoundError(
+                f"{vc}/{action}: dim_trading_cost 中完全无该动作费率（{d}）。"
+                f"拒绝按 0 成本计算 —— 请补费率来源后重跑 "
+                f"scripts/sync_cost_from_exchange.py --apply")
+        rows, fell_back = cur, True
+    else:
+        fell_back = False
 
     best = None
     for r in rows:
@@ -134,7 +157,8 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
         broker_markup_type=r[6] or "NONE",
         broker_markup_yuan=(float(r[7] or 0) if (r[6] or "NONE") in ("FIXED", "PCT") else 0.0),
         slip_ticks=float(r[8] or 0), scope_kind=r[0], effective_from=r[9],
-        source=r[10], note=r[11])
+        source=r[10], note=r[11],
+        fee_as_of=d, fell_back_to_current=fell_back)
 
 
 def fee_yuan_per_lot(symbol, action, price, *, contract=None, on_date=None, kind="FUTURE"):

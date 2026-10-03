@@ -68,6 +68,10 @@ def fetch_czce(refresh=True):
             "open_fee": num(r["交易手续费"]),
             "ct_fee": num(r["平今仓手续费"]),
             "margin_rate": num(r["交易保证金率"]),
+            # ★手续费收取方式：绝对值=固定元/手；比例值=按成交额‰。
+            #   2026-10-03 实测：MA/PX/SA/SH/UR 为「比例值」，此前被一律当固定值写入是错的
+            #   （把 1‰ 当成 1 元/手）。
+            "basis": str(r["手续费收取方式"]).strip(),
         }
     rows = list(out.values())
     os.makedirs(os.path.dirname(CZ_SNAPSHOT) or ".", exist_ok=True)
@@ -149,20 +153,32 @@ def main():
 
     n_cz = 0
     with session_scope() as s:
+        # ---- 沪金 AU：用户指定第三方文档基准（2026-06-12，主力 au2608）----
+        #   开仓 20 / 平昨 20 / 平今 0（免收）；文档另注「主力 20、其他 10」
+        #   （属合约范围限定，当前按主力写 ALL，差异记入 note）
+        for act, fv in (("OPEN", 20.0), ("CLOSE_YEST", 20.0), ("CLOSE_TODAY", 0.0)):
+            upsert(s, "AU", "SHFE", act, "FREE" if fv <= 1e-9 else "FIXED", fv,
+                   "沪金AU 第三方文档 2026-06-12 (au2608): open20/close_yest20/ct-free; "
+                   "doc notes main=20 others=10", "au_doc_20260612")
+        print("[done] AU rows from user doc: 20 / 20 / close-today-free")
         for r in czce:
             vc = r["variety_code"]
             if r["open_fee"] is None:
                 continue
+            # ★按「手续费收取方式」分流：比例值 -> PCT(‰)，绝对值 -> FIXED(元/手)
+            proportional = "比例" in str(r.get("basis", ""))
             for act, key in (("OPEN", "open_fee"), ("CLOSE_YEST", "open_fee"),
                              ("CLOSE_TODAY", "ct_fee")):
                 v = r.get(key)
                 if v is None:
                     continue
                 fv = float(v)
-                prev = upsert(s, vc, "CZCE", act,
-                              "FREE" if fv <= 1e-9 else "FIXED", fv,
-                              "CZCE official futures_contract_info_czce",
-                              "czce_official")
+                if proportional:
+                    ft = "FREE" if fv <= 1e-9 else "PCT"
+                else:
+                    ft = "FREE" if fv <= 1e-9 else "FIXED"
+                note = "CZCE official futures_contract_info_czce basis=%s" % r.get("basis")
+                prev = upsert(s, vc, "CZCE", act, ft, fv, note, "czce_official")
                 if prev and prev[0] and prev[0][1] and "akshare" in str(prev[0][1]):
                     n_cz += 1
     print("[done] CZCE official rows written: %d" % n_cz)
