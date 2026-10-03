@@ -86,6 +86,81 @@ def detect_anchor_roll(g15, idx15):
     return events, cc, roll
 
 
+def load_change_points(cur, sym):
+    """G2：换月事件**唯一真源** = main_contract_map.change_flag。
+
+    返回按日期升序的换月日列表（date 对象）与该日的真实合约码。
+
+    评审 §2.1：此前 roll_segment 由「价格双门」独立生成，与 change_flag 各自为政，
+    在主力以「持仓量渐进交叉」切换时（价格不跳）会产生信号/执行错位。
+    现改为以 change_flag 为准，双门降级为校验（见 validate_with_dual_gate）。
+    """
+    product = sym[:-3] if sym.endswith('888') else sym
+    try:
+        cur.execute(
+            "SELECT trade_date, COALESCE(underlying, main_symbol) "
+            "FROM main_contract_map "
+            "WHERE upper(product) = upper(%s) AND change_flag "
+            "ORDER BY trade_date", (product,))
+        rows = cur.fetchall()
+    except Exception as e:  # noqa: BLE001
+        print(f'    [warn] 读 main_contract_map 失败 {e}')
+        return [], {}
+    dates = [r[0] for r in rows]
+    contracts = {r[0]: r[1] for r in rows if r[1]}
+    return dates, contracts
+
+
+def validate_with_dual_gate(cur, sym, gate_events, change_dates):
+    """G2：双门降级为**校验/告警**，不再自作主张造 offset。
+
+    两类不一致都记 anomaly_ticket，供人工复核，而不是静默生成一个段：
+      * GATE_NO_CHANGE：价格有跳变却无 change 点（可能漏检/脏数据）
+      * CHANGE_NO_GATE：有 change 点却无价格跳变（**正常**——渐进换月本就不跳）
+    """
+    import datetime as _dt
+
+    gate_dates = {e[0].date() if isinstance(e[0], _dt.datetime) else e[0]
+                  for e in gate_events}
+    cd = {d.date() if isinstance(d, _dt.datetime) else d for d in change_dates}
+
+    gate_only = sorted(gate_dates - cd)
+    change_only = sorted(cd - gate_dates)
+    for d in gate_only:
+        _record_anomaly(cur, sym, d, 'ROLL_GATE_NO_CHANGE',
+                        f'双门检出跳空但 main_contract_map 无 change 点（{len(gate_only)} 例）')
+    # CHANGE_NO_GATE 属预期情形（渐进换月），只记一次汇总，避免刷屏
+    if change_only:
+        _record_anomaly(cur, sym, change_only[0], 'ROLL_CHANGE_NO_GATE',
+                        f'{len(change_only)} 个 change 点无价格跳变（渐进换月，属正常）')
+    return len(gate_only), len(change_only)
+
+
+def _record_anomaly(cur, sym, trade_date, field, note):
+    try:
+        cur.execute(
+            "INSERT INTO anomaly_ticket (symbol, trade_date, field, note, status) "
+            "VALUES (%s, %s, %s, %s, 'open')", (sym, trade_date, field, note))
+    except Exception as e:  # noqa: BLE001
+        print(f'    [warn] 写 anomaly_ticket 失败 {field}: {e}')
+
+
+def contract_at(cur, sym, ts):
+    """G2 附带：查某时点该品种的主力合约码（补齐「连续段↔真实合约」映射）。"""
+    import datetime as _dt
+    product = sym[:-3] if sym.endswith('888') else sym
+    d = ts.date() if isinstance(ts, _dt.datetime) else ts
+    try:
+        cur.execute(
+            "SELECT COALESCE(underlying, main_symbol) FROM main_contract_map "
+            "WHERE upper(product)=upper(%s) AND trade_date <= %s "
+            "ORDER BY trade_date DESC LIMIT 1", (product, d))
+        r = cur.fetchone()
+        return r[0] if r else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def load_symbol(cur, table, sym):
     cur.execute(f"SELECT symbol,bucket,open,high,low,close FROM {table} "
                 f"WHERE symbol=%s ORDER BY bucket", (sym,))
@@ -161,11 +236,16 @@ def map_roll_to_freq(g, events, freq_min):
     return cc, roll, delta_ev
 
 
-def build_segments(g, roll, delta_ev, positivity=False):
+def build_segments(g, roll, delta_ev, positivity=False,
+                   change_source=None, contract_lookup=None):
     """按换月点切段，算后复权累积偏移。
 
     `delta_ev`：**落在每个换月 bar 上的跳空点数**（由锚点 gap 算得，跨周期同值）。
     cum_offset(k) = -Σ_{j<=k} delta_j  ⇒ 跨换月的点数差被扣掉跳空、保留该 bar 自身涨跌。
+
+    G2 附加：每段写入 change_source（边界来源，可审计）与 contract_code
+    （该段对应的真实合约 —— 补齐「连续段↔真实合约」的权威映射，
+     此前缺失导致反解无法对齐口径、MA 一致性闸被 13.86% 硬阻断）。
     """
     ts = pd.to_datetime(g['bucket']).tolist()
     idx = np.where(roll)[0].tolist()
@@ -184,6 +264,9 @@ def build_segments(g, roll, delta_ev, positivity=False):
             roll_delta=round(delta, 4),
             cum_offset=round(-cum, 4),      # 后复权：-Σ_{j<=k} delta_j
             n_bars=int(e - s),
+            change_source=change_source,
+            contract_code=(contract_lookup(ts[s].to_pydatetime())
+                           if (contract_lookup and k > 0) else None),
         ))
     return segs
 
@@ -244,11 +327,13 @@ def upsert_segments(cur, sym, freq, segs):
         return 0
     rows = [(sym, freq, s['seg_no'], s['seg_start'], s['seg_end'], s['roll_ts'],
              s['roll_delta'], s['cum_offset'], s.get('price_shift', 0.0),
-             s['n_bars'], ANCHOR_FREQ) for s in segs]
+             s['n_bars'], ANCHOR_FREQ,
+             s.get('change_source'), s.get('contract_code')) for s in segs]
     psycopg2.extras.execute_values(
         cur,
         "INSERT INTO roll_segment (symbol,freq,seg_no,seg_start,seg_end,roll_ts,"
-        "roll_delta,cum_offset,price_shift,n_bars,src_freq) VALUES %s", rows)
+        "roll_delta,cum_offset,price_shift,n_bars,src_freq,"
+        "change_source,contract_code) VALUES %s", rows)
     return len(rows)
 
 
@@ -307,7 +392,30 @@ def main():
             for f in freqs:
                 report[f]['skip'] += 1
             continue
-        events, cc15, roll15 = detect_anchor_roll(g15, idx15)
+        gate_events, cc15, roll15 = detect_anchor_roll(g15, idx15)
+
+        # ── G2：换月真源 = main_contract_map.change_flag ──────────────────
+        change_dates, change_contracts = load_change_points(cur, sym)
+        if change_dates:
+            # 以 change 点为边界：定位 15m 序列中首个 >= 该日的 bar
+            b15 = pd.to_datetime(g15['bucket']).dt.date.to_numpy()
+            events = []
+            for d in change_dates:
+                pos = np.searchsorted(b15, d, side='left')
+                if pos >= len(g15):
+                    continue
+                gap = float(g15['open'].to_numpy(dtype=float)[pos]
+                            - g15['close'].to_numpy(dtype=float)[pos - 1]) \
+                    if pos > 0 else 0.0
+                events.append((pd.to_datetime(g15['bucket']).iloc[pos], gap))
+            change_source = 'MAIN_MAP'
+        else:
+            events = gate_events
+            change_source = 'DUAL_GATE_FALLBACK'
+
+        # 双门降级为校验：不一致写 anomaly_ticket，不擅自造 offset
+        n_gate_only, n_change_only = validate_with_dual_gate(
+            cur, sym, gate_events, change_dates)
 
         for freq in freqs:
             if freq == ANCHOR_FREQ:
@@ -318,7 +426,10 @@ def main():
                     report[freq]['skip'] += 1
                     continue
             cc, roll, delta_ev = map_roll_to_freq(g, events, FREQ_MIN[freq])
-            segs = build_segments(g, roll, delta_ev)
+            segs = build_segments(
+                g, roll, delta_ev, change_source=change_source,
+                contract_lookup=(lambda t: contract_at(cur, sym, t))
+                if change_source == 'MAIN_MAP' else None)
             if a.positivity:
                 apply_positivity(g, segs)
             if not a.dry_run:
