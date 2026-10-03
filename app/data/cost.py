@@ -11,8 +11,14 @@
 ----------------
 * 实际成本 = **交易所标准 + 券商加收 1 分/手**，滑点 **1 跳/边**（014 迁移）。
 * 三动作不可合并：OPEN / CLOSE_YEST / CLOSE_TODAY（苹果开仓 5、平今 20）。
-* 两类费率：FIXED(元/手) 与 PCT(‰，按成交额)。调用方不必判断量纲。
-* 合约范围：交易所对特定合约给不同费率（碳酸锂 0.8‰，2601~2702 为 3.2‰），
+* 两类费率：FIXED(元/手) 与 PCT(**‱ 万分之一**，按成交额)。调用方不必判断量纲。
+  ⚠ 单位裁定（用户 2026-10-03 拍板，取「B」）：交易所通知里的比例值原文写作「N%」，
+    其含义是**万分之 N**，故 ``PCT`` 的 ``fee_value`` 以 **‱(1/10000)** 为单位，
+    数值与通知原文 **1:1 对应**（通知「1%」→ 1.0‱）以便审计与换版。
+    历史教训：曾按千分之(‰)解释，导致 BZ 纯苯成本高估 10 倍
+    （186,930×0.001=186.93 元/边，而正确值为 18.69 元/边）；
+    akshare 的费率表亦按 ‰ 记（RB 6.07 实为 ‰ 口径），已判定其比例值不可用。
+* 合约范围：交易所对特定合约给不同费率（碳酸锂 0.8‱，2601~2702 为 3.2‱），
   按 CONTRACTS > MONTHS > ALL 取最具体的一条。
 
 **未知即报错**：查不到抛 :class:`CostNotFoundError`，绝不按 0 成本静默计算
@@ -28,8 +34,12 @@ from sqlalchemy import text
 
 from app.core.db import session_scope
 
+#: PCT 费率值的单位换算除数：万分之一（‱）。
+#: ⚠ 改动此值会全局改变所有按成交额计费的回测/实盘成本，务必同步迁移 019。
+PCT_DIVISOR = 10000.0
+
 __all__ = ["TradingCost", "CostNotFoundError", "fee_per_lot",
-           "fee_yuan_per_lot", "round_trip_cost"]
+           "fee_yuan_per_lot", "round_trip_cost", "PCT_DIVISOR"]
 
 _SCOPE_RANK = {"CONTRACTS": 3, "MONTHS": 2, "ALL": 1}
 
@@ -162,20 +172,20 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
 
 
 def fee_yuan_per_lot(symbol, action, price, *, contract=None, on_date=None, kind="FUTURE"):
-    """折算成「元/手」。PCT 按成交额(price x multiplier) x ‰；FIXED 直接取值。"""
+    """折算成「元/手」。PCT 按成交额(price x multiplier) x ‱；FIXED 直接取值。"""
     from app.data.barstore import variety_spec
     tc = fee_per_lot(symbol, action, contract=contract, on_date=on_date, kind=kind)
     if tc.fee_type == "FREE":
         ex = 0.0
     elif tc.fee_type == "PCT":
         mult = variety_spec(symbol)["multiplier"]
-        ex = float(price) * mult * tc.exchange_fee_yuan / 1000.0
+        ex = float(price) * mult * tc.exchange_fee_yuan / PCT_DIVISOR
     else:
         ex = tc.exchange_fee_yuan
     markup = tc.broker_markup_yuan
     if tc.broker_markup_type == "PCT":
         mult = variety_spec(symbol)["multiplier"]
-        markup = float(price) * mult * tc.broker_markup_yuan / 1000.0
+        markup = float(price) * mult * tc.broker_markup_yuan / PCT_DIVISOR
     return ex + markup
 
 
@@ -184,10 +194,10 @@ def cost_coefficients(symbol, *, contract=None, on_date=None, kind="FUTURE",
     """把一次开平成本分解为「固定项 + 按价格比例项 + 滑点」，供回测逐笔高效求值。
 
     回测里每笔交易都要算成本，逐笔查库不可接受；而费率只有两种形态
-    （固定值 / 按成交额‰），故可一次解析、之后按价格闭式求值：
+    （固定值 / 按成交额‱），故可一次解析、之后按价格闭式求值：
 
         cost_yuan(price) = fixed_yuan
-                        + price x multiplier x pct_rate / 1000
+                        + price x multiplier x pct_rate / 10000
                         + slip_yuan
 
     滑点为**每边** ``slip_ticks x tick_size x multiplier``，开平两次故乘 2。
@@ -236,7 +246,7 @@ def cost_yuan_at(coefficients: dict, price: float) -> float:
     """按 ``cost_coefficients`` 给定系数求某个成交价的一次开平成本（元/手）。"""
     c = coefficients
     return (c["fixed_yuan"]
-            + float(price) * c["multiplier"] * c["pct_rate"] / 1000.0
+            + float(price) * c["multiplier"] * c["pct_rate"] / PCT_DIVISOR
             + c["slip_yuan"])
 
 
