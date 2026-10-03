@@ -1212,16 +1212,25 @@ def _build_scheduler() -> BlockingScheduler:
 
     # 1 分钟复权（云端 minute_bar → minute_bar_adj）：04:30 增量（since=72h，
     # 期间有换月的品种全量重算、其余追加）。表独立于 fut_kline/bar_*，与 02:30 链路不冲突。
-    sched.add_job(
-        _adjust_minute_job,
-        trigger=CronTrigger(hour=4, minute=30, timezone=settings.env.TZ),
-        id="adjust_minute_bar_adj",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=3600,
-    )
-    logger.info("[scheduler] registered cron 04:30 (adjust_minute_bar_adj)")
+    # ★ 2026-10-03 退役：minute_bar_adj 是【加法前复权】，与项目"后复权唯一口径"冲突，
+    #   且云端实测已崩坏（5,862 万行 / 201.7 万行负价 3.4% / 最低 -2571.6），
+    #   同时是 cont_adj 的唯一上游。retire 前复权链 → 停本作业。
+    #   保留 minute_bar（未复权 L0 原始数据）作为唯一可再生基础。
+    rb_cfg_min = settings.fut_kline_rebuild_config
+    if getattr(rb_cfg_min, "retire_minute_adj", False):
+        logger.info("[scheduler] adjust_minute_bar_adj 已退役"
+                    "（minute_bar_adj 为前复权且已崩坏，2026-10-03 停采集）")
+    else:
+        sched.add_job(
+            _adjust_minute_job,
+            trigger=CronTrigger(hour=4, minute=30, timezone=settings.env.TZ),
+            id="adjust_minute_bar_adj",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("[scheduler] registered cron 04:30 (adjust_minute_bar_adj)")
 
     # 会员持仓排名（龙虎榜）每日收盘后入库（交易所官方 CSV）
     rp = settings.yaml.rank_position

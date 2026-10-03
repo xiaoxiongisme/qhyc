@@ -398,6 +398,11 @@ class FutKlineRebuildConfig(BaseModel):
     # + 生产模式前置 DELETE（1,992 万行）≈ 贴着 7200s 上限，工作日 05:00 还有采集
     # 作业抢 IO——超时中断会留下「DELETE 后半重建」状态直到次日。调至 6h（3 倍余量）。
     timeout_sec: int = 21600
+    # ★ 2026-10-03 退役前复权链：minute_bar_adj 为【加法前复权】，与"后复权唯一口径"
+    #   冲突，且云端实测已崩坏（5,862 万行 / 201.7 万行负价 3.4% / 最低 -2571.6）。
+    #   True = 停 04:30 adjust_minute_bar_adj 作业（分钟层只保留未复权 minute_bar 作 L0）。
+    #   同时 rebuild_fut_kline.py 默认 --kinds 不含 cont_adj，前复权链整条退役。
+    retire_minute_adj: bool = True
 
 
 class FactorBiasConfig(BaseModel):

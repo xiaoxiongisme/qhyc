@@ -181,7 +181,24 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0,
                     help="仅处理前 N 个品种（验证用，0=全部）")
     ap.add_argument("--dsn", default=None, help="指定数据库连接（测试用）")
+    ap.add_argument("--kinds", default="continuous,contract",
+                    help="要重建的 kind，逗号分隔（可选 cont_adj/continuous/contract）。"
+                         "★ cont_adj 已于 2026-10-03 退役（加法前复权产生负价，"
+                         "I888 最低 -1058.5、P888 -1910.0，15 品种历史全负），"
+                         "故默认不重建。需要复现旧行为时显式传 --kinds cont_adj,continuous,contract")
     a = ap.parse_args()
+
+    kinds = [k.strip() for k in a.kinds.split(",") if k.strip()]
+    _LEGAL = ("cont_adj", "continuous", "contract")
+    bad = [k for k in kinds if k not in _LEGAL]
+    if bad:
+        print(f"[abort] 非法 kind {bad}，合法值 {_LEGAL}", flush=True)
+        return 2
+    want_cont_adj = "cont_adj" in kinds
+    want_continuous = "continuous" in kinds
+    want_contract = "contract" in kinds
+    print(f"[rebuild] kinds={kinds} (cont_adj={want_cont_adj} "
+          f"continuous={want_continuous} contract={want_contract})", flush=True)
 
     eng = build_engine(a.dsn)
     target = "fut_kline_drv" if a.dry_run else "fut_kline"
@@ -206,65 +223,82 @@ def main() -> int:
     # 源表一旦缺失/为空，就会先把 fut_kline 的 cont_adj+continuous 删光再失败
     # —— 云端这两个 kind 合计 1,992 万行，删了就回不来。必须在 DELETE 之前拦死。
     # 实测：本地无 minute_bar_adj 表（云端有 5,765 万行），本地跑生产模式即触发此路径。
-    REQUIRED_SOURCES = ("minute_bar_adj",)
-    with eng.connect() as c:
-        for src in REQUIRED_SOURCES:
-            if not c.execute(text(f"select to_regclass('{src}') is not null")).scalar():
-                print(f"  [abort] 源表 {src} 不存在 —— 拒绝执行"
-                      f"（生产模式会先 DELETE fut_kline 再重建，源缺失=删空后失败）", flush=True)
-                return 2
-            if not c.execute(text(f"select exists (select 1 from {src} limit 1)")).scalar():
-                print(f"  [abort] 源表 {src} 为空 —— 拒绝执行", flush=True)
-                return 2
-            print(f"  [preflight] {src} 存在且非空", flush=True)
+    # 2026-10-03：cont_adj 已退役，仅在需要重建 cont_adj 时才要求 minute_bar_adj 存在。
+    if want_cont_adj:
+        REQUIRED_SOURCES = ("minute_bar_adj",)
+        with eng.connect() as c:
+            for src in REQUIRED_SOURCES:
+                if not c.execute(text(f"select to_regclass('{src}') is not null")).scalar():
+                    print(f"  [abort] 源表 {src} 不存在 —— 拒绝执行"
+                          f"（生产模式会先 DELETE fut_kline 再重建，源缺失=删空后失败）", flush=True)
+                    return 2
+                if not c.execute(text(f"select exists (select 1 from {src} limit 1)")).scalar():
+                    print(f"  [abort] 源表 {src} 为空 —— 拒绝执行", flush=True)
+                    return 2
+                print(f"  [preflight] {src} 存在且非空", flush=True)
 
-    # 生产模式：清空待重建的 cont_adj / continuous（contract 不删，仅 upsert）
+    # 生产模式：清空待重建的 kind（contract 不删，仅 upsert）
     if not a.dry_run:
-        with eng.begin() as c:
-            c.execute(text(
-                "DELETE FROM fut_kline WHERE kind IN ('cont_adj','continuous')"))
-            print("  [prod] cleared cont_adj/continuous for rebuild", flush=True)
+        del_kinds = [k for k in ("cont_adj", "continuous") if k in kinds]
+        if del_kinds:
+            with eng.begin() as c:
+                c.execute(text(
+                    f"DELETE FROM fut_kline WHERE kind IN ({','.join(repr(k) for k in del_kinds)})"))
+                print(f"  [prod] cleared {del_kinds} for rebuild", flush=True)
 
     # 品种清单
-    with eng.connect() as c:
-        syms = [r[0] for r in c.execute(text(
-            "SELECT distinct symbol FROM minute_bar_adj WHERE symbol ~ '^[A-Za-z]+888$'"
-        )).all()]
+    if want_cont_adj:
+        with eng.connect() as c:
+            syms = [r[0] for r in c.execute(text(
+                "SELECT distinct symbol FROM minute_bar_adj WHERE symbol ~ '^[A-Za-z]+888$'"
+            )).all()]
+    else:
+        syms = []
     if a.limit:
         syms = syms[:a.limit]
     print(f"  [info] cont_adj 处理品种数 = {len(syms)}", flush=True)
 
-    # cont_adj：按频率分块（每频率每批 BATCH 个品种，索引扫描），逐批提交
-    conn = eng.connect()
-    try:
-        for freq, iv in CONT_ADJ_FREQS:
-            cnt = 0
-            for bi, batch in enumerate(_batch(syms, BATCH), 1):
-                conn.execute(cont_adj_stmt_batch(target, freq, iv, batch))
-                conn.commit()
-                cnt += len(batch)
-                if bi % 2 == 0 or bi == (len(syms) + BATCH - 1) // BATCH:
-                    n = conn.execute(text(
-                        f"SELECT count(*) FROM {target} WHERE kind='cont_adj' AND freq=:x"
-                    ), {"x": freq}).scalar()
-                    print(f"  [cont_adj/{freq}] {cnt}/{len(syms)} 累计 {n} rows", flush=True)
-    finally:
-        conn.close()
+    # cont_adj：已于 2026-10-03 退役，默认跳过（--kinds 含cont_adj 时才重建）
+    if want_cont_adj:
+        # 按频率分块（每频率每批 BATCH 个品种，索引扫描），逐批提交
+        conn = eng.connect()
+        try:
+            for freq, iv in CONT_ADJ_FREQS:
+                cnt = 0
+                for bi, batch in enumerate(_batch(syms, BATCH), 1):
+                    conn.execute(cont_adj_stmt_batch(target, freq, iv, batch))
+                    conn.commit()
+                    cnt += len(batch)
+                    if bi % 2 == 0 or bi == (len(syms) + BATCH - 1) // BATCH:
+                        n = conn.execute(text(
+                            f"SELECT count(*) FROM {target} WHERE kind='cont_adj' AND freq=:x"
+                        ), {"x": freq}).scalar()
+                        print(f"  [cont_adj/{freq}] {cnt}/{len(syms)} 累计 {n} rows", flush=True)
+        finally:
+            conn.close()
+    else:
+        print("  [skip] cont_adj 已退役（--kinds 未含 cont_adj）", flush=True)
 
     # continuous：bar_* 为小表，单次聚合安全
     with eng.begin() as c:
-        for freq, tbl, daily in CONT_SOURCES:
-            c.execute(continuous_stmt(target, freq, tbl, daily))
-            n = c.execute(text(
-                f"SELECT count(*) FROM {target} WHERE kind='continuous' AND freq=:x"
-            ), {"x": freq}).scalar()
-            print(f"  [continuous/{freq}] -> {n} rows", flush=True)
+        if want_continuous:
+            for freq, tbl, daily in CONT_SOURCES:
+                c.execute(continuous_stmt(target, freq, tbl, daily))
+                n = c.execute(text(
+                    f"SELECT count(*) FROM {target} WHERE kind='continuous' AND freq=:x"
+                ), {"x": freq}).scalar()
+                print(f"  [continuous/{freq}] -> {n} rows", flush=True)
+        else:
+            print("  [skip] continuous（--kinds 未含）", flush=True)
 
         # contract：UPSERT（生产表历史行保留）
-        c.execute(contract_stmt(target))
-        n_con = c.execute(text(
-            f"SELECT count(*) FROM {target} WHERE kind='contract'")).scalar()
-        print(f"  [contract/daily] -> {n_con} rows (upsert, history preserved)", flush=True)
+        if want_contract:
+            c.execute(contract_stmt(target))
+            n_con = c.execute(text(
+                f"SELECT count(*) FROM {target} WHERE kind='contract'")).scalar()
+            print(f"  [contract/daily] -> {n_con} rows (upsert, history preserved)", flush=True)
+        else:
+            print("  [skip] contract（--kinds 未含）", flush=True)
 
     print(f"[rebuild] done in {time.time()-t0:.1f}s target={target}", flush=True)
     return 0

@@ -25,6 +25,7 @@
 import argparse
 import os
 import sys
+import time
 
 import psycopg2
 
@@ -126,11 +127,28 @@ def main():
         c.close()
         return 2
 
-    print('\n[delete] 开始删除…')
-    cur.execute("DELETE FROM fut_kline WHERE kind = ANY(%s)", (list(TARGET_KINDS),))
-    n = cur.rowcount
-    c.commit()
-    print(f'[delete] 已删除 {n:,} 行 kind={TARGET_KINDS}')
+    # ★ 2026-10-03：改为**逐 freq 分批删除**。
+    # 原实现是单条 DELETE ... WHERE kind=ANY(...)，在 612-chunk 超表上一次性删 994 万行，
+    # 实测会长时间挂住（首轮尝试 6 分钟无进展，疑似触发全 chunk 锁扫描）。
+    # 本脚本 rows_by_freq() 的注释已给出正解：「按 freq 拆开后每条都能走
+    # (freq,kind,symbol,trade_datetime) 主键裁剪」。逐频删除同样可断点续跑
+    # （已删频次 rowcount=0，跳过），且单批事务小、不会长时间持锁。
+    print('\n[delete] 开始删除（逐 freq 分批）…')
+    total = 0
+    cur.execute("SELECT DISTINCT freq FROM fut_kline WHERE kind = ANY(%s) ORDER BY 1",
+                (list(TARGET_KINDS),))
+    del_freqs = [r[0] for r in cur.fetchall()]
+    with c:
+        for freq in del_freqs:
+            t0 = time.time()
+            cur.execute(
+                "DELETE FROM fut_kline WHERE freq=%s AND kind = ANY(%s)",
+                (freq, list(TARGET_KINDS)))
+            n = cur.rowcount
+            total += max(n, 0)
+            print(f'  [delete] {freq:<6} 删除 {max(n,0):>9,} 行'
+                  f'（{time.time()-t0:.1f}s，累计 {total:,}）', flush=True)
+    print(f'[delete] 已删除 {total:,} 行 kind={TARGET_KINDS}')
     c.close()
     return 0
 
