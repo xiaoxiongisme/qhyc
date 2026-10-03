@@ -82,14 +82,22 @@ def _variety(symbol: str) -> str:
 
 
 def _contract_parts(contract):
+    """返回 ``(数字码, 交割月)``；无法解析时返回 ``(None, None)``。
+
+    ⚠ 2026-10-03 修正两处：
+    1) 原来要求数字码 >= 4 位，导致**郑交所 3 位合约码**（AP610 / CF701 / MA705）
+       永远解析不出交割月 → CONTRACTS/MONTHS 档位对郑交所**全部失效**
+       （实测 AP 有 CONTRACTS 行却永不命中）。
+    2) 返回值改为「完整数字码」而非 ``[-4:]``，供档位匹配按位数自适应比较。
+    """
     if not contract:
         return None, None
     from app.core.symbol_code import to_std
     s = to_std(contract)
     digits = "".join(ch for ch in s if ch.isdigit())
-    if len(digits) < 4:
+    if len(digits) < 3:
         return None, None
-    return [digits[-4:]], int(digits[-2:])
+    return digits, int(digits[-2:])
 
 
 def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
@@ -106,6 +114,7 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
     vc = _variety(symbol)
     d = on_date or date.today()
     c4, cmonth = _contract_parts(contract)
+    cdigits = c4
 
     with session_scope() as s:
         rows = s.execute(text(
@@ -143,12 +152,25 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
     best = None
     for r in rows:
         sk = r[0]
-        if sk == "CONTRACTS":
-            lst = [x.upper() for x in (r[2] or [])]
-            if not (c4 and any(x.endswith(tuple(c4)) for x in lst)):
-                continue
-        elif sk == "MONTHS":
-            if cmonth is None or cmonth not in (r[1] or []):
+        if sk in ("CONTRACTS", "MONTHS"):
+            # ── 2026-10-03 修正：交易所的档位常写成「月份 + 少数显式合约码」的组合
+            #    （例：螺纹钢「1、5、10合约 & 2602、2603、2604」= months[1,2,3,4,5,10]
+            #      + contracts['RB2602','RB2603','RB2604']）。原实现对 CONTRACTS 只看
+            #    scope_contracts、完全无视 scope_months，导致 **主力合约(1/5/10 月)全部
+            #    落空回落到 ALL 档**（实测 RB2610 取 0.2‱ 而非 1‱，成本低估 5 倍）。
+            #    现改为：月份命中 或 显式合约码命中，任一即可。
+            months = [int(x) for x in (r[1] or [])]
+            hit = cmonth is not None and cmonth in months
+            if not hit and cdigits:
+                for code in (r[2] or []):
+                    cd = "".join(ch for ch in str(code).upper() if ch.isdigit())
+                    if not cd:
+                        continue
+                    # 兼容 3 位与 4 位混写：任一后缀对齐即视为同一合约
+                    if cd == cdigits or cd[-3:] == cdigits[-3:] or cdigits.endswith(cd):
+                        hit = True
+                        break
+            if not hit:
                 continue
         rank = _SCOPE_RANK.get(sk, 0)
         if best is None or rank > best[0]:
