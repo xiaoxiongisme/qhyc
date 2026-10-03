@@ -32,9 +32,25 @@ SPEC = {
 }
 def prod_of(sym):  # "FG888" -> "FG"
     return sym[:-3].upper()
-def real_cost_per_lot(sym, mult):
-    tick, fee = SPEC[prod_of(sym)]
-    return 2*fee + 2*1.0*(tick*mult)   # 往返 1 跳滑点 + 双边手续费
+
+
+def real_cost_per_lot(sym, mult, price=None, cost_mode="dict"):
+    """一次开平的**每手**成本（元）。
+
+    ⚠ 2026-10-03（用户拍板"真乘数口径"）：``SPEC`` 这份硬编码表把**百分比费率当成
+    固定元/手**，导致严重低估 —— CU 写 17 元/手，而交易所实际为 **0.5‰**，
+    按 78000 计 = 195 元/手（差 11 倍）。故默认改用库内 ``dim_trading_cost``
+    （交易所标准 + 券商 1 分 + 滑点 1 跳/边）。
+
+    :param price: 成交价。PCT 费率按成交额计，缺价时退回 legacy 口径。
+    :param cost_mode: ``dict``（默认，真实费率）/ ``legacy``（旧 SPEC，仅作对照）
+    """
+    if cost_mode == "legacy" or price is None:
+        tick, fee = SPEC[prod_of(sym)]
+        return 2 * fee + 2 * 1.0 * (tick * mult)   # 旧：往返 1 跳滑点 + 双边手续费
+    from app.data.cost import cost_coefficients, cost_yuan_at
+    return cost_yuan_at(cost_coefficients(sym, close_action="CLOSE_YEST"), price)
+
 
 ANCHOR = dict(events=16400, executed=3226, win_rate=0.2349659,
               net=695715.0, mdd=167865.2, mar=4.1445, addons=1583)
@@ -119,7 +135,7 @@ def build_positions(df, p, legacy_align=False):
         positions.append(cur)
     return positions
 
-def replay_capacity5(positions, mult_map, pnl_mode="perlot"):
+def replay_capacity5(positions, mult_map, pnl_mode="perlot", cost_mode="dict"):
     """逐字复刻研究侧 replay4：容量5 FIFO + real_cost(1.0)。
     事件口径：events = 全部头寸（含末根强平）；末根强平在入场时 continue（不计入 executed/cap_skip）。
 
@@ -164,10 +180,12 @@ def replay_capacity5(positions, mult_map, pnl_mode="perlot"):
             first_px=pos["first_px"]; exit_px=pos["exit_px"]
             if pnl_mode=="perlot":
                 gross=sum(dirn*(exit_px-px)*mult for px in pos["lot_pxs"])
+                # 成本按**各自入场价**计（PCT 费率随成交额变动），与 gross 口径对齐
+                cost=sum(real_cost_per_lot(sym,mult,px,cost_mode) for px in pos["lot_pxs"])
             else:
                 # 研究近似：gross = 方向×(exit−首仓价)×mult×手数（ATR 抵消）
                 gross=dirn*(exit_px-first_px)*mult*lots
-            cost=real_cost_per_lot(sym,mult)*lots
+                cost=real_cost_per_lot(sym,mult,first_px,cost_mode)*lots
             Y=gross-cost
             win = Y>0 if pnl_mode=="perlot" else (dirn*(exit_px-first_px))>0
             open_pos[sym]=dict(Y=Y, win=win)
@@ -187,7 +205,30 @@ def main():
     settings=get_settings()
     mc=settings.main_contracts
     p=FusionBacktestParams()  # V3.4 默认口径
-    mult_map={m.symbol: float(m.multiplier) for m in mc}
+    # 乘数真源 = dim_variety（库内字典）；config 仅作回退。
+    # 2026-10-03：旧代码只读 config.main_contracts（YAML 硬编码），是代码内字典。
+    from app.data.barstore import variety_spec, VarietySpecNotFoundError
+    mult_map={}
+    for m in mc:
+        try:
+            mult_map[m.symbol]=float(variety_spec(m.symbol)["multiplier"])
+        except (VarietySpecNotFoundError, Exception):
+            mult_map[m.symbol]=float(m.multiplier)
+    # 费率覆盖前置检查（2026-10-03）：缺费率品种既不能按 0 成本、也不该用 legacy
+    # 混入（会污染口径），故**整品种剔除**并显式报告，保证净额口径边界清晰。
+    from app.data.cost import cost_coefficients, CostNotFoundError
+    if COST_MODE=="dict":
+        no_fee=[]
+        for m in mc:
+            try:
+                cost_coefficients(m.symbol, close_action="CLOSE_YEST")
+            except (CostNotFoundError, Exception):
+                no_fee.append(m.symbol)
+        if no_fee:
+            print(f"⚠ 费率缺失（将整品种剔除，不参与净额统计）：{no_fee}")
+            mc=[m for m in mc if m.symbol not in no_fee]
+            mult_map={k:v for k,v in mult_map.items() if k not in no_fee}
+            print(f"  有效品种：{len(mc)}（原 {len(settings.main_contracts)}）")
     all_pos=[]
     per_sym_events={}
     n_sym=0; skipped=[]
@@ -206,35 +247,53 @@ def main():
             per_sym_events[m.symbol]=nev
             all_pos.extend(pos)
             n_sym+=1
-    res=replay_capacity5(all_pos, mult_map, pnl_mode=PNL_MODE)
+    res=replay_capacity5(all_pos, mult_map, pnl_mode=PNL_MODE, cost_mode=COST_MODE)
+    res_legacy=None
+    if COST_MODE=="dict":
+        # 同时跑一遍旧口径，仅作对照（不作为结论）
+        res_legacy=replay_capacity5(all_pos, mult_map, pnl_mode=PNL_MODE, cost_mode="legacy")
     # 报告
     print("="*60)
     print("V3.4 验收：CB 引擎(walk_fusion_states) @ fut_kline 连续主连")
+    print(f"成本口径：{COST_MODE}  （dict=库内真实费率；legacy=旧 SPEC 硬编码，仅对照）")
     print("="*60)
     print(f"品种覆盖：{n_sym}/{len(mc)}  （跳过 {len(skipped)} 个：{skipped[:5]}）")
-    print(f"{'指标':<14}{'CB实测':>14}{'研发锚点':>14}{'偏差':>12}")
-    print("-"*54)
-    rows=[
-        ("信号事件", res["events"], ANCHOR["events"], res["events"]-ANCHOR["events"]),
-        ("成交(executed)", res["executed"], ANCHOR["executed"], res["executed"]-ANCHOR["executed"]),
-        ("容量拒(cap_skip)", res["cap_skip"], ANCHOR["events"]-ANCHOR["executed"], res["cap_skip"]-(ANCHOR["events"]-ANCHOR["executed"])),
-        ("胜率%", round(res["win_rate"]*100,2), round(ANCHOR["win_rate"]*100,2), round((res["win_rate"]-ANCHOR["win_rate"])*100,2)),
-        ("净¥(万)", round(res["net"]/1e4,1), round(ANCHOR["net"]/1e4,1), round((res["net"]-ANCHOR["net"])/1e4,1)),
-        ("最大回撤¥(万)", round(res["mdd"]/1e4,1), round(ANCHOR["mdd"]/1e4,1), round((res["mdd"]-ANCHOR["mdd"])/1e4,1)),
-        ("MAR", round(res["mar"],2), round(ANCHOR["mar"],2), round(res["mar"]-ANCHOR["mar"],2)),
-        ("加码头寸(被执行)", res["added_exec"], ANCHOR["addons"], res["added_exec"]-ANCHOR["addons"]),
-        ("加码手数(被执行)", res["total_addon_lots"], ANCHOR["addons"], res["total_addon_lots"]-ANCHOR["addons"]),
+    print()
+    print("【A. 信号层等价性】与成本无关，仍对研发锚点逐位核对")
+    print(f"{'指标':<16}{'CB实测':>14}{'研发锚点':>14}{'偏差':>12}")
+    print("-"*56)
+    sig_rows=[
+    ("信号事件", res["events"], ANCHOR["events"], res["events"]-ANCHOR["events"]),
+    ("成交(executed)", res["executed"], ANCHOR["executed"], res["executed"]-ANCHOR["executed"]),
+    ("容量拒(cap_skip)", res["cap_skip"], ANCHOR["events"]-ANCHOR["executed"], res["cap_skip"]-(ANCHOR["events"]-ANCHOR["executed"])),
+    ("胜率%", round(res["win_rate"]*100,2), round(ANCHOR["win_rate"]*100,2), round((res["win_rate"]-ANCHOR["win_rate"])*100,2)),
+    ("加码头寸(被执行)", res["added_exec"], ANCHOR["addons"], res["added_exec"]-ANCHOR["addons"]),
+    ("加码手数(被执行)", res["total_addon_lots"], ANCHOR["addons"], res["total_addon_lots"]-ANCHOR["addons"]),
     ]
-    for nm,a,b,dev in rows:
-        print(f"{nm:<14}{a:>14}{b:>14}{dev:>12}")
-    # 判定
-    tol_events=200; tol_net=5e4  # 容差：事件±200、净¥±5万
+    for nm,a,b,dev in sig_rows:
+        print(f"{nm:<16}{a:>14}{b:>14}{dev:>12}")
+    print()
+    print("【B. 金额指标】随成本口径变化，旧锚点不可直接比对")
+    print(f"{'指标':<16}{'真实费率':>14}{'旧口径':>14}{'旧锚点':>14}")
+    print("-"*56)
+    lg = res_legacy if res_legacy else res
+    for nm, key in (("净¥(万)","net"), ("最大回撤¥(万)","mdd"), ("MAR","mar")):
+        print(f"{nm:<16}{round(res[key]/1e4,1) if key!='mar' else round(res[key],2):>14}"
+              f"{round(lg[key]/1e4,1) if key!='mar' else round(lg[key],2):>14}"
+              f"{round(ANCHOR[key]/1e4,1) if key!='mar' else round(ANCHOR[key],2):>14}")
+    if res_legacy:
+        d=(res["net"]-res_legacy["net"])/1e4
+        print(f"\n  真实费率 vs 旧口径：净利 {d:+.1f} 万"
+              f"（旧口径把百分比费率当固定元/手，如 CU 写 17 而实际 0.5‰≈195）")
+    # 判定：仅信号层（成本无关）参与等价性判定；金额指标随口径变化，不做等价判定
+    tol_events=200
     ok = (abs(res["events"]-ANCHOR["events"])<=tol_events and
           abs(res["executed"]-ANCHOR["executed"])<=tol_events and
-          abs(res["net"]-ANCHOR["net"])<=tol_net and
           abs(res["win_rate"]-ANCHOR["win_rate"])<=0.01)
-    print("-"*54)
-    print("等价性判定：", "✅ 通过（引擎信号层 + 全链路回放与研发逐位一致）" if ok else "❌ 偏差超容差，需排查")
+    print("-"*56)
+    print("等价性判定（信号层）：", "✅ 通过（引擎信号层与研发逐位一致）" if ok else "❌ 偏差超容差，需排查")
+    print(f"金额基准（{COST_MODE} 口径）：净 {res['net']/1e4:.1f} 万 / 回撤 {res['mdd']/1e4:.1f} 万 / MAR {res['mar']:.2f}")
+    print("  ⚠ 旧锚点 +69.6 万系 legacy 成本口径，已作废，不得再作为验收基准。")
     # 落盘
     out=dict(cb=res, anchor=ANCHOR, passed=ok, n_sym=n_sym, skipped=skipped,
              per_sym_events=per_sym_events)
@@ -249,7 +308,11 @@ if __name__=="__main__":
                      help="复刻历史错位对齐（前视），仅用于回归对比，勿作为结论")
     _ap.add_argument("--pnl-mode", default="perlot", choices=["perlot","first"],
                      help="perlot=逐手独立计价(正确,默认) / first=研究侧旧近似(高估)")
+    _ap.add_argument("--cost-mode", default="dict", choices=["dict","legacy"],
+                     help="dict=库内真实费率 dim_trading_cost(默认,用户2026-10-03拍板) / "
+                          "legacy=旧 SPEC 硬编码(把百分比费率当固定元/手,仅作对照)")
     _a=_ap.parse_args()
     LEGACY_ALIGN=_a.legacy_align
     PNL_MODE=_a.pnl_mode
+    COST_MODE=_a.cost_mode
     main()
