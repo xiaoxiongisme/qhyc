@@ -152,6 +152,15 @@ def report(varieties, notice):
 
 
 def apply_db(varieties):
+    """只写**规格类**字段（乘数/跳动/中文名/交易所/保证金）。
+
+    ⚠ 2026-10-03 起**不再写手续费** —— 实测 akshare `futures_fees_info` 的费率不可作权威：
+      · CZCE 26 品种固定值与郑交所官方接口大面积不符（FG 2 vs 6、PK 2 vs 4、
+        AP平今 10 vs 20、CJ 3 vs 10、SR 2 vs 3、SA/MA/PX 0.01 vs 官方值）
+      · 40 个百分比品种 `开仓费用/手` 恒为 0.01（≈免费）
+    手续费改由 ``scripts/sync_cost_from_exchange.py`` 按交易所分源写入。
+    保留 akshare 快照仅作交叉参考。
+    """
     up = 0
     with session_scope() as s:
         for vc, r in varieties.items():
