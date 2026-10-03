@@ -87,8 +87,10 @@ def main():
         if dt.dt.tz is not None:
             dt = dt.dt.tz_localize(None)
         dts = dt.values
-        raw_r = np.abs(np.diff(b["c"]) / b["c"][:-1])
-        adj_r = np.abs(np.diff(c2) / c2[:-1])
+        raw_r = np.abs(np.diff(b["c"]) / np.where(b["c"][:-1] == 0, np.nan, b["c"][:-1]))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            adj_r = np.abs(np.diff(c2) / np.where(c2[:-1] == 0, np.nan, c2[:-1]))
+        adj_r = np.nan_to_num(adj_r, nan=0.0, posinf=0.0, neginf=0.0)
 
         # 取每个换月点前后各 20 根窗口
         win = []
@@ -120,7 +122,7 @@ def main():
         rows.append(dict(sym=sym, n_bars=len(b["c"]), n_seg=len(g),
                          roll_ts_raw=100 * raw_roll, roll_ts_adj=100 * adj_roll,
                          smooth=100 * smooth, atr_ratio=atr_ratio, neg=neg,
-                         cov=100.0 * n_off / len(b["c"])))
+                         cov_pct=100.0 * n_off / len(b["c"])))
 
     D = pd.DataFrame(rows)
     D.to_csv(os.path.join(OUT, "back_adj_feasibility.csv"), index=False)
@@ -151,12 +153,12 @@ def main():
 
     print("=== ④ 段覆盖率（复权偏移是否真落到 bar 上）===")
     print("  覆盖率: 中位 %.1f%% | 最小 %.1f%% | <90%% 的品种数 %d"
-          % (D.cov.median(), D.cov.min(), (D.cov < 90).sum()))
+          % (D.cov_pct.median(), D.cov_pct.min(), (D.cov_pct < 90).sum()))
     print()
 
     print("=== 最差 8 个品种（按断层抹平率）===")
     print(D.nsmallest(8, "smooth")[
-        ["sym", "n_seg", "roll_ts_raw", "roll_ts_adj", "smooth", "atr_ratio", "neg", "cov"]
+        ["sym", "n_seg", "roll_ts_raw", "roll_ts_adj", "smooth", "atr_ratio", "neg", "cov_pct"]
     ].to_string(index=False))
     print()
 
@@ -166,7 +168,7 @@ def main():
     print("  断层抹平 >80%%: %s" % ("PASS" if (D.smooth > 80).all() else "FAIL"))
     print("  零负价:        %s" % ("PASS" if (D.neg == 0).all() else "FAIL"))
     print("  ATR 零失真:    %s" % ("PASS" if (D.atr_ratio.sub(1).abs() < 0.01).all() else "FAIL"))
-    print("  段覆盖 >90%%:   %s" % ("PASS" if (D.cov > 90).all() else "FAIL"))
+    print("  段覆盖 >90%%:   %s" % ("PASS" if (D.cov_pct > 90).all() else "FAIL"))
     print("  => back_adj 链%s可修复（只需注册调度）"
           % ("**" if ok else "**有条件**"))
 
