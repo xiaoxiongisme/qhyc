@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -23,7 +23,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import logger
-from app.ingest.tqsdk_calibrator import _get_tqsdk, close_tqsdk, pd_date
 from app.models import DailyBar, MainContractMap, MainContinuous
 from app.repositories._base import upsert_main_continuous
 from app.repositories.main_contract_repo import MainContractRepository
@@ -45,28 +44,26 @@ def _yymm_key(code: str) -> int | None:
     return None
 
 
-def _kline_to_df(klines, code: str) -> pd.DataFrame:
-    """tqsdk 合约日线 → DataFrame[date, close, close_oi, volume]"""
-    if klines is None or len(klines) == 0:
+def _kline_to_df(df, code: str) -> pd.DataFrame:
+    """akshare 合约日线 → DataFrame[date, close, close_oi, volume]（C9 去天勤：原天勤）"""
+    if df is None or len(df) == 0:
         return pd.DataFrame(columns=["date", "close", "close_oi", "volume"])
     recs = []
-    for i in range(len(klines)):
-        dt = klines.iloc[i].get("datetime")
+    for _, r in df.iterrows():
+        dstr = str(r.get("date", "")).strip()
         try:
-            d = pd_date(dt)
+            d = datetime.strptime(dstr, "%Y-%m-%d").date()
         except Exception:
             continue
-        if d is None:
-            continue
-        close = klines.iloc[i].get("close")
+        close = r.get("close")
         if close is None or close != close or close <= 0:  # NaN/无效
             continue
         recs.append(
             {
                 "date": d,
                 "close": float(close),
-                "close_oi": float(klines.iloc[i].get("close_oi") or 0),
-                "volume": float(klines.iloc[i].get("volume") or 0),
+                "close_oi": float(r.get("hold") or 0),
+                "volume": float(r.get("volume") or 0),
                 "code": code,
             }
         )
@@ -172,7 +169,7 @@ def extend_smooth_series(session: Session, product: str) -> dict:
         .limit(1)
     ).scalar()
 
-    # 3. 换月检测：候选合约 tqsdk 日线，close_oi 主力判定
+    # 3. 换月检测：候选合约天勤日线，close_oi 主力判定
     last_map = session.execute(
         select(MainContractMap.underlying)
         .where(MainContractMap.product == product)
@@ -187,7 +184,6 @@ def extend_smooth_series(session: Session, product: str) -> dict:
         .limit(1)
     ).scalar() or "UNKNOWN"
 
-    api = _get_tqsdk()
     # 候选合约：从用户 contracts.json 已知合约 + 月码循环生成（不依赖 query_quotes）
     known_codes: list[str] = []
     try:
@@ -208,15 +204,13 @@ def extend_smooth_series(session: Session, product: str) -> dict:
     frames = []
     for code in candidates:
         df_c = None
-        for attempt in range(2):  # 超时重试 1 次
-            try:
-                kl = api.get_kline_serial(f"{exchange}.{code}", duration_seconds=86400, data_length=80)
-                df_c = _kline_to_df(kl, code)
-                break
-            except Exception as e:
-                logger.warning(f"[smooth] {product} 拉取 {code} 第 {attempt + 1} 次失败: {e}")
-                close_tqsdk()
-                api = _get_tqsdk()
+        try:
+            import akshare as ak
+
+            kl = ak.futures_zh_daily_sina(symbol=code)
+            df_c = _kline_to_df(kl, code)
+        except Exception as e:
+            logger.warning(f"[smooth] {product} 拉取 {code} 失败: {e}")
         if df_c is not None and not df_c.empty:
             frames.append(df_c)
     if not frames:
@@ -333,13 +327,10 @@ def extend_all(session: Session, products: list[str] | None = None) -> list[dict
         ).all()
         products = [r[0] for r in rows]
     results = []
-    try:
-        for p in products:
-            try:
-                results.append(extend_smooth_series(session, p))
-            except Exception as e:
-                logger.exception(f"[smooth] {p} 延伸失败: {e}")
-                results.append({"product": p, "error": str(e)})
-    finally:
-        close_tqsdk()
+    for p in products:
+        try:
+            results.append(extend_smooth_series(session, p))
+        except Exception as e:
+            logger.exception(f"[smooth] {p} 延伸失败: {e}")
+            results.append({"product": p, "error": str(e)})
     return results

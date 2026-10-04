@@ -1,6 +1,6 @@
 """
 特征管线（M2）
-- load_canonical_series：加载权威口径主连序列（R1：csv_smooth 优先，akshare/tqsdk 兜底）
+- load_canonical_series：加载权威口径主连序列（R1：csv_smooth 优先，akshare 兜底）
 - build_features：计算 §5.1 特征集 + Hurst 状态门控
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ class FeatureSnapshot:
     """一次预测的特征快照（含溯源信息）"""
 
     symbol: str
-    source: str                       # csv_smooth / akshare_tqsdk
+    source: str                       # csv_smooth / akshare_daily
     rets: np.ndarray                  # 权威口径收益率序列 %
     dates: pd.Index = None            # rets 对应日期索引（M3 传导特征对齐用）
     close: pd.Series = None
@@ -63,7 +63,7 @@ def load_canonical_series(session: Session, symbol: str) -> tuple[pd.DataFrame, 
     1) csv_smooth：main_continuous.adj_*（用户后复权主连，⑪ 权威口径）
        —— 但 CSV 为静态快照，若明显滞后于 daily_bar（> 3 天），自动回退到 2)
           并告警（M2.1 待办：平滑主连自动延伸，见实现问题清单）
-    2) akshare_tqsdk：daily_bar（主连品种的 akshare/tqsdk 连续价，未平滑）
+    2) akshare_daily：daily_bar（主连品种未平滑日线，akshare 单源）
     返回 (DataFrame[trade_date index], source)
     """
     settings = get_settings()
@@ -124,7 +124,7 @@ def load_canonical_series(session: Session, symbol: str) -> tuple[pd.DataFrame, 
 
     # 2. daily_bar 兜底
     df = _daily_df()
-    return df, "akshare_tqsdk"
+    return df, "akshare_daily"
 
 
 def features_from_series(symbol: str, df: pd.DataFrame, source: str) -> FeatureSnapshot:

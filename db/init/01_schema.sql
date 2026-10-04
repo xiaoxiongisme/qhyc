@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS main_contract_map (
     underlying    TEXT        NOT NULL,           -- 当日实际合约，如 FG605
     change_flag   BOOLEAN     NOT NULL DEFAULT FALSE,
     delta         NUMERIC(20,4) NOT NULL DEFAULT 0,  -- ⑪ 换月拼接价差
-    src           TEXT        NOT NULL DEFAULT 'csv', -- csv / akshare / tqsdk
+    src           TEXT        NOT NULL DEFAULT 'csv', -- csv / akshare
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (trade_date, exchange, product)
 );
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS daily_bar (
     ret_settle  NUMERIC(12,6),         -- ⑩ 结算价涨跌幅 %
     ret5        NUMERIC(12,6),
     ret20       NUMERIC(12,6),
-    src         TEXT         NOT NULL DEFAULT 'akshare',  -- akshare / tqsdk / csv
+    src         TEXT         NOT NULL DEFAULT 'akshare',  -- akshare / csv
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     PRIMARY KEY (symbol, trade_date)
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS hourly_bar (
     ret             NUMERIC(12,6),
     src             TEXT         NOT NULL DEFAULT 'akshare',
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    -- G5：同表混存多 src（csv/akshare/tqsdk），靠 src 过滤隔离；主键纳入 src 杜绝「同一根 K 被
+    -- G5：同表混存多 src（csv/akshare），靠 src 过滤隔离；主键纳入 src 杜绝「同一根 K 被
     -- 双源各写一次」导致的口径污染（§14 #2）。既有库若已存在重复，用运行时 ensure 的
     -- CREATE UNIQUE INDEX IF NOT EXISTS 兜底（重复行会跳过并告警，不阻断启动）。
     PRIMARY KEY (symbol, trade_datetime, src)
@@ -196,7 +196,7 @@ CREATE TABLE IF NOT EXISTS anomaly_ticket (
     trade_date    DATE         NOT NULL,
     field         TEXT         NOT NULL,             -- close / settle / volume ...
     akshare_val   NUMERIC(20,4),
-    tqsdk_val     NUMERIC(20,4),
+    legacy_val     NUMERIC(20,4),
     diff          NUMERIC(12,6),                     -- 绝对偏差（%）
     threshold     NUMERIC(12,6),
     status        TEXT         NOT NULL DEFAULT 'pending', -- pending / accepted / fixed / false_positive

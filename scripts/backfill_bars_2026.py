@@ -8,12 +8,12 @@
 
 免费源历史深度（探针实测 2026-09-30）
 -----------------------------------
-tqsdk 连续合约 K 线硬上限 10000 根：
+免费源历史深度（探针实测 2026-09-30）：
   15m 回溯到 2025-08-29 / 30m 2024-08 / 60m 2023-03 / daily(akshare) 全历史
-  5m 仅回溯到 2026-03-02（10000 根 ≈ 6 个月）
+  5m 仅回溯到 2026-03-02（约 10000 根 ≈ 6 个月）
 → 故 5m 实际可补区间为 2026-03-02~09-30；2026-01-01~03-01 免费源物理上拉不到，留缺口。
 
-执行位置：云端（唯一真源，有 tqsdk/akshare 凭证与全量 bar_*）。
+执行位置：云端（唯一真源，有 akshare 凭证与全量 bar_*）。
 
 用法
 ----
@@ -45,7 +45,7 @@ if _ROOT not in sys.path:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("backfill_2026")
 
-# 受补周期 → (bar 表 / roll_segment.freq / tqsdk 秒数)
+# 受补周期 → (bar 表 / roll_segment.freq / akshare 周期)
 FREQ_MAP = {
     "5m":   ("bar_5m",  "min5",  300),
     "15m":  ("bar_15m", "min15", 900),
@@ -54,7 +54,7 @@ FREQ_MAP = {
     "daily":("daily_bar", None, None),
 }
 
-# tqsdk 主连「品种部分」大小写按交易所（错一个字母即合约不存在/超时）
+# akshare 主连「品种部分」大小写按交易所（错一个字母即合约不存在/超时）
 _TQ_PROD_CASE = {
     "CZCE": str.upper,
     "CFFEX": str.upper,
@@ -130,45 +130,38 @@ def _to_int(v):
         return None
 
 
-def _pull_tqsdk(kq: str, dur: int, start: date, end: date, limit: int = 10000) -> list[dict]:
-    """拉 tqsdk 主连 K 线，返回 [{'bucket':datetime,'open',...'oi'}]，已按 [start,end] 过滤。"""
-    from tqsdk import TqApi, TqAuth
-    from app.core.config import get_settings
-    from app.ingest.fdf.tqhelper import get_auth
-    api = TqApi(auth=get_auth())
-    try:
-        k = api.get_kline_serial(kq, duration_seconds=dur, data_length=limit)
-        # 流式推送，等到根数稳定
-        for _ in range(25):
-            if k is not None and len(k) > 0:
-                break
-            try:
-                api.wait_update(timeout=15)
-            except Exception:
-                break
-        if k is None or len(k) == 0:
-            return []
-        rows = []
-        for i in range(len(k)):
-            dt = _parse_tq_dt(k.iloc[i].get("datetime"))
-            if dt is None:
-                continue
-            # 现有 bar_Xm 为「起点标签」（实测 09:00/09:15…），tqsdk 多分钟 K 线同为起点标签，
-            # 直接用作 bucket，不做 hourly 那种 +1h 偏移。
-            if dt.date() < start or dt.date() > end:
-                continue
-            o, h, l, c = (_to_dec(k.iloc[i].get(x)) for x in ("open", "high", "low", "close"))
-            vol = _to_int(k.iloc[i].get("volume"))
-            oi = _to_int(k.iloc[i].get("close_oi") or k.iloc[i].get("open_oi"))
-            # 成交额：tqsdk 无该字段，用 量×典型价 作近似（保持列非 NULL，避免下游断裂）
-            typ = ((o or 0) + (h or 0) + (l or 0) + (c or 0)) / 4.0
-            amount = round((vol or 0) * typ, 2) if vol else None
-            rows.append({"bucket": dt, "open": o, "high": h, "low": l,
-                         "close": c, "volume": vol, "amount": amount, "oi": oi})
-        rows.sort(key=lambda r: r["bucket"])
-        return rows
-    finally:
-        api.close()
+_PERIOD_OF = {"5m": "5", "15m": "15", "30m": "30", "60m": "60"}
+
+def _pull_akshare_bars(product: str, freq: str, start: date, end: date, limit: int = 10000) -> list[dict]:
+    """akshare 主连 K 线（futures_zh_minute_sina period=5/15/30/60），返回 [{'bucket',...}] 按 [start,end] 过滤。
+
+    C9 去天勤：原 天勤 get_kline_serial 已替换为 akshare；bucket 同为起点标签，不做 +1h 偏移。
+    """
+    import akshare as ak
+
+    period = _PERIOD_OF.get(freq)
+    if not period:
+        return []
+    sina = f"{product}0"
+    df = ak.futures_zh_minute_sina(symbol=sina, period=period)
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = str(r.get("datetime"))[:16]
+        try:
+            dt = datetime.strptime(d, "%Y-%m-%d %H:%M").replace(tzinfo=timezone(timedelta(hours=8)))
+        except Exception:
+            continue
+        if dt.date() < start or dt.date() > end:
+            continue
+        o, h, l, c = (_to_dec(r.get(x)) for x in ("open", "high", "low", "close"))
+        vol = _to_int(r.get("volume"))
+        oi = _to_int(r.get("hold") or r.get("open_interest"))
+        out.append({"bucket": dt, "open": o, "high": h, "low": l,
+                    "close": c, "volume": vol, "amount": None, "oi": oi})
+    out.sort(key=lambda r: r["bucket"])
+    return out
 
 
 def _pull_akshare_daily(product: str, start: date, end: date) -> list[dict]:
@@ -216,37 +209,28 @@ def collect_frequency(symbol: str, freq: str, start: str, end: str,
     end_d = datetime.strptime(end, "%Y-%m-%d").date()
 
     if freq == "daily":
-        # 双源合并（2026-10-01 实测）：akshare sina 对僵尸品种可能返回空（JR/LR/PM/RI/WH/ZC
-        # 零行）、部分缺段（WR 17 / BB 57 / RS 178 天）、甚至抛异常（WR0 Length mismatch）；
-        # tqsdk 主连日线均齐全（唯一例外 LR 止于 01-16，属源限制）。策略：akshare 先写
-        # （src='backfill'），tqsdk 无条件跟进补缺（src='backfill_tq'），DO NOTHING 先到先得、
-        # 幂等可重跑；1 万根上限对日线 ≈ 40 年，无免费回溯问题。
+        # 单源（akshare sina）回填（C9 去天勤后不再有 天勤 补缺）。akshare 对僵尸品种可能返回空
+        # （JR/LR/PM/RI/WH/ZC 零行）、部分缺段（WR 17 / BB 57 / RS 178 天）、甚至抛异常
+        # （WR0 Length mismatch）；故用 try/except 包裹、空则跳过，幂等可重跑。
         try:
             rows = _pull_akshare_daily(s["product"], start_d, end_d)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[daily] {symbol}: akshare 异常({type(e).__name__})，仅用 tqsdk")
+            logger.warning(f"[daily] {symbol}: akshare 异常({type(e).__name__})")
             rows = []
         if verify or session is None:
             logger.info(f"[verify] {symbol} daily akshare {len(rows)} 行 "
                         f"({rows[0]['trade_date'] if rows else '-'}~{rows[-1]['trade_date'] if rows else '-'})")
             return len(rows)
         _upsert_daily(s["main_symbol"], rows, session, src="backfill")
-        kq = _kq_symbol(s["exchange"], s["product"])
-        tq = _pull_tqsdk(kq, 86400, start_d, end_d)
-        tq_rows = [{"trade_date": r["bucket"].date(), "open": r["open"], "high": r["high"],
-                    "low": r["low"], "close": r["close"], "volume": r["volume"], "oi": r["oi"]}
-                   for r in tq]
-        _upsert_daily(s["main_symbol"], tq_rows, session, src="backfill_tq")
-        logger.info(f"[daily] {symbol}: akshare {len(rows)} + tqsdk {len(tq_rows)} 行（DO NOTHING 合并）")
-        return max(len(rows), len(tq_rows))
+        logger.info(f"[daily] {symbol}: akshare {len(rows)} 行（backfill，C9 去天勤后单源）")
+        return len(rows)
 
     # 5m 免费源最深只到 2026-03-02，早于该日的区间拉不到（留缺口）
     eff_start = max(start_d, _5M_FREE_FLOOR) if freq == "5m" else start_d
     if eff_start > end_d:
         logger.warning(f"[skip] {symbol} {freq}: 免费源不可达区间 {start_d}~{end_d}（5m 仅 ≥{_5M_FREE_FLOOR}）")
         return 0
-    kq = _kq_symbol(s["exchange"], s["product"])
-    rows = _pull_tqsdk(kq, dur, eff_start, end_d)
+    rows = _pull_akshare_bars(s["product"], freq, eff_start, end_d)
     if verify or session is None:
         first = rows[0]["bucket"] if rows else None
         last = rows[-1]["bucket"] if rows else None
@@ -322,7 +306,7 @@ def run(args) -> int:
                 syms = products
             else:
                 # 排除已退市（source 由 011 标记为 *_delisted）：
-                # 这类品种 tqsdk 查询会抛 "non-existent instrument"，实测 ME/TC 即如此。
+                # 这类品种 天勤 查询会抛 "non-existent instrument"，实测 ME/TC 即如此。
                 syms = [r[0] for r in conn.execute(
                     text("SELECT variety_code FROM dim_variety "
                          "WHERE is_active AND coalesce(source, '') NOT LIKE '%delisted%' "

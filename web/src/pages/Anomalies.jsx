@@ -1,8 +1,8 @@
 // 数据质量 · 异常工单面板（PRD §10「数据质量面板」补齐）
 //
 // 后端：GET /anomalies?status=pending&limit=200（返回数组）
-//       POST /anomalies/{id}/resolve  body={action: accept_tqsdk|false_positive, note}
-// 纪律：只允许「采纳 tqsdk」或「标记误报」，不手改数值（后端已强制）。
+//       POST /anomalies/{id}/resolve  body={action: false_positive, note}
+// 纪律：只允许「标记误报」，不手改数值（后端已强制）。
 import React, { useCallback, useEffect, useState } from "react";
 import { getJSON, postJSON } from "../api.jsx";
 
@@ -53,7 +53,7 @@ export default function Anomalies() {
     <div className="card">
       <h2>数据质量 · 异常工单</h2>
       <div className="small">
-        双源（akshare / tqsdk）不一致工单。裁决仅允许「采纳 tqsdk」或「标记误报」，禁止手改数值。
+        数据质量异常工单。裁决仅允许「标记误报」，禁止手改数值。
       </div>
       <div className="tabs" style={{ marginTop: 8 }}>
         {["pending", "all", "fixed", "false_positive"].map((s) => (
@@ -82,7 +82,6 @@ export default function Anomalies() {
               <th>交易日</th>
               <th>字段</th>
               <th>akshare</th>
-              <th>tqsdk</th>
               <th>差异</th>
               <th>状态</th>
               <th>操作</th>
@@ -96,18 +95,11 @@ export default function Anomalies() {
                 <td>{t.trade_date}</td>
                 <td>{t.field}</td>
                 <td>{t.akshare_val ?? "—"}</td>
-                <td>{t.tqsdk_val ?? "—"}</td>
                 <td>{t.diff ?? "—"}</td>
                 <td>{STATUS_LABEL[t.status] || t.status}</td>
                 <td>
                   {t.status === "pending" ? (
                     <>
-                      <button
-                        disabled={busyId === t.id}
-                        onClick={() => resolve(t.id, "accept_tqsdk")}
-                      >
-                        采纳 tqsdk
-                      </button>{" "}
                       <button
                         disabled={busyId === t.id}
                         onClick={() => resolve(t.id, "false_positive")}

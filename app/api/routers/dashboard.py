@@ -443,7 +443,6 @@ def quality(db: Session = Depends(fastapi_db_dep)):
                 "trade_date": t.trade_date.isoformat(),
                 "field": t.field,
                 "akshare_val": float(t.akshare_val) if t.akshare_val is not None else None,
-                "tqsdk_val": float(t.tqsdk_val) if t.tqsdk_val is not None else None,
                 "diff": float(t.diff) if t.diff is not None else None,
                 "status": t.status,
             }

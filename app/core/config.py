@@ -31,10 +31,6 @@ class EnvSettings(BaseSettings):
         extra="ignore",
     )
 
-    # tqsdk
-    TQSDK_PHONE: str = ""
-    TQSDK_PASSWORD: str = ""
-
     # 数据库
     POSTGRES_USER: str = "futures"
     POSTGRES_PASSWORD: str = ""
@@ -52,9 +48,6 @@ class EnvSettings(BaseSettings):
     INGEST_CRON_1: str = "08:00"     # 早盘前（决策 7）
     INGEST_CRON_2: str = "12:30"     # 午盘时
     INGEST_CRON_3: str = "20:00"     # 夜盘前
-    TQSDK_PRICE_DIFF_THRESHOLD_PCT: float = 0.5
-    TQSDK_TIMEOUT_SEC: int = 15
-    TQSDK_MAX_RETRIES: int = 2
     HISTORY_START_DATE: str = "2015-01-01"
 
     # Web
@@ -91,7 +84,6 @@ class MainContractSpec(BaseModel):
 class IngestConfig(BaseModel):
     history_start: str = "2015-01-01"
     main_contracts: list[MainContractSpec] = Field(default_factory=list)
-    tqsdk_symbol_template: str = "KQ.m@{exchange}.{product}888"
 
 
 class CalibrationConfig(BaseModel):
@@ -306,8 +298,8 @@ class FusionConfig(BaseModel):
     settle_delay_sec: int = 150
     # 引擎消费哪一套小时线口径（必须与回测/看盘一致，否则周期参数被砍半、信号与图表对不上）。
     # - "akshare" = 同花顺口径（K线按收盘时刻标：日盘 10:00/11:15/14:15/15:00），与用户盘面一致（推荐）
-    # - "tqsdk"   = 起点口径（K线按整点起点标：日盘 09:00/10:00/11:00/13:00/14:00），与历史 CSV 回测一致
-    # 两套时间戳不同，不可混用；本字段强制引擎只读取单一 src，杜绝"同一段行情数两遍"。
+    # 历史 CSV 回测为起点标签口径，与 akshare 时间戳不同，不可混入实时引擎；本字段强制
+    # 引擎只读取单一 src，杜绝"同一段行情数两遍"。
     hourly_src: str = "akshare"
 
 
@@ -364,45 +356,14 @@ class PipelineConfig(BaseModel):
     notify_on_failure: bool = True
 
 
-class FutKlineConfig(BaseModel):
-    """fut_kline（天勤 tqsdk）增量入库调度（2026-09-23 补齐）。
+class ExecutionConfig(BaseModel):
+    """P0-2 实盘通道总开关（deploy_gate 门禁依赖）。
 
-    实测问题：scheduler 只有 `adjust_fdf`（02:30 由 fut_kline 生成 cont_adj），
-    却没有抓取原始行情的定时任务 → fut_kline 原始层长期无增量。
-    本项在 adjust 之前（01:40，夜盘已收）跑一次增量抓取。
+    默认关闭；P0-2 端到端通过、人工复核后，置环境变量 EXECUTION_ENABLED=1 开启。
+    仅当本开关为 True 时，deploy_gate 才执行 P0-2 实盘下单相关的 BLOCK/校验；
+    否则实盘相关校验一律跳过，避免数据层部署被实盘未就绪拖死。
     """
-    enabled: bool = True
-    run_hour: int = 1
-    run_minute: int = 40
-    freqs: list[str] = Field(default_factory=lambda: ["daily", "hourly"])
-    buffer_days: int = 7
-    adjust_after: bool = True
-    max_stale_days: int = 0      # >0：落后不超过该天数则跳过（防重复跑）
-    timeout_sec: int = 3600
-
-
-class FutKlineRebuildConfig(BaseModel):
-    """fut_kline 夜间派生重建（方案 1：物化派生）调度开关。
-
-    启用后，fut_kline 不再由 3 个独立 tqsdk/复权写入（fetch_fdf / adjust_fdf /
-    _adjust_bars）维护，而是由一个夜间作业从权威分钟源重建：
-      - cont_adj  ← minute_bar_adj（已复权主连，888 法）
-      - continuous ← bar_*（未复权主连，888 法）
-      - contract  ← contract_daily（UPSERT，保留历史逐合约序列）
-    该开关为 True 时，旧的 adjust_fdf / fetch_fdf 写入任务不再注册（保持可逆）。
-    """
-    enabled: bool = True
-    run_hour: int = 5
-    run_minute: int = 0
-    # 2026-10-01 云端 dry-run 实测：cont_adj 5 频段全量聚合 ~77 分钟 + continuous
-    # + 生产模式前置 DELETE（1,992 万行）≈ 贴着 7200s 上限，工作日 05:00 还有采集
-    # 作业抢 IO——超时中断会留下「DELETE 后半重建」状态直到次日。调至 6h（3 倍余量）。
-    timeout_sec: int = 21600
-    # ★ 2026-10-03 退役前复权链：minute_bar_adj 为【加法前复权】，与"后复权唯一口径"
-    #   冲突，且云端实测已崩坏（5,862 万行 / 201.7 万行负价 3.4% / 最低 -2571.6）。
-    #   True = 停 04:30 adjust_minute_bar_adj 作业（分钟层只保留未复权 minute_bar 作 L0）。
-    #   同时 rebuild_fut_kline.py 默认 --kinds 不含 cont_adj，前复权链整条退役。
-    retire_minute_adj: bool = True
+    enabled: bool = (os.getenv("EXECUTION_ENABLED") == "1")
 
 
 class FactorBiasConfig(BaseModel):
@@ -429,8 +390,6 @@ class YamlConfig(BaseModel):
     fusion: FusionConfig = Field(default_factory=FusionConfig)
     rank_position: RankPositionConfig = Field(default_factory=RankPositionConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
-    fut_kline: FutKlineConfig = Field(default_factory=FutKlineConfig)
-    fut_kline_rebuild: FutKlineRebuildConfig = Field(default_factory=FutKlineRebuildConfig)
     factor_bias: FactorBiasConfig = Field(default_factory=FactorBiasConfig)
 
 
@@ -481,10 +440,7 @@ class Settings(BaseModel):
 
     @property
     def calibration_threshold_pct(self) -> float:
-        return float(
-            self.yaml.calibration.price_diff_threshold_pct
-            or self.env.TQSDK_PRICE_DIFF_THRESHOLD_PCT
-        )
+        return float(self.yaml.calibration.price_diff_threshold_pct)
 
     @property
     def cron_specs(self) -> list[CronSpec]:
@@ -507,12 +463,9 @@ class Settings(BaseModel):
         return self.yaml.pipeline
 
     @property
-    def fut_kline_config(self) -> FutKlineConfig:
-        return self.yaml.fut_kline
-
-    @property
-    def fut_kline_rebuild_config(self) -> FutKlineRebuildConfig:
-        return self.yaml.fut_kline_rebuild
+    def execution(self) -> "ExecutionConfig":
+        """P0-2 实盘通道总开关（默认关闭，见 ExecutionConfig）。"""
+        return ExecutionConfig()
 
     @property
     def fusion(self) -> FusionConfig:

@@ -9,13 +9,13 @@ load_1min_2026dump.py — D:/学习资料 dump（2026.zip 布局A / GFEX 布局B
             first(open,ts), max(high), min(low), last(close,ts),
             sum(volume)::bigint, sum(amount), last(open_interest,ts)
 - 布局A（2026.zip 逐日 2026/YYYYMM/YYYYMMDD/code.csv, 列含 bob/eob）:
-    9999 → 主连 888（仅 bar_5m：15/30/60 已由 tqsdk 补齐且桶键对拍 100% 一致，保持不动）
+    9999 → 主连 888（仅 bar_5m：15/30/60 已由 天勤 补齐且桶键对拍 100% 一致，保持不动）
     8888 → 指数连 8888（bar_5m/15m/30m/60m 全四周期，2026 全缺）
     9998（次主力）与合约级 csv 跳过
     合成模式 = rebuild（窗口化 DELETE+INSERT，窗口 ⊆ dump 覆盖段且该段 raw 已导入）
 - 布局B（GFEX 天勤导出 品种/00_主力连续/P_main_1m.csv）:
     仅归档 raw 的 2026-01-01 起段（2022-2025 段按保留策略#1 不入 raw；原 zip 留磁盘可重灌）
-    bar_* 聚合补洞 = fill 模式（只 INSERT ON CONFLICT DO NOTHING，不 DELETE，保留 tqsdk 已填桶）
+    bar_* 聚合补洞 = fill 模式（只 INSERT ON CONFLICT DO NOTHING，不 DELETE，保留 天勤 已填桶）
     GFEX csv 无 amount 列 → raw.amount=NULL, 合成 amount=NULL
 - 幂等：全链路 ON CONFLICT DO NOTHING，可安全重跑
 - 安全：绝不调用 synthesize_bars_full / synthesize_bars_incremental / sp_build_l1

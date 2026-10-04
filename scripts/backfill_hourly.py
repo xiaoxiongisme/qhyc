@@ -1,4 +1,4 @@
-"""一次性回填 hourly_bar 历史（用 tqsdk 取长历史，纠正此前缺失的下午盘/11:00/夜盘棒）。
+"""一次性回填 hourly_bar 历史（用 天勤 取长历史，纠正此前缺失的下午盘/11:00/夜盘棒）。
 用法：在 scheduler 容器内运行。日志写 stdout，建议重定向到 /app/logs/backfill.log。
 """
 import logging
@@ -19,7 +19,7 @@ from app.ingest.hourly_collector import HourlyCollector
 def main() -> None:
     t0 = time.time()
     s = get_session_factory()()
-    c = HourlyCollector(s, prefer="tqsdk")
+    c = HourlyCollector(s)
     logger.info("[backfill] start collect_all data_length=8000")
     res = c.collect_all(data_length=8000)
     c.close()

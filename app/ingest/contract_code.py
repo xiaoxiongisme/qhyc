@@ -26,7 +26,7 @@
   并在同一事务内做「PK 冲突预检」，任何冲突直接回滚（绝不静默丢行）。
 - 只改写**合约码命名空间**；``<品种>888`` / ``KQ.m@...`` / ``IDX:...`` / 天勤码原样保留。
 - ``fut_kline.symbol`` 存的是天勤**原生**码（郑商所 3 位），天勤按此订阅，
-  **不参与物理归一** —— 只在对照表里登记 ``tqsdk_symbol``。
+  **不参与物理归一** —— 只在对照表里登记 ``天勤_symbol``。
 """
 from __future__ import annotations
 
@@ -137,7 +137,6 @@ CREATE TABLE IF NOT EXISTS contract_code_map (
     deliv_month     INT         NOT NULL,
     official_symbol TEXT,
     sina_symbol     TEXT,
-    tqsdk_symbol    TEXT,
     observed_native TEXT,
     sources         TEXT,
     name            TEXT,
@@ -340,7 +339,6 @@ def build_map(only: Optional[list[str]] = None) -> dict[str, Any]:
                 "deliv_month": mo,
                 "official_symbol": SC.to_native(std, ex),
                 "sina_symbol": SC.to_sina(std, ex),
-                "tqsdk_symbol": SC.to_tqsdk(std, ex),
                 "observed_native": ",".join(sorted(a["native"])),
                 "sources": ",".join(sorted(a["sources"])),
                 "name": names.get(prod),
@@ -354,11 +352,11 @@ def build_map(only: Optional[list[str]] = None) -> dict[str, Any]:
                 text("""
                     INSERT INTO contract_code_map
                         (exchange, std_symbol, product, month_code, deliv_year, deliv_month,
-                         official_symbol, sina_symbol, tqsdk_symbol, observed_native,
+                         official_symbol, sina_symbol, observed_native,
                          sources, name, first_seen, last_seen, version)
                     VALUES
                         (:exchange, :std_symbol, :product, :month_code, :deliv_year, :deliv_month,
-                         :official_symbol, :sina_symbol, :tqsdk_symbol, :observed_native,
+                         :official_symbol, :sina_symbol, :observed_native,
                          :sources, :name, :first_seen, :last_seen, :version)
                     ON CONFLICT (exchange, std_symbol, version) DO UPDATE SET
                         product         = EXCLUDED.product,
@@ -367,7 +365,6 @@ def build_map(only: Optional[list[str]] = None) -> dict[str, Any]:
                         deliv_month     = EXCLUDED.deliv_month,
                         official_symbol = EXCLUDED.official_symbol,
                         sina_symbol     = EXCLUDED.sina_symbol,
-                        tqsdk_symbol    = EXCLUDED.tqsdk_symbol,
                         observed_native = EXCLUDED.observed_native,
                         sources         = EXCLUDED.sources,
                         name            = COALESCE(EXCLUDED.name, contract_code_map.name),

@@ -31,7 +31,7 @@
   继续使用，``to_std`` 原样返回。
 - ``KQ.m@EXCHANGE.PRODUCT``：天勤主连码。
 - ``CZCE.AP701``：天勤具体合约码（**原生 3 位**，天勤按此订阅）。见
-  ``contract_code_map.tqsdk_symbol``，**物理值不改**（改了天勤就取不到数）。
+  代码表里的「天勤码」列，**物理值不改**（改了天勤就取不到数）。
 """
 from __future__ import annotations
 
@@ -49,7 +49,6 @@ __all__ = [
     "to_std",
     "to_native",
     "to_sina",
-    "to_tqsdk",
     "product_of",
     "delivery_ym",
 ]
@@ -197,14 +196,7 @@ def to_sina(std_symbol: object, exchange: Optional[str] = None) -> str:
     return to_std(std_symbol, exchange=exchange)
 
 
-def to_tqsdk(std_symbol: object, exchange: object) -> str:
-    """标准码 → 天勤具体合约码（``CZCE.AP701`` 形式，郑商所仍是原生 3 位）。
 
-    ⚠️ 仅用于**登记到代码表**（``contract_code_map.tqsdk_symbol``）；
-    ``fut_kline.symbol`` 存的已是天勤原生码，**不做物理改写**（改了天勤取数就对不上）。
-    """
-    ex = str(exchange or "").strip().upper()
-    return f"{ex}.{to_native(std_symbol, ex)}" if ex else str(std_symbol or "")
 
 
 def product_of(symbol: object) -> str:

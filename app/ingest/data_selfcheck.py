@@ -49,16 +49,16 @@ class SelfCheckConfig:
 
 
 def _log_ticket(session, symbol: str, trade_date: date, fld: str,
-                note: str, akshare_val=None, tqsdk_val=None, diff=None) -> None:
+                note: str, akshare_val=None, diff=None) -> None:
     """写一张异常工单（幂等：同 symbol+date+field 只写一次 pending）。"""
     try:
         session.execute(text("""
             INSERT INTO anomaly_ticket (symbol, trade_date, field, akshare_val,
-                                        tqsdk_val, diff, status, note)
-            VALUES (:s, :d, :f, :a, :t, :diff, 'pending', :n)
+                                        diff, status, note)
+            VALUES (:s, :d, :f, :a, :diff, 'pending', :n)
             ON CONFLICT DO NOTHING
         """), {"s": symbol, "d": trade_date, "f": fld, "a": akshare_val,
-               "t": tqsdk_val, "diff": diff, "n": note})
+               "diff": diff, "n": note})
         session.commit()
     except Exception as e:  # noqa: BLE001
         session.rollback()
@@ -97,7 +97,7 @@ def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
                 _log_ticket(session, sym, trade_date, f"{table}.missing_bars",
                             f"{table} {trade_date} 仅 {c} 根，预期 {expect} "
                             f"（缺失 {1 - c/expect:.1%}）",
-                            tqsdk_val=c, diff=float(expect - c) / expect)
+                            diff=float(expect - c) / expect)
                 n += 1
     return n
 

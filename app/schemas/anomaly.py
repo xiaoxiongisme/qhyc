@@ -13,7 +13,6 @@ class AnomalyOut(BaseModel):
     trade_date: date
     field: str
     akshare_val: float | None = None
-    tqsdk_val: float | None = None
     diff: float | None = None
     threshold: float | None = None
     status: str

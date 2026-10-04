@@ -135,7 +135,7 @@ class FusionBacktestRequest(BaseModel):
     symbols: Optional[list[str]] = Field(None, description="缺省=全部主连品种")
     start: Optional[str] = Field(None, description="起始日 YYYY-MM-DD（默认全历史）")
     end: Optional[str] = Field(None, description="结束日 YYYY-MM-DD（默认至今）")
-    src: Optional[str] = Field(None, description="单一小时线口径：akshare/tqsdk")
+    src: Optional[str] = Field(None, description="单一小时线口径：akshare")
     sl_atr: Optional[float] = None
     trail_atr: Optional[float] = None
     be_r: Optional[float] = None

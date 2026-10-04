@@ -2,7 +2,7 @@
 
 数据源矩阵（§18.13 同思路——坏接口降级 + 兜底切换，不硬编码 try）：
 - SINA   ak.futures_zh_daily_sina(合约)      DCE/SHFE/INE/GFEX（大写代码）✅
-- TQSDK  api.get_kline_serial(合约, 86400)   CZCE 兜底（sina 对 CZCE Length mismatch）✅
+- CZCE 兜底：akshare futures_zh_daily_sina 合约级日线（sina 对 CZCE Length mismatch 时退化为该路径）✅
 - CFFEX  暂不采（金融期货 carry 信号意义弱）
 
 活跃合约清单来源：spot_basis.near_contract / dominant_contract（M6a 每日维护）。
@@ -13,7 +13,7 @@ symbol 口径（2026-09-20 统一）
 调用外部接口前必须转回该源的原生写法：
 
     sina  : ``_sina_symbol``  → ``symbol_code.to_sina``（全大写 4 位，恒等）
-    tqsdk : ``_tqsdk_symbol`` → ``symbol_code.to_tqsdk``（``CZCE.FG701``，**郑商所仍 3 位**）
+    sina  : ``_sina_symbol`` → ``symbol_code.to_sina``（全大写 4 位，恒等）
 
 ⚠️ 天勤那一步曾是最容易踩的坑：库里统一成 4 位后，若直接拿 ``CZCE.FG2701`` 去订阅，
    天勤会报合约不存在 —— 必须转回 3 位。
@@ -62,25 +62,14 @@ def _sina_symbol(exchange: str, symbol: str) -> str:
     return SC.to_sina(symbol, exchange)
 
 
-def _tqsdk_symbol(exchange: str, symbol: str) -> str:
-    """**标准码** → 天勤合约代码 ``交易所.原生码``。
-
-    ⚠️ **必须转回交易所原生写法**：天勤按原生码订阅，郑商所仍是 **3 位**
-    （``CZCE.FG701``，不是 ``CZCE.FG2701``）。
-    本模块的入参已统一为标准码（``spot_basis.near_contract`` 等），
-    若不转换就会拿 ``CZCE.FG2701`` 去订阅 → 报「合约不存在」。
-    """
-    return SC.to_tqsdk(symbol, exchange)
-
-
 # 数据源矩阵（§18.13 风格）
 CARRY_SOURCES: dict[str, dict] = {
-    "DCE":   {"sina": True,  "tqsdk": False},
-    "SHFE":  {"sina": True,  "tqsdk": False},
-    "INE":   {"sina": True,  "tqsdk": False},
-    "GFEX":  {"sina": True,  "tqsdk": False},
-    "CZCE":  {"sina": False, "tqsdk": True},   # sina Length mismatch → tqsdk 兜底
-    "CFFEX": {"sina": False, "tqsdk": False},  # 暂不采（金融期货 carry 弱）
+    "DCE":   {"sina": True},
+    "SHFE":  {"sina": True},
+    "INE":   {"sina": True},
+    "GFEX":  {"sina": True},
+    "CZCE":  {"sina": True},   # akshare futures_zh_daily_sina 覆盖郑商所（含 3 位写法）
+    "CFFEX": {"sina": False},  # 暂不采（金融期货 carry 弱）
 }
 
 
@@ -123,59 +112,55 @@ def fetch_sina_contract_daily(symbol: str, days: int = 90, exchange: str = "") -
     return rows
 
 
-def fetch_tqsdk_contract_daily(
+def fetch_akshare_contract_daily(
     session,
     exchange: str,
     symbol: str,
     days: int = 90,
 ) -> list[dict]:
-    """tqsdk 兜底：CZCE 合约级日线（N/A 时 sina 用不了）
+    """akshare 兜底：合约级日线（CZCE 等 sina 不覆盖时）。
 
-    ``symbol`` 入参为**标准码**（4 位）；订阅前用 ``_tqsdk_symbol`` 转回原生 3 位。
+    C9 去天勤：原为 天勤 get_kline_serial，现改用 akshare futures_zh_daily_sina(合约码)。
+    ``symbol`` 入参为**标准码**（如 MA2601）；akshare 合约码格式与交易所一致。
     """
-    from datetime import datetime, timedelta as td
-    from zoneinfo import ZoneInfo
+    from datetime import date, datetime, timedelta as td
 
-    from app.ingest.tqsdk_calibrator import _get_tqsdk, close_tqsdk
+    import akshare as ak
 
+    cutoff = date.today() - td(days=days)
     try:
-        api = _get_tqsdk()
-        kq = _tqsdk_symbol(exchange, symbol)
-        klines = api.get_kline_serial(kq, duration_seconds=86400, data_length=min(days, 250))
-        if klines is None or klines.empty:
-            return []
-        tz = ZoneInfo("Asia/Shanghai")
-        cutoff = date.today() - timedelta(days=days)
-        out_symbol = SC.to_std(symbol, exchange=exchange)
-        rows: list[dict] = []
-        for _, r in klines.iterrows():
-            dtv = r.get("datetime")
-            if dtv is None or (isinstance(dtv, float) and dtv != dtv):
-                continue
-            d = datetime.fromtimestamp(float(dtv) / 1e9, tz=tz).date()
-            if d < cutoff:
-                continue
-            rows.append(
-                {
-                    "symbol": out_symbol,
-                    "trade_date": d,
-                    "open": _coerce_float(r.get("open")),
-                    "high": _coerce_float(r.get("high")),
-                    "low": _coerce_float(r.get("low")),
-                    "close": _coerce_float(r.get("close")),
-                    "settle": _coerce_float(r.get("settle")),
-                    "volume": _coerce_int(r.get("volume")),
-                    "oi": _coerce_int(r.get("close_oi")),
-                    "src": "tqsdk",
-                    "version": "v1.0",
-                }
-            )
-        return rows
+        df = ak.futures_zh_daily_sina(symbol=symbol)
     except Exception as e:
-        logger.warning(f"[contract_bars] tqsdk {exchange}.{symbol} 失败: {e}")
+        logger.warning(f"[contract_bars] akshare {exchange}.{symbol} 失败: {e}")
         return []
-    finally:
-        close_tqsdk()
+    if df is None or df.empty:
+        return []
+    out_symbol = SC.to_std(symbol, exchange=exchange)
+    rows: list[dict] = []
+    for _, r in df.iterrows():
+        dstr = str(r.get("date", "")).strip()
+        try:
+            d = datetime.strptime(dstr, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if d < cutoff:
+            continue
+        rows.append(
+            {
+                "symbol": out_symbol,
+                "trade_date": d,
+                "open": _coerce_float(r.get("open")),
+                "high": _coerce_float(r.get("high")),
+                "low": _coerce_float(r.get("low")),
+                "close": _coerce_float(r.get("close")),
+                "settle": _coerce_float(r.get("settle")),
+                "volume": _coerce_int(r.get("volume")),
+                "oi": _coerce_int(r.get("hold")),
+                "src": "akshare",
+                "version": "v1.0",
+            }
+        )
+    return rows
 
 
 def upsert_contract_daily(session, rows: list[dict]) -> int:
@@ -215,7 +200,7 @@ def collect_contract_bars(
     """按品种采集主力+近月合约日线
 
     活跃合约清单取自 spot_basis 最新一日（M6a 每日维护）。
-    数据源按 CARRY_SOURCES 矩阵：sina 主源，CZCE 走 tqsdk 兜底。
+    数据源按 CARRY_SOURCES 矩阵：统一 akshare sina（C9 去天勤后 CZCE 亦走 sina）。
     """
     from sqlalchemy import text
 
@@ -253,8 +238,6 @@ def collect_contract_bars(
             try:
                 if src_cfg.get("sina"):
                     r = fetch_sina_contract_daily(c, days=days, exchange=exchange)
-                elif src_cfg.get("tqsdk"):
-                    r = fetch_tqsdk_contract_daily(session, exchange, c, days=days)
                 else:
                     stats["errors"].append(f"{product}/{c}: {exchange} 未配置数据源")
                     continue
@@ -266,8 +249,7 @@ def collect_contract_bars(
                 session.commit()
                 stats["contracts"] += 1
                 stats["rows"] += n
-                src_key = "sina" if src_cfg.get("sina") else ("tqsdk" if src_cfg.get("tqsdk") else "none")
-                stats["by_source"][src_key] = stats["by_source"].get(src_key, 0) + n
+                stats["by_source"]["sina"] = stats["by_source"].get("sina", 0) + n
             except Exception as e:
                 session.rollback()
                 stats["errors"].append(f"{product}/{c}: {e}")

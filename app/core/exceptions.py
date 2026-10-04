@@ -6,11 +6,11 @@ class QHYCError(Exception):
 
 
 class IngestError(QHYCError):
-    """采集错误（akshare/tqsdk 拉取失败）"""
+    """采集错误（akshare/天勤 拉取失败）"""
 
 
 class CalibrationError(QHYCError):
-    """校准错误（tqsdk 补缺/比对失败）"""
+    """校准错误（天勤 补缺/比对失败）"""
 
 
 class ImportError(QHYCError):

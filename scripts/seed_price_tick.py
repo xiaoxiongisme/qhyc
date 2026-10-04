@@ -19,14 +19,29 @@ from sqlalchemy import text
 from app.core.db import session_scope
 
 
-def derive_tick(session, symbol: str):
+def _modal_tick(session, table, tcol, pcol, where, params):
+    """取某表某标的相邻收盘价的最小正价差（模态 tick）。"""
     rows = session.execute(text(
-        "SELECT close FROM hourly_bar WHERE symbol=:s ORDER BY trade_datetime"),
-        {"s": symbol}).fetchall()
+        f"SELECT {pcol} FROM {table} WHERE {where} ORDER BY {tcol}"), params).fetchall()
     prices = [float(r[0]) for r in rows if r[0] is not None]
+    if len(prices) < 2:
+        return None
     diffs = sorted({round(prices[i + 1] - prices[i], 6)
                     for i in range(len(prices) - 1) if prices[i + 1] - prices[i] > 0})
     return diffs[0] if diffs else None
+
+
+def derive_tick(session, symbol: str):
+    # 优先 hourly_bar（高精度）
+    tick = _modal_tick(session, "hourly_bar", "trade_datetime", "close",
+                       "symbol=:s", {"s": symbol})
+    if tick:
+        return tick
+    # 回退：contract_daily（已全量回补，覆盖全部品种）。取该品种任一合约日线收盘的
+    # 模态价差作为 tick（同品种各合约 tick 一致；rollover 跳空是大正值，不影响最小正值）。
+    product = symbol[:-3] if symbol.endswith("888") else symbol
+    return _modal_tick(session, "contract_daily", "trade_date", "close",
+                       "symbol LIKE :p", {"p": f"{product}%"})
 
 
 def main() -> int:

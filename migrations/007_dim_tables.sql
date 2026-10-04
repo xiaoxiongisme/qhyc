@@ -112,7 +112,7 @@ WHERE d.product IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM dim_variety v WHERE v.variety_code = d.product)
 ON CONFLICT (variety_code) DO NOTHING;
 
--- 回填 exchange：优先 contract_code_map，再 dim_symbol.tqsdk 命名空间
+-- 回填 exchange：优先 contract_code_map，再 dim_symbol.天勤 命名空间
 UPDATE dim_variety dv
    SET exchange = COALESCE(
         (SELECT ccm.exchange FROM contract_code_map ccm

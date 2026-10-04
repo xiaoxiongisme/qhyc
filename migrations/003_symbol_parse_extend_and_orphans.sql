@@ -25,7 +25,7 @@ BEGIN
     -- 天勤原生连续码：KQ.m@DCE.A
     IF s ~ '^KQ\.m@[A-Z]+\.[A-Z0-9]+$' THEN
         m := regexp_match(s, '^KQ\.m@([A-Z]+)\.([A-Z0-9]+)$');
-        RETURN QUERY SELECT upper(m[2]), 'tqsdk'::text, m[1];
+        RETURN QUERY SELECT upper(m[2]), 'kq'::text, m[1];
     -- 交易所.品种年月：SHFE.au2601 / CZCE.CF009
     ELSIF s ~ '^[A-Z]{4,5}\.[A-Za-z]+[0-9]{3,4}$' THEN
         m := regexp_match(s, '^([A-Z]{4,5})\.([A-Za-z]+)([0-9]{3,4})$');
@@ -69,7 +69,7 @@ WHERE d.namespace = 'contract'
   AND NOT EXISTS (SELECT 1 FROM dim_symbol o
                   WHERE o.product=d.product AND o.namespace='contract' AND o.symbol < d.symbol);
 UPDATE dim_symbol d SET is_preferred = true
-WHERE d.namespace = 'tqsdk'
+WHERE d.namespace = 'kq'
   AND NOT EXISTS (SELECT 1 FROM dim_symbol o
                   WHERE o.product=d.product AND o.namespace='main');
 

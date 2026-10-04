@@ -73,7 +73,7 @@ ingest:
     - { symbol: "EG888", exchange: "DCE", product: "EG", name: "乙二醇", unit: "吨", multiplier: 10 }
     - { symbol: "EB888", exchange: "DCE", product: "EB", name: "苯乙烯", unit: "吨", multiplier: 5 }
     - { symbol: "LH888", exchange: "DCE", product: "LH", name: "生猪", unit: "吨", multiplier: 16 }
-  tqsdk_symbol_template: "KQ.m@{exchange}.{product}"
+
 
 calibration:
   price_diff_threshold_pct: 0.5

@@ -416,7 +416,7 @@ def run_fusion_matrix(session, symbols: list[str] | None = None,
     if symbols is None:
         symbols = [s.symbol for s in settings.main_contracts[:10]]  # 矩阵默认抽样 10 品种控时
     grid = grid or {
-        "src": ["akshare", "tqsdk"],
+        "src": ["akshare"],
         "sl_atr": [1.5, 2.0, 2.5],
         "trail_atr": [1.5, 2.0, 2.5],
     }

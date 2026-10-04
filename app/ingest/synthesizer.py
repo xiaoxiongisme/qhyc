@@ -1,6 +1,6 @@
 """
 分钟→多周期合成器（#5 改造核心）
-- 数据源：minute_bar（历史 CSV + 实时 tqsdk 1 分钟，统一口径）
+- 数据源：minute_bar（历史 CSV + 实时 akshare 1 分钟，统一口径）
 - 产出：bar_5m / bar_15m / bar_30m / bar_60m（time_bucket 聚合，起点标签，Asia/Shanghai）
 - 两种模式：
   * synthesize_bars_incremental：仅重算「最近 N 天」的桶，成本极低，供每日/每半小时调度；

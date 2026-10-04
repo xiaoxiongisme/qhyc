@@ -345,6 +345,9 @@ def main():
     ap.add_argument('--limit', type=int, default=None, help='仅前 N 个品种')
     ap.add_argument('--symbol', default=None, help='仅处理指定品种')
     ap.add_argument('--dry-run', action='store_true', help='试算不落库')
+    ap.add_argument('--require-main-map', action='store_true',
+                    help='fail-loud：G2 真源 main_contract_map 为空时直接中止，'
+                         '绝不静默退化为旧双门（契合「宁可失败」原则）')
     ap.add_argument('--positivity', action='store_true',
                     help='给整条序列加常量抬升，保证后复权价恒 > 0（不改变任何点数差分）')
     add_conn_args(ap)
@@ -367,11 +370,38 @@ def main():
     if a.symbol:
         syms = [a.symbol]
     else:
-        cur.execute("SELECT symbol FROM bar_15m WHERE symbol ~ '[A-Za-z]888$' "
-                    "GROUP BY 1 ORDER BY 1")
+        # 排除「仅存档」品种（如 CFFEX 金融期货 IF/IC/IH/IM/T/TF/TS/TL，见迁移 025）：
+        # 这些品种不参与活跃复权重建。LEFT JOIN dim_variety 取品种级归档标记。
+        cur.execute(
+            "SELECT b.symbol FROM bar_15m b "
+            "LEFT JOIN dim_variety v "
+            "  ON v.variety_code = upper(left(b.symbol, length(b.symbol) - 3)) "
+            "WHERE b.symbol ~ '[A-Za-z]888$' "
+            "  AND (v.is_archive_only IS NULL OR v.is_archive_only = false) "
+            "GROUP BY 1 ORDER BY 1")
         syms = [r[0] for r in cur.fetchall()]
         if a.limit:
             syms = syms[:a.limit]
+
+    # ── 前检（fail-loud）：G2 真源 = main_contract_map.change_flag ────────────
+    # 若该表为空/几乎为空，重建将退化为旧双门，属于"开关看似生效实则取不到数据"。
+    # 默认仅大声告警并继续（历史期用双门兜底、近期用 MAIN_MAP）；--require-main-map
+    # 时则直接中止，绝不静默产出双门 roll_segment。
+    cur.execute("SELECT count(*) FROM main_contract_map "
+                "WHERE change_flag")
+    n_mcm = cur.fetchone()[0]
+    cur.execute("SELECT count(DISTINCT product) FROM main_contract_map")
+    n_mcm_prod = cur.fetchone()[0]
+    if n_mcm == 0:
+        msg = (f"[preflight] ⚠ main_contract_map 变更点=0（G2 真源缺失），"
+               f"重建将全部退化为 DUAL_GATE_FALLBACK（旧双门）。")
+        if a.require_main_map:
+            print(msg + " --require-main-map 已设，拒绝静默回退，中止。", flush=True)
+            return 2
+        print(msg + " 仍继续（双门兜底）。", flush=True)
+    else:
+        print(f"[preflight] G2 真源 main_contract_map：变更点 {n_mcm} / 覆盖品种 {n_mcm_prod}",
+              flush=True)
 
     mode = 'DRY-RUN' if a.dry_run else '写库'
     print(f'[build] 品种 {len(syms)} × 周期 {freqs} | 锚点 {ANCHOR_FREQ} | {mode}')
@@ -455,6 +485,26 @@ def main():
         r = report[f]
         print(f"{f:<8}{r['sym']:>10}{r['seg']:>10}{r['skip']:>8}"
               f"{r['seg']/max(r['sym'],1):>16.1f}")
+
+    # ── 段来源核算（fail-loud：G2 真源覆盖率必须可见，不得静默） ─────────────
+    try:
+        cur.execute("SELECT change_source, count(*) FROM roll_segment "
+                    "WHERE freq IN %s GROUP BY 1 ORDER BY 1", (tuple(freqs),))
+        src_rows = cur.fetchall()
+        total = sum(r[1] for r in src_rows)
+        main_map = sum(r[1] for r in src_rows if r[0] == 'MAIN_MAP')
+        print('\n' + '=' * 92)
+        print('【段来源核算 G2】change_source 覆盖（MAIN_MAP=真源 / DUAL_GATE_FALLBACK=兜底）')
+        print('=' * 92)
+        for s, n in src_rows:
+            print(f"  {str(s):<22}{n:>10}  ({100.0*n/max(total,1):.1f}%)")
+        if total:
+            print(f"  {'MAIN_MAP 占比':<22}{main_map:>10}  ({100.0*main_map/max(total,1):.1f}%)")
+            if main_map == 0:
+                print("  ⚠ 没有任何段来自 MAIN_MAP：G2 真源未生效，全部为 DUAL_GATE_FALLBACK（双门兜底）。"
+                      " 根源=main_contract_map 未同步到本库（仅云端每日刷新），须在云端跑全量重建。")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] 段来源核算失败：{e}")
 
     susp = [q for q in quality if q[2] > 5]
     print('\n' + '=' * 92)

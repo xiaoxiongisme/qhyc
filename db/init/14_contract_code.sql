@@ -20,7 +20,7 @@
 -- 派生规则（见 app/core/symbol_code.py，改规则只改那里）：
 --   official_symbol = to_native(std, exchange)   交易所原生（CZCE 3 位 / 其他小写）
 --   sina_symbol     = to_sina(std)               新浪口径（4 位大写，与标准码同构）
---   tqsdk_symbol    = f"{exchange}.{official_symbol}"  天勤具体合约码
+--   native_symbol   = f"{exchange}.{official_symbol}"  原生合约码
 --
 -- 不参与本表的命名空间（刻意保留原样，见 symbol_code 模块 docstring）：
 --   · <品种>888            主力连续（合成）码 —— futures_symbol / daily_bar 等用
@@ -39,7 +39,6 @@ CREATE TABLE IF NOT EXISTS contract_code_map (
     deliv_month     INT         NOT NULL,   -- 交割月（1~12）
     official_symbol TEXT,                   -- 交易所官方原生写法（AP701 / cu2611）
     sina_symbol     TEXT,                   -- 新浪写法（AP2701 / RB2611）
-    tqsdk_symbol    TEXT,                   -- 天勤具体合约写法（CZCE.AP701 / SHFE.cu2611）
     observed_native TEXT,                   -- ★库内实际出现过的原生写法（逗号分隔，审计留痕）
     sources         TEXT,                   -- ★出现过的数据源 src（逗号分隔）
     name            TEXT,                   -- 品种中文名（取自 futures_symbol，可空）

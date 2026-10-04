@@ -25,7 +25,7 @@ class AkShareSource:
     def __init__(self, exchange: str):
         self.exchange = exchange.upper()
 
-    #: 上一成功批次（按 symbol），供跨批次一致性校验 —— 替代被删的 tqsdk 双源比对
+    #: 上一成功批次（按 symbol），供跨批次一致性校验 —— 替代被删的 天勤 双源比对
     _last_good: dict[str, list] = {}
     #: 降级标记（本次结果非实时），调用方应据此告警
     degraded: DegradedResult | None = None
@@ -79,14 +79,24 @@ class AkShareSource:
 
     @staticmethod
     def _futures_calendar(ak, exchange: str, year: int) -> pd.DataFrame:
-        """akshare 期货专属日历：按交易日查询各所各品种日历。"""
+        """akshare 期货专属日历：按交易日查询各所各品种日历。
+
+        ⚠ 接口参数名为 ``date=``（**不是** ``trade_date=``）；旧代码用错名会导致
+        ``TypeError`` 被下方 except 静默吞掉 → 整个期货历取数空转。已修正。
+        非交易日接口抛 ``ValueError: No tables found``（=该日无交易规则）→ 视为非交易日跳过；
+        其余异常（网络/限流）**不再静默吞掉**，如实抛出由 resilient_fetch 重试/告警。
+        """
         days = pd.date_range(date(year, 1, 1), date(year, 12, 31), freq="D")
         frames = []
         for d in days:
             try:
-                f = ak.futures_rule(trade_date=d.strftime("%Y%m%d"))
-            except Exception:  # noqa: BLE001  当日无数据/接口波动 → 跳过
-                continue
+                f = ak.futures_rule(date=d.strftime("%Y%m%d"))
+            except ValueError as e:  # 非交易日（接口无表）→ 跳过
+                if "No tables found" in str(e):
+                    continue
+                raise
+            except Exception:  # noqa: BLE001  其余（网络/限流）→ 交给上层重试，不静默
+                raise
             if f is None or f.empty:
                 continue
             f = f.copy()
@@ -95,8 +105,9 @@ class AkShareSource:
         if not frames:
             return pd.DataFrame()
         out = pd.concat(frames, ignore_index=True)
-        # 统一列名：仅保留日期与交易所/品种相关列
-        keep = [c for c in out.columns if c in ("trade_date", "交易所", "品种", "保证金比例")]
+        # 统一列名：仅保留日期与交易所/品种相关列（用真实中文列名过滤）
+        keep = [c for c in out.columns
+                if c in ("trade_date", "交易所", "品种", "交易保证金比例", "涨跌停板幅度")]
         return out[keep]
 
     # ---------- 内部 ----------
@@ -116,7 +127,7 @@ class AkShareSource:
         与改造前的差异：
         * 原先**单次调用**，失败即抛、空结果静默返回 ``DataFrame()``（评审 §4.2 点名的
           静默失败模式）→ 现为退避重试 + 断路器 + 缓存降级；
-        * 原先无脏数据拦截 → 现用「与上一成功批次一致性」校验替代被删的 tqsdk 比对层；
+        * 原先无脏数据拦截 → 现用「与上一成功批次一致性」校验替代被删的 天勤 比对层；
         * 降级结果通过 ``self.degraded`` **显式暴露**，调用方必须决定是否接受。
         """
         import akshare as ak  # type: ignore

@@ -7,7 +7,7 @@
 * ``std_symbol``     标准码：品种大写 + YYMM 四位（``AP2701`` / ``CU2611``）——**库内唯一口径**
 * ``official_symbol`` 交易所官方源码（郑商所 3 位 ``AP701``、上期小写 ``cu2611``）
 * ``sina_symbol``    新浪源写法（全 4 位大写 ``AP2701``）
-* ``tqsdk_symbol``   天勤订阅码（``CZCE.AP701``，郑商所仍 3 位）
+* （天勤码列已随 C9 去天勤退役，接口不再返回）
 
 换算函数见 ``app.core.symbol_code``。**下方 ``/contracts*`` 路由必须声明在
 ``/{symbol}`` 之前**，否则会被通配路由吞掉。
@@ -54,7 +54,6 @@ def list_contract_codes(
                 "product": r.product,
                 "official_symbol": r.official_symbol,
                 "sina_symbol": r.sina_symbol,
-                "tqsdk_symbol": r.tqsdk_symbol,
                 "deliv_year": r.deliv_year,
                 "deliv_month": r.deliv_month,
                 "name": r.name,
@@ -89,7 +88,6 @@ def resolve_contract(
             "exchange": ex or None,
             "official_symbol": SC.to_native(std, ex) if ex else None,
             "sina_symbol": SC.to_sina(std, ex or None),
-            "tqsdk_symbol": SC.to_tqsdk(std, ex) if ex else None,
             "in_code_map": False,
         }
     return {
@@ -99,7 +97,6 @@ def resolve_contract(
         "product": row.product,
         "official_symbol": row.official_symbol,
         "sina_symbol": row.sina_symbol,
-        "tqsdk_symbol": row.tqsdk_symbol,
         "deliv_year": row.deliv_year,
         "deliv_month": row.deliv_month,
         "name": row.name,

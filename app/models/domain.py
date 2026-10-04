@@ -286,7 +286,6 @@ class AnomalyTicket(Base):
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
     field: Mapped[str] = mapped_column(Text, nullable=False)
     akshare_val: Mapped[Decimal | None] = mapped_column(Numeric20)
-    tqsdk_val: Mapped[Decimal | None] = mapped_column(Numeric20)
     diff: Mapped[Decimal | None] = mapped_column(Numeric12)
     threshold: Mapped[Decimal | None] = mapped_column(Numeric12)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
@@ -418,7 +417,7 @@ class ContractCodeMap(Base):
     """合约代码对照表（DDL: db/init/14_contract_code.sql）。
 
     ``std_symbol`` 是**全库统一口径**：品种码大写 + YYMM 四位（``AP2701``）。
-    各数据源的原生写法在 ``official_symbol`` / ``sina_symbol`` / ``tqsdk_symbol``，
+    各数据源的原生写法在 ``official_symbol`` / ``sina_symbol``（天勤码列已随 C9 去天勤退役），
     派生规则见 ``app.core.symbol_code``。
     """
 
@@ -433,7 +432,6 @@ class ContractCodeMap(Base):
     deliv_month: Mapped[int] = mapped_column(Integer, nullable=False)
     official_symbol: Mapped[str | None] = mapped_column(Text)
     sina_symbol: Mapped[str | None] = mapped_column(Text)
-    tqsdk_symbol: Mapped[str | None] = mapped_column(Text)
     observed_native: Mapped[str | None] = mapped_column(Text)
     sources: Mapped[str | None] = mapped_column(Text)
     name: Mapped[str | None] = mapped_column(Text)

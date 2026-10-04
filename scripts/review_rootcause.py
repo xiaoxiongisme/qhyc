@@ -1,6 +1,6 @@
 """发现3 根因排查 v2：生产 run 20260909_171921_bt(数据边界 2026-09-08) reversal
 signaled n=2192/acc=0.5005，与日线复刻② n=2206/acc=0.5109 的错位根因。
-v1 结论：source 不是原因(生产 71/73 也用 akshare_tqsdk=daily_bar)；
+v1 结论：source 不是原因(生产 71/73 也用 akshare_daily=daily_bar)；
 共同 signaled 日两口径 acc 均≈0.50，但 signaled 集合仅重叠 1322/2192(60%)。
 假设升级：复刻②查询的是"当前"daily_bar(比 run 晚 2 天)，导致 3 日 eval 网格整体平移，
 约 1/3 eval 日错位 → 集合错位 + acc 漂移。本脚本把复刻窗口钉到 run 边界 2026-09-08

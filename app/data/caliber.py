@@ -17,7 +17,8 @@
 ------------------------------
   continuous  未复权主连（888 法）：**回测与对账的基准**。换月有跳空，
               但它是真实可交易序列的价格轨迹。
-  cont_adj    加法平移前复权主连：仅用于**统计与交叉校验**，不作回测基准。
+  cont_adj    加法平移前复权主连：**已废弃**（会产生负价，I888 最低 −1058.5，51.4% bar 为负），
+              已从 CALIBERS / ROUTES 移除，仅保留历史交叉校验数据，不可经 BarStore 取数。
   contract    标准合约序列（品种大写 + YYMM，如 AP2701）：逐合约，不连续。
 """
 
@@ -30,7 +31,7 @@ from app.core.logging import logger
 #: 合法口径
 #:   回测基准自 2026-09-30 起改为 **back_adj（等差后复权）**（用户拍板）；
 #:   cont_adj（加法前复权）因会产生负价（I888 最低 −1058.5，51.4% bar 为负）被废弃。
-CALIBERS = ("continuous", "back_adj", "cont_adj", "contract")
+CALIBERS = ("continuous", "back_adj", "contract")  # cont_adj 已废弃（产生负价），C7 移除
 
 #: 周期枚举（与 fut_kline.freq / bar_* 对齐）
 FREQS = ("1m", "5m", "15m", "30m", "60m", "hourly", "daily")
@@ -71,8 +72,8 @@ ROUTES: dict[tuple[str, str], Route] = {
     # —— 1 分钟 ——
     ("1m", "continuous"): Route("minute_bar", time_col="ts",
                                 note="1 分钟原始主连（未复权）"),
-    ("1m", "cont_adj"):   Route("minute_bar_adj", time_col="ts",
-                                note="1 分钟已复权主连"),
+    # ("1m", "cont_adj"):   Route("minute_bar_adj", time_col="ts",
+    #                             note="已废弃：1 分钟前复权主连（产生负价，不可达）"),
     # —— 5 分钟 ——
     ("5m", "continuous"): Route("bar_5m", time_col="bucket",
                                 note="5 分钟未复权主连（888）"),
@@ -88,29 +89,36 @@ ROUTES: dict[tuple[str, str], Route] = {
                                 note="30m 等差后复权"),
     ("60m", "back_adj"):   Route("bar_60m", time_col="bucket", adj="back",
                                 note="60m 等差后复权"),
-    # 已废弃：加法前复权（会产生负价，见 scripts/deprecate_cont_adj.py）
-    ("15m", "cont_adj"):   Route("fut_kline", where="freq='min15' AND kind='cont_adj'",
-                                 time_col="trade_datetime",
-                                 note="DEPRECATED 前复权：会产生负价且须全量重算"),
-    ("30m", "cont_adj"):   Route("fut_kline", where="freq='min30' AND kind='cont_adj'",
-                                 time_col="trade_datetime", note="DEPRECATED 前复权"),
-    ("60m", "cont_adj"):   Route("fut_kline", where="freq='min60' AND kind='cont_adj'",
-                                 time_col="trade_datetime", note="DEPRECATED 前复权"),
+    # 已废弃：加法前复权（会产生负价，见 scripts/deprecate_cont_adj.py）—— 已从 CALIBERS 移除。
+    # 下列路由保留为文档参考（get_route 在 caliber not in CALIBERS 时已先抛 CaliberError，不可达）。
+    # ("15m", "cont_adj"):   Route("fut_kline", where="freq='min15' AND kind='cont_adj'",
+    #                              time_col="trade_datetime",
+    #                              note="DEPRECATED 前复权：会产生负价且须全量重算"),
+    # ("30m", "cont_adj"):   Route("fut_kline", where="freq='min30' AND kind='cont_adj'",
+    #                              time_col="trade_datetime", note="DEPRECATED 前复权"),
+    # ("60m", "cont_adj"):   Route("fut_kline", where="freq='min60' AND kind='cont_adj'",
+    #                              time_col="trade_datetime", note="DEPRECATED 前复权"),
     # —— 小时线：融合策略主周期，必须单一源（akshare），杜绝双源混读 ——
+    # 2026-10-04 (G9) 退役 fut_kline.continuous：hourly 未复权主连改读 hourly_bar（L0 原始主连）
     ("hourly", "continuous"): Route("hourly_bar", where="src='akshare'",
                                     time_col="trade_datetime",
-                                    note="小时线未复权；融合策略主周期，src 必须锁定 akshare"),
-    ("hourly", "cont_adj"):   Route("fut_kline", where="freq='hourly' AND kind='cont_adj'",
-                                    time_col="trade_datetime",
-                                    note="小时线前复权；注意 daily/hourly 用 KQ.m@ 命名空间"),
+                                    note="小时线未复权主连（G9 后改读 hourly_bar，fut_kline.continuous 已退役）"),
+    # ("hourly", "cont_adj"):   Route("fut_kline", where="freq='hourly' AND kind='cont_adj'",
+    #                                 time_col="trade_datetime",
+    #                                 note="已废弃：小时线前复权（不可达）"),
     # —— 日线 ——
-    ("daily", "continuous"): Route("fut_kline", where="freq='daily' AND kind='continuous'",
-                                   time_col="trade_datetime", note="日线未复权主连"),
-    ("daily", "cont_adj"):   Route("fut_kline", where="freq='daily' AND kind='cont_adj'",
-                                   time_col="trade_datetime",
-                                   note="日线前复权；命名空间为 KQ.m@EXCHANGE.PROD"),
+    # 2026-10-04 (G9) 退役 fut_kline.continuous：daily 未复权主连改读 daily_bar（L0 原始主连）
+    ("daily", "continuous"): Route("daily_bar", where="symbol LIKE '%888'",
+                                   time_col="trade_date",
+                                   note="日线未复权主连（G9 后改读 daily_bar，fut_kline.continuous 已退役）"),
+    # ("daily", "cont_adj"):   Route("fut_kline", where="freq='daily' AND kind='cont_adj'",
+    #                                time_col="trade_datetime",
+    #                                note="已废弃：日线前复权（不可达）"),
     ("daily", "contract"):   Route("contract_daily", time_col="trade_date",
                                    note="逐合约日线（symbol=品种大写+YYMM）"),
+    # 【C8 决策·方案A】日线/小时线维持 continuous（未复权）基准（daily_bar / hourly_bar）。
+    # 后复权仅对已有 roll_segment 段的分钟频(5/15/30/60m)生效；日线/小时线无段，
+    # default_caliber_for 对它们显式回退 continuous 并告警（绝不静默用 raw）。此为唯一口径决策。
 }
 
 

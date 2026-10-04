@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS sector_map (
 );
 CREATE INDEX IF NOT EXISTS idx_sector_map_sector ON sector_map (sector);
 
--- 大类指数（合成数据，无需 tqsdk 校验，§16.1）
+-- 大类指数（合成数据，无需外部源校验，§16.1）
 CREATE TABLE IF NOT EXISTS sector_index (
     sector          TEXT         NOT NULL,
     trade_date      DATE         NOT NULL,

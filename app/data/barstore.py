@@ -134,10 +134,10 @@ def namespace_conflicts() -> list[dict]:
     """
     with _engine().connect() as conn:
         rows = conn.execute(text(
-            "SELECT product, main_symbol, tqsdk_symbol, symbol_count "
+            "SELECT product, main_symbol, symbol_count "
             "FROM v_symbol_canonical WHERE has_namespace_conflict ORDER BY product"
         )).fetchall()
-    return [dict(zip(("product", "main_symbol", "tqsdk_symbol", "symbol_count"), r))
+    return [dict(zip(("product", "main_symbol", "symbol_count"), r))
             for r in rows]
 
 

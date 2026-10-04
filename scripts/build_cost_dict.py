@@ -29,6 +29,30 @@ import pandas as pd
 
 sys.stdout.reconfigure(encoding="utf-8")
 
+# ---- 配合 anomaly_ticket：未知/缺失费率落异常工单留痕（best-effort） ----
+# build_cost_dict 仍以「宁可失败」为第一原则（unknown_errs 触发 RuntimeError 中止）；
+# 此处仅在失败前把未识别费率写入 anomaly_ticket，供人工复查，绝不因此吞掉 fail-loud。
+try:
+    from sqlalchemy import text as _sa_text
+    from app.core.db import session_scope as _session_scope
+    _HAS_DB = True
+except Exception:  # 纯 CSV 构建且无 app/DB 可达时跳过，不影响 fail-loud
+    _HAS_DB = False
+
+
+def _record_cost_anomaly(symbol: str, note: str) -> None:
+    """未识别/缺失费率 → anomaly_ticket 留痕（best-effort，失败仅告警）。"""
+    if not _HAS_DB:
+        return
+    try:
+        with _session_scope() as s:
+            s.execute(_sa_text(
+                "INSERT INTO anomaly_ticket (symbol, trade_date, field, status, note) "
+                "VALUES (:s, CURRENT_DATE, 'cost_fee_unknown', 'pending', :n)"),
+                {"s": symbol, "n": note})
+    except Exception as e:  # 绝不因写工单失败而吞掉 fail-loud
+        print(f"  [warn] 写 anomaly_ticket 失败（不影响 fail-loud）：{e}", file=sys.stderr)
+
 SRC_DIR = Path(r"D:\学习资料")
 FEE_XLSX = SRC_DIR / "20260311-手续费标准调整-fu&lu&sc.xlsx"
 PARAM_XLS = SRC_DIR / "20260324期货品种参数汇总表.xls"
@@ -194,10 +218,16 @@ def parse_scope(text: str) -> tuple[str, list[int], list[str]]:
 # 3. 费率值解析
 # ----------------------------------------------------------------------------
 def parse_fee(raw: str) -> tuple[str, float, str]:
-    """→ (fee_type, value, note)；无法识别返回 ('FREE', 0, 原因) 以免编造。"""
+    """→ (fee_type, value, note)。
+
+    费率三类：``FIXED`` / ``PCT`` / ``FREE``(平今免，来源明确写"免") / ``UNKNOWN``(来源缺失或
+    格式无法识别)。**``UNKNOWN`` 绝不是 FREE**：历史上把「未识别原文 / 来源未给」静默写成
+    FREE(0) 导致了 18 个品种成本被系统性低估（见 2026-10-04 根因复盘）。故未知必须显式抛出，
+    由 build_rows 中止构建（宁可失败），绝不在库里留下 0 成本行。
+    """
     s = str(raw or "").strip()
     if not s:
-        return "FREE", 0.0, "来源未给费率"
+        return "UNKNOWN", 0.0, "来源未给费率：品种在来源中无费率文本"
     if "免" in s:
         return "FREE", 0.0, s
     is_pct = ("%" in s) or ("‰" in s)
@@ -214,7 +244,7 @@ def parse_fee(raw: str) -> tuple[str, float, str]:
     m = re.fullmatch(r"([\d.]+)\s*%?", s2)
     if m:
         return ("PCT" if is_pct else "FIXED"), float(m.group(1)), ""
-    return "FREE", 0.0, f"未识别费率原文：{s}"
+    return "UNKNOWN", 0.0, f"未识别费率原文：{s}"
 
 
 #: 费率表里「平今」说明的前缀（"平今仓20" / "平今20" / "平今免"）
@@ -290,6 +320,12 @@ def build_rows() -> tuple[list[dict], list[str], list[str]]:
         if mapped is None:
             unmapped.add(f"{cur['ex']}/{cur['name']}")
             return
+        if ftype == "UNKNOWN":
+            _record_cost_anomaly(f"{cur['ex']}/{cur['name']}", f"费率解析失败：{fnote}")
+            problems.append(
+                f"{cur['ex']}/{cur['name']} 费率解析失败（{fnote}）："
+                f"拒绝静默归零，请补全来源文本或显式标记（宁可失败）")
+            return
         code = mapped[0]
         scope_kind, months, contracts = parse_scope(cur["name"])
         c4 = [f"{code}{n}" for n in contracts]
@@ -309,12 +345,14 @@ def build_rows() -> tuple[list[dict], list[str], list[str]]:
         if close_today:
             ct, cv, cn = parsed_ct
             if "未识别" in cn:
+                _record_cost_anomaly(code, f"平今无法识别：{close_today}")
                 problems.append(f"{code} 平今无法识别：{close_today}")
             rows.append({**common, "action": "CLOSE_TODAY", "fee_type": ct,
                          "fee_value": cv, "note": cn or close_today})
         elif "隔日开平" in str(cur["std"]):
             problems.append(
                 f"{code}（{cur['name']}）来源仅给「隔日开平」，**平今费率未知** → 未落库（不编造）")
+            _record_cost_anomaly(code, f"{cur['name']} 平今费率未知（仅隔日开平）")
         elif cont_text:
             fnote = f"{fnote}；附注：{cont_text}" if fnote else f"附注：{cont_text}"
 
@@ -334,6 +372,14 @@ def build_rows() -> tuple[list[dict], list[str], list[str]]:
         cur = {"ex": ex, "name": name, "std": std}
     flush()
 
+    unknown_errs = [p for p in problems if "费率解析失败" in p]
+    if unknown_errs:
+        print(f"\n⛔ 发现 {len(unknown_errs)} 个品种费率解析失败，拒绝产出含静默零成本的 CSV：")
+        for p in unknown_errs:
+            print("   ✗", p)
+        raise RuntimeError(
+            f"build_cost_dict 因 {len(unknown_errs)} 个未知费率品种中止"
+            f"（宁可失败，不静默归零）。请补全来源文本或显式标记后重跑。")
     return rows, sorted(unmapped), problems_all + problems
 
 

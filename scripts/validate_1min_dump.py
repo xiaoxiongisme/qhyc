@@ -7,7 +7,7 @@
      bob/eob 为 ISO+08:00；bob=bar 起始（与 minute_bar.ts START 标签同口径）。
   B) GFEX 布局：<品种_中文名>/00_主力连续/<P>_main_1m.csv（月份连续暂不处理），
      列 datetime,exchange,variety,symbol,datetime_nano,open,high,low,close,volume,
-     open_interest,close_interest（tqsdk 风格，datetime=bar 起始，ns 列冗余）。
+     open_interest,close_interest（天勤 风格，datetime=bar 起始，ns 列冗余）。
 
 只处理 9999(→888 主连) 与 8888(→8888 指数) 两类符号；合约级与 9998(次主力)
 跳过并计数——库内 minute_bar 历来只存 888/8888 两族，合成器/复权链也只认这两族。
@@ -24,7 +24,7 @@
            每产品行数与文件数 / 缺日统计。
   cross —— dump 1m 按 START 标签 floor 聚合为 5/15/30/60m，与库内 bar_*m 同窗对拍
            （matched/only_dump/only_db/最大价差/成交量差）。888 系列对拍证明 dump
-           与 tqsdk 补采同源可信；8888 系列 2026 库内为空（即待补缺口）。
+           与 天勤 补采同源可信；8888 系列 2026 库内为空（即待补缺口）。
 """
 from __future__ import annotations
 

@@ -35,7 +35,7 @@ ingest:
   #
   # 三条互操作铁律：
   #   1) 入库前一律 `symbol_code.to_std()`（郑商所 3 位要靠交易日补全年份）；
-  #   2) 送**天勤**前 `to_tqsdk()` 转回原生（郑商所仍 3 位，否则订阅失败）；
+  #   2) 郑商所原生码仍 3 位（CZCE.FG701），否则订阅失败；
   #   3) `fut_kline.symbol` 存天勤原生码，**不参与**归一（见 app/ingest/fdf/db_pg.py）。
   # 维护：`python -m app.ingest.contract_code build|normalize|verify`
   symbol_std_digits: 4
@@ -44,7 +44,7 @@ ingest:
   # 最终品种清单（2026-09-13 定稿，共 50 个）：
   #   已剔除 金融/指数（IF/IH/IC/IM/T/TF/TS/TL）
   #   与小流动性品种（CY/WR/RR/LG/EC/PG/PF/BR/CJ/PR/PK/BC/NR/LU/PS）
-  # 新浪主连代码 = 品种+0；tqsdk = KQ.m@交易所.品种；主连库内统一 888
+  # 新浪主连代码 = 品种+0；主连库内统一 888
   # （888 是**合成连续码**，与上面的合约标准码是两套命名空间，不做转换）
   main_contracts:
     # ---- CZCE 郑商所 ----
@@ -103,9 +103,7 @@ ingest:
     - { symbol: "EB888", exchange: "DCE", product: "EB", name: "苯乙烯", unit: "吨", multiplier: 5 }
     - { symbol: "LH888", exchange: "DCE", product: "LH", name: "生猪", unit: "吨", multiplier: 16 }
 
-  # 主力连续合约代码映射（akshare 代码 ↔ tqsdk KQ.m@EXCHANGE.PRODUCT）
-  # tqsdk 主连 = KQ.m@交易所.品种（无 888 后缀）
-  tqsdk_symbol_template: "KQ.m@{exchange}.{product}"
+  # 主力连续合约 888 映射说明：库内主连统一 888 后缀；原生交易所码由 dim_symbol 维护
 
 calibration:
   # ---- R1 口径版本留痕（PRD §15.R1）----
@@ -304,7 +302,7 @@ fusion:
     - "20:45-23:30"
   closed_bars_only: true     # 只用已收盘小时K（防信号重绘；与回测口径一致）
   settle_delay_sec: 150      # K收盘后等多久再采（防数据源未定稿；实测需1~2分钟）
-  hourly_src: akshare        # 引擎只读该 src 的小时线（akshare=同花顺口径；tqsdk=回测口径）。杜绝双源混读
+  hourly_src: akshare        # 引擎只读该 src 的小时线（akshare 口径）。杜绝双源混读
   # 微信推送 TOKEN：统一从 .env 的 PUSHPLUS_TOKEN 读取（明文不入库，G7 红线）
   pushplus_token: ""
 
@@ -330,20 +328,7 @@ pipeline:
   max_instances: 1
   notify_on_failure: true
 
-# =====================================================
-# fut_kline 增量入库（天勤 tqsdk）——2026-09-23 补齐
-# 实测：原 scheduler 只有 adjust_fdf(02:30)，无原始抓取 → fut_kline 停滞 7~12 天
-# 本项在 adjust 之前（夜盘已收）跑增量抓取；脚本见 scripts/ingest_fut_kline_incremental.py
-# =====================================================
-fut_kline:
-  enabled: true
-  run_hour: 1
-  run_minute: 40
-  freqs: [daily, hourly]
-  buffer_days: 7
-  adjust_after: true         # 抓完顺带生成 cont_adj（也可等 02:30 的 adjust 作业）
-  max_stale_days: 0          # >0：落后不超过该天数则跳过
-  timeout_sec: 3600
+
 
 # =============================================================================
 # Phase 4/5 新增开关（2026-09-29）

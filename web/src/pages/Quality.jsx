@@ -63,13 +63,13 @@ export default function Quality() {
         </table>
       </div>
 
-      <h2>异常工单（最近 50 条 · ⑰ tqsdk 二次比对）</h2>
+      <h2>异常工单（最近 50 条 · ⑰ 质量比对）</h2>
       <div className="panel">
         <table>
           <thead>
             <tr>
               <th>#</th><th>品种</th><th>日期</th><th>字段</th>
-              <th>akshare</th><th>tqsdk</th><th>偏差%</th><th>状态</th>
+              <th>akshare</th><th>偏差%</th><th>状态</th>
             </tr>
           </thead>
           <tbody>
@@ -80,7 +80,6 @@ export default function Quality() {
                 <td>{a.trade_date}</td>
                 <td>{a.field}</td>
                 <td>{fmtNum(a.akshare_val, 2)}</td>
-                <td>{fmtNum(a.tqsdk_val, 2)}</td>
                 <td className={a.diff > 0.5 ? "err" : ""}>{fmtNum(a.diff, 2)}</td>
                 <td>
                   <span className={"badge " + (a.status === "open" ? "warn" : "ok")}>
@@ -92,7 +91,7 @@ export default function Quality() {
           </tbody>
         </table>
         <div className="small" style={{ marginTop: 8 }}>
-          裁决接口：POST /anomalies/&#123;id&#125;/resolve（仅 accept_tqsdk / false_positive，⑰）
+          裁决接口：POST /anomalies/&#123;id&#125;/resolve（仅 false_positive，⑰）
         </div>
       </div>
     </>

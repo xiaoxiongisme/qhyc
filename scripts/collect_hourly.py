@@ -10,8 +10,8 @@
   # 指定品种（按 product）
   python scripts/collect_hourly.py --product SA
 
-  # tqsdk 长历史回填（data_length 控制拉取根数，约 8000 根 ≈ 1 年小时线）
-  python scripts/collect_hourly.py --all --prefer tqsdk --data-length 8000
+  # 天勤 长历史回填（data_length 控制拉取根数，约 8000 根 ≈ 1 年小时线）
+  python scripts/collect_hourly.py --all --prefer 天勤 --data-length 8000
 
 说明：
 - 写入 hourly_bar，按 (symbol, trade_datetime) 幂等 upsert，可反复跑。
@@ -24,21 +24,15 @@ import sys
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="在线小时线采集（akshare/tqsdk）")
+    ap = argparse.ArgumentParser(description="在线小时线采集（akshare/天勤）")
     ap.add_argument("--all", action="store_true", help="采集全部主连品种")
     ap.add_argument("--symbol", help="单品种主连代码，如 FG888")
     ap.add_argument("--product", help="按品种字母，如 SA（与 --symbol 二选一）")
     ap.add_argument(
-        "--prefer",
-        default="akshare",
-        choices=["akshare", "tqsdk"],
-        help="主源：akshare（默认，免费）| tqsdk（长历史回填）",
-    )
-    ap.add_argument(
         "--data-length",
         type=int,
         default=8000,
-        help="tqsdk 拉取根数（仅 --prefer tqsdk 生效）",
+        help="天勤 拉取根数（仅 --prefer 天勤 生效）",
     )
     args = ap.parse_args()
 
@@ -59,7 +53,7 @@ def main() -> int:
         return 2
 
     with session_scope() as s:
-        hc = HourlyCollector(s, prefer=args.prefer)
+        hc = HourlyCollector(s)
         if len(specs) == 1 and (args.symbol or args.product):
             n = hc.collect_symbol(specs[0], data_length=args.data_length)
             print(f"{specs[0].symbol}: {n} rows")

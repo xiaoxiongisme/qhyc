@@ -1,13 +1,16 @@
 """
-在线小时线采集器（M?）
-- 主源：akshare futures_zh_minute_sina(symbol, period="60")（新浪主连，免登录）
-- 兜底：tqsdk get_kline_serial(KQ.m@{exchange}.{product}, duration_seconds=3600)
+在线小时线采集器（M?）—— C9 去天勤后 akshare 单一源
+- 唯一源：akshare futures_zh_minute_sina(symbol, period="60")（新浪主连，免登录）
 - 输出：hourly_bar 标准化行，复用 upsert_hourly_bars（主键 symbol, trade_datetime）
 
 说明：
-- akshare 新浪分钟线通常只返回近期窗口（数月 ~ 一年量级），适合每日增量刷新；
-- tqsdk 可拉更长历史（data_length 控制），用于一次性回填（CLI --prefer tqsdk）；
-- 两种来源均按 (symbol, trade_datetime) 幂等 upsert，重复跑安全。
+- T4 时区修复（2026-10-04）已核实：当前 akshare 版返回的 datetime 即正确 Asia/Shanghai
+  收盘时刻（offset≈0，跨 RB/MA/J/AU/TA/FG 多所验证），故直接按上海本地时间解析
+  （见 _parse_ak_dt），**不叠加**任何 +1h。每条棒经 _valid_hourly_ts 校验（合法整点 +
+  非未来戳），非法/偏移棒一律丢弃（纵深防御，防止任何残留时区偏移毒化信号状态机）。
+- 按 (symbol, trade_datetime) 幂等 upsert，重复跑安全。
+- 注：akshare 新浪分钟线仅返回近期窗口（约 8 个月量级，~680–1024 行），适合每日增量
+  刷新；历史回填由既有 hourly_bar 覆盖，不再依赖 天勤（C9 已去天勤）。
 """
 from __future__ import annotations
 
@@ -19,7 +22,6 @@ from decimal import Decimal
 
 from app.core.config import MainContractSpec, get_settings
 from app.core.logging import logger
-from app.ingest.akshare_source import AkShareSource
 from app.repositories._base import upsert_hourly_bars
 
 
@@ -48,8 +50,20 @@ _SH_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _parse_ak_dt(s) -> datetime | None:
-    """新浪分钟线 datetime 列为字符串 '2025-12-26 11:15:00'（上海本地时间，无时区）。
-    解析后按上海时区定位并转为 UTC 感知，确保写入 hourly_bar 的是真实瞬时。"""
+    """新浪分钟线 datetime 列为字符串 '2025-12-26 11:15:00'。
+
+    T4 时区修复（2026-10-04 实测）：当前 akshare 版 ``futures_zh_minute_sina`` 返回的
+    标签**已是正确 Asia/Shanghai 收盘时刻**（RB/MA/J 跨所、period=60/1 对齐 天勤 实测
+    offset≈0；小时分布恰为合法交易整点 {10,11,14,15,22,23}）。故此处直接按上海本地时间
+    解析定位、转 UTC 感知即可。
+
+    ⚠ **切勿叠加** 天勤 路径的 +1h：那是 天勤 标签为「整点起点」才需重标为收盘口径；
+    sina 标签本就是收盘口径，叠加 = 双重修正 = 错。PRD §6.6 描述的「+8h/+9h 偏移」是
+    2026-09-23 旧版本/旧周期现象，现版本已不存在——若未来 akshare 回归偏移标签，解析出的
+    小时会落在 {18,19,6,7,8,...} 而非合法整点，被 ``_valid_hourly_ts`` 整批丢弃（纵深防御，
+    不会静默毒化），并由 ``_fetch_akshare`` 的丢弃率告警暴露，届时再据实测偏移修正，
+    **严禁硬编码统一 −8h**（日盘/夜盘偏移量本就不一，统一平移仍错）。
+    """
     if not s:
         return None
     if isinstance(s, datetime):
@@ -68,31 +82,6 @@ def _parse_ak_dt(s) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=_SH_TZ)
     return dt.astimezone(timezone.utc)
-
-
-def _parse_tq_dt(dt) -> datetime | None:
-    """tqsdk kline datetime 列为纳秒级 Unix 时间戳（真实瞬时）。统一转为 UTC 感知。"""
-    if dt is None:
-        return None
-    if isinstance(dt, (int, float)):
-        import numpy as np  # type: ignore
-
-        if isinstance(dt, np.floating) and dt != dt:  # NaN
-            return None
-        return datetime.fromtimestamp(float(dt) / 1e9, tz=timezone.utc)
-    if isinstance(dt, datetime):
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    import pandas as pd  # type: ignore
-
-    if isinstance(dt, pd.Timestamp):
-        return dt.to_pydatetime().astimezone(timezone.utc) if dt.tzinfo \
-            else dt.replace(tzinfo=timezone.utc).astimezone(timezone.utc)
-    if isinstance(dt, str):
-        try:
-            return datetime.fromisoformat(dt).astimezone(timezone.utc)
-        except Exception:
-            return None
-    return None
 
 
 # 中国期货小时线「合法收盘整点」集合（覆盖日盘+夜盘，含各交易所差异）。
@@ -118,53 +107,23 @@ def _valid_hourly_ts(dt) -> bool:
 
 
 class HourlyCollector:
-    """在线小时线采集（单 session 内批量 upsert）"""
+    """在线小时线采集（单 session 内批量 upsert）—— C9 去天勤后 akshare 单一源"""
 
-    def __init__(self, session, prefer: str = "tqsdk"):
-        # ⚠ 2026-09-23 事故（SN414170/AP7332.5 推送用户无法在盘面找到）：
-        #   新浪分钟线接口的 datetime 标签整体 +8h（真实 09:00-10:00 收盘棒标 "18:00"、
-        #   夜盘 22:00-01:00 标 "6:00-9:00"），写入库即成"未来棒"/乱序棒，打穿新鲜度门控，
-        #   状态机在错位序列上集体误触发（单轮 18 信号）。根因在新浪接口侧，未修复前
-        #   akshare 主源禁用，统一走 tqsdk（起点标签 +1h 重标为收盘口径，时间戳已实证正确）。
+    def __init__(self, session):
+        # C9 去天勤：akshare 单一源，无 天勤 兜底/连接。
         self.session = session
-        self.prefer = prefer  # 'tqsdk'（默认，时间戳可信）| 'akshare'（禁用中，见上）
-        self._tq_api = None   # 共享的 tqsdk 连接（惰性创建，全品种复用）
 
     # ---------- 资源释放 ----------
     def close(self) -> None:
-        """释放共享的 tqsdk 连接。TqApi 登录一次即可服务多个合约。"""
-        if self._tq_api is not None:
-            try:
-                self._tq_api.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._tq_api = None
-
-    def _get_tq_api(self):
-        """惰性创建并复用单个 TqApi。
-
-        原实现里每个品种都 new 一次 TqApi + 登录：50 个品种 = 50 次登录（每次数秒），
-        在 15 分钟的扫描周期内根本跑不完 —— 兜底等于没有。
-        """
-        if self._tq_api is not None:
-            return self._tq_api
-        from tqsdk import TqApi, TqAuth  # type: ignore
-
-        e = get_settings().env
-        self._tq_api = TqApi(auth=TqAuth(e.TQSDK_PHONE, e.TQSDK_PASSWORD))
-        logger.info("[hourly] tqsdk 连接已建立（全品种复用）")
-        return self._tq_api
+        """释放资源（C9 后无外部连接需关闭，保留接口以兼容调用方）。"""
+        return
 
     # ---------- 公开 API ----------
     def collect_symbol(self, spec: MainContractSpec, data_length: int = 8000) -> int:
-        """采集单个品种小时线并 upsert，返回写入行数"""
-        rows: list[dict] = []
-        if self.prefer != "tqsdk":
-            rows = self._fetch_akshare(spec)
+        """采集单个品种小时线（akshare 单一源）并 upsert，返回写入行数"""
+        rows = self._fetch_akshare(spec)
         if not rows:
-            rows = self._fetch_tqsdk(spec, data_length=data_length)
-        if not rows:
-            logger.warning(f"[hourly] {spec.symbol} 无数据（akshare/tqsdk 均空）")
+            logger.warning(f"[hourly] {spec.symbol} akshare 无数据")
             return 0
         n = upsert_hourly_bars(self.session, rows)
         self.session.commit()
@@ -188,91 +147,60 @@ class HourlyCollector:
                     logger.exception(f"[hourly] {spec.symbol} 异常: {e}")
                     results.append({"symbol": spec.symbol, "error": str(e)})
         finally:
-            self.close()          # 释放共享 tqsdk 连接（若本轮用到）
+            self.close()          # 资源释放（C9 后为 no-op）
         ok = sum(1 for r in results if "error" not in r)
         logger.info(f"[hourly] collect_all done: {ok}/{len(results)} symbols")
         return results
 
-    # ---------- akshare 主源（⚠ 禁用中：新浪分钟线 datetime 标签整体 +8h，见 __init__ 注释） ----------
+    # ---------- akshare 唯一源（T4 已修：sina 标签实测为正确上海时间，offset≈0） ----------
     def _fetch_akshare(self, spec: MainContractSpec) -> list[dict]:
-        # 2026-09-23：sina 标签 +8h 未修复前禁止入库（曾致未来棒毒化信号状态机）。
-        # 若日后启用，必须先在下面验证 sina 标签口径，并对 dt 做口径矫正 + 未来棒剔除。
-        return []
+        """akshare 新浪主连小时线（period=60）唯一源。
 
-    # ---------- tqsdk 兜底 / 回填 ----------
-    def _fetch_tqsdk(self, spec: MainContractSpec, data_length: int = 8000) -> list[dict]:
+        T4 时区修复（2026-10-04 实测）：``futures_zh_minute_sina`` 返回的 datetime 已是
+        正确 Asia/Shanghai 收盘时刻，``_parse_ak_dt`` 直接按上海本地时间解析即可，
+        **不叠加** 天勤 路径的 +1h。每条棒经 ``_valid_hourly_ts`` 校验（合法交易整点 +
+        非未来戳），非法棒（含未来偏差/非整点）一律丢弃——这是防止任何残留时区偏移
+        毒化信号状态机的纵深防御。
+        """
+        import akshare as ak  # type: ignore
+
+        sina_sym = f"{spec.product.lower()}0"  # 新浪主连 = 品种小写 + 0（rb0/ma0/j0）
         try:
-            import tqsdk  # type: ignore  # noqa: F401
+            df = ak.futures_zh_minute_sina(symbol=sina_sym, period="60")
         except Exception as e:
-            logger.warning(f"[hourly] tqsdk 未安装: {e}")
+            logger.warning(f"[hourly] akshare {spec.symbol} ({sina_sym}) 失败: {e}")
             return []
-        if not get_settings().env.TQSDK_PHONE or not get_settings().env.TQSDK_PASSWORD:
-            logger.warning("[hourly] TQSDK 凭证未配置，跳过 tqsdk 兜底")
+        if df is None or df.empty:
             return []
-        # tqsdk 主连代码的「品种部分」大小写按交易所而定，错一个字母就回合约不存在/超时：
-        #   CZCE 必须大写 (FG/SA/SR/TA/...)；CFFEX 大写 (IF/IH/...)；
-        #   DCE/SHFE/INE 小写 (jd/rb/sc/...)。
-        # 旧代码一律 .lower() → 22 个郑商所品种(玻璃/纯碱/白糖/PTA/甲醇…)兜底全部失效，
-        # 主源(新浪)一旦限流/异常就彻底无数据，信号静默漏推。
-        _TQ_PROD_CASE = {
-            "CZCE": str.upper,
-            "CFFEX": str.upper,
-            "DCE": str.lower,
-            "SHFE": str.lower,
-            "INE": str.lower,
-        }
-        prod = _TQ_PROD_CASE.get(spec.exchange, str.lower)(spec.product)
-        kq = f"KQ.m@{spec.exchange}.{prod}"
-        try:
-            api = self._get_tq_api()
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[hourly] tqsdk 登录失败: {e}")
-            self.close()
-            return []
-        try:
-            klines = api.get_kline_serial(kq, duration_seconds=3600, data_length=data_length)
-            # 同步等待数据落地（get_kline_serial 初始为空，需 wait_update 填充）
-            for _ in range(5):
-                if klines is not None and len(klines) > 0:
-                    break
-                try:
-                    api.wait_update(timeout=20)
-                except Exception:
-                    break
-            if klines is None or len(klines) == 0:
-                return []
-            rows: list[dict] = []
-            for i in range(len(klines)):
-                dt = _parse_tq_dt(klines.iloc[i].get("datetime"))
-                if dt is None:
-                    continue
-                # tqsdk 为「整点起点」标签；引擎/回测假定「收盘时刻」标签，
-                # 故重标 +1h 以 akshare 源（收盘口径）入库，保持口径一致。
-                # ⚠ 2026-09-23 修复：必须**先重标再校验**——未完成棒（起点 11:00）原样校验
-                # 通过、+1h 入库即成 12:00 未来棒（本次回填 50 品种各 1 根的来源）。
-                dt = dt + timedelta(hours=1)
-                if not _valid_hourly_ts(dt):
-                    continue
-                rows.append(
-                    {
-                        "symbol": spec.symbol,
-                        "trade_datetime": dt,
-                        "open": _to_dec(klines.iloc[i].get("open")),
-                        "high": _to_dec(klines.iloc[i].get("high")),
-                        "low": _to_dec(klines.iloc[i].get("low")),
-                        "close": _to_dec(klines.iloc[i].get("close")),
-                        "volume": _to_int(klines.iloc[i].get("volume")),
-                        "oi": _to_int(
-                            klines.iloc[i].get("close_oi") or klines.iloc[i].get("open_oi")
-                        ),
-                        "src": "akshare",
-                    }
-                )
-            return rows
-        except Exception as e:
-            logger.warning(f"[hourly] tqsdk {spec.symbol} 失败: {e}")
-            self.close()          # 连接可能已失效，丢弃以便下个品种重建
-            return []
+        raw = len(df)
+        rows: list[dict] = []
+        dropped = 0
+        for _, r in df.iterrows():
+            dt = _parse_ak_dt(r.get("datetime"))
+            if dt is None or not _valid_hourly_ts(dt):
+                dropped += 1
+                continue
+            rows.append(
+                {
+                    "symbol": spec.symbol,
+                    "trade_datetime": dt,
+                    "open": _to_dec(r.get("open")),
+                    "high": _to_dec(r.get("high")),
+                    "low": _to_dec(r.get("low")),
+                    "close": _to_dec(r.get("close")),
+                    "volume": _to_int(r.get("volume")),
+                    "oi": _to_int(r.get("hold")),
+                    "src": "akshare",
+                }
+            )
+        # 丢弃率异常偏高 → 疑似 sina 标签时区偏移回归（PRD §6.6），告警暴露
+        # （C9 已无 天勤 兜底，须人工复核 akshare 数据口径）。
+        if raw and dropped / raw > 0.5:
+            logger.warning(
+                f"[hourly] akshare {spec.symbol} 丢弃率 {dropped}/{raw} 异常偏高 —— "
+                f"疑似 sina 标签时区偏移回归，请复核 akshare 数据口径"
+            )
+        return rows
 
 
 __all__ = ["HourlyCollector"]

@@ -635,7 +635,7 @@ def read_hourly_bars(session, symbol: str, limit: int) -> pd.DataFrame | None:
     """读取某品种小时线。
 
     关键修复（2026-09-15）：按 src 过滤，引擎只消费**单一口径**的小时线，
-    杜绝 akshare(同花顺/结束时刻标签) 与 tqsdk/CSV(起点标签) 两套口径被当成两根
+    杜绝 akshare(同花顺/结束时刻标签) 与 CSV(起点标签) 两套口径被当成两根
     不同的 K 同时喂进 EMA/ATR，导致周期参数被砍半、信号与回测/图表口径不一致
     （实测 09-14 单日读进 11 根 K，而真实只有 6 根）。
 
@@ -648,7 +648,7 @@ def read_hourly_bars(session, symbol: str, limit: int) -> pd.DataFrame | None:
     src = cfg.hourly_src
     df = _read_src(session, symbol, limit, src)
     if df is None or len(df) < cfg.min_bars:
-        other = "tqsdk" if src == "akshare" else "akshare"
+        other = "csv" if src == "akshare" else "akshare"
         logger.warning(
             f"[fusion] 主源 src={src} 仅 {len(df) if df is not None else 0} 根"
             f"(<{cfg.min_bars})，回退 src={other}（故障期兜底，正常应恒为单源）"

@@ -2,7 +2,7 @@
 
 能力
 ----
-- 从 tqsdk 拉取 1 分钟 K 线（主连 ``KQ.m@交易所.品种`` 或具体合约 ``交易所.代码``），
+- 从 akshare 拉取 1 分钟 K 线（主连码如 rb0 / 具体合约码如 rb2510），
   upsert 入 ``minute_bar``；
 - 由 ``minute_bar`` 合成 5/15/30/60 分钟（``time_bucket``，起点标签，Asia/Shanghai），
   写入 ``bar_5m`` / ``bar_15m`` / ``bar_30m`` / ``bar_60m``；
@@ -255,47 +255,51 @@ def _synth_one(session: Session, symbol: str, since: datetime | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# tqsdk 拉取 1 分钟
+# akshare 拉取 1 分钟（C9 去天勤：原 天勤 get_kline_serial）
 # ---------------------------------------------------------------------------
-_TQ_CASE = {
+_AK_CASE = {
     "CZCE": str.upper, "CFFEX": str.upper, "DCE": str.lower,
     "SHFE": str.lower, "INE": str.lower,
 }
 
 
-def _to_tq_symbol(sym: str) -> str:
-    """主连代码(如 RB888) -> KQ.m@EXCH.PROD；含 '.' 视为完整 tqsdk 合约代码。"""
+def _to_ak_symbol(sym: str) -> str:
+    """主连代码(如 RB888) -> akshare 主连码(如 rb0)；含 '.' 视为完整合约码(如 SHFE.rb2510 -> rb2510)。"""
     if "." in sym:
-        return sym
+        return sym.split(".", 1)[1]
     if sym.endswith("888"):
         spec = next((m for m in get_settings().main_contracts if m.symbol == sym), None)
         if not spec:
             raise ValueError(f"未在主连配置中找到 {sym}，请改用完整代码如 SHFE.rb2510")
-        prod = _TQ_CASE.get(spec.exchange, str.lower)(spec.product)
-        return f"KQ.m@{spec.exchange}.{prod}"
-    raise ValueError(f"无法解析 {sym}：请传完整 tqsdk 代码(含.)或主连代码(如 RB888)")
+        prod = _AK_CASE.get(spec.exchange, str.lower)(spec.product)
+        return f"{prod}0"
+    raise ValueError(f"无法解析 {sym}：请传完整合约码(含.)或主连代码(如 RB888)")
 
 
-def _parse_tq_klines(klines, symbol: str) -> list[dict]:
-    import numpy as np  # type: ignore
+def _parse_ak_dt(dt_raw) -> datetime | None:
+    if dt_raw is None:
+        return None
+    if isinstance(dt_raw, str):
+        try:
+            return datetime.strptime(dt_raw.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=_SH_TZ)
+        except Exception:
+            return None
+    if hasattr(dt_raw, "astimezone"):
+        return dt_raw.astimezone(_SH_TZ) if dt_raw.tzinfo else dt_raw.replace(tzinfo=_SH_TZ)
+    return None
 
+
+def _parse_ak_minutes(df, symbol: str) -> list[dict]:
+    if df is None or len(df) == 0:
+        return []
     rows: list[dict] = []
-    n = len(klines)
+    n = len(df)
     for i in range(n):
-        rec = klines.iloc[i]
-        dt_raw = rec.get("datetime")
-        if dt_raw is None:
+        rec = df.iloc[i]
+        dt = _parse_ak_dt(rec.get("datetime"))
+        if dt is None:
             continue
-        # tqsdk datetime 为纳秒级 unix 时间戳
-        if isinstance(dt_raw, (int, float)):
-            if isinstance(dt_raw, float) and dt_raw != dt_raw:
-                continue
-            dt = datetime.fromtimestamp(float(dt_raw) / 1e9, tz=timezone.utc).astimezone(_SH_TZ)
-        elif hasattr(dt_raw, "astimezone"):
-            dt = dt_raw.astimezone(_SH_TZ) if dt_raw.tzinfo else dt_raw.replace(tzinfo=_SH_TZ)
-        else:
-            continue
-        o, h, l, c = rec.get("open"), rec.get("high"), rec.get("low"), rec.get("close")
+        o, h, l, c = (rec.get(x) for x in ("open", "high", "low", "close"))
         if None in (o, h, l, c):
             continue
         try:
@@ -307,61 +311,40 @@ def _parse_tq_klines(klines, symbol: str) -> list[dict]:
         if dt.year <= 1970 or dt > datetime.now(_SH_TZ) + timedelta(minutes=2):
             continue
         vol = rec.get("volume")
-        oi = rec.get("close_oi") or rec.get("open_oi")
+        oi = rec.get("hold") or rec.get("open_interest")
         rows.append({
             "symbol": symbol, "ts": dt,
             "open": float(o), "high": float(h), "low": float(l), "close": float(c),
             "volume": int(vol) if vol is not None else 0,
             "amount": None, "open_interest": int(oi) if oi is not None else None,
             "high_limit": None, "low_limit": None, "pre_close": None,
-            "settle_price": None, "contract": None, "src": "tqsdk_1min",
+            "settle_price": None, "contract": None, "src": "akshare_1min",
         })
     return rows
 
 
 def fetch_min(session: Session, symbols: list[str], data_length: int = 8000) -> dict:
-    from tqsdk import TqApi, TqAuth  # type: ignore
+    import akshare as ak
 
-    s = get_settings().env
-    if not s.TQSDK_PHONE or not s.TQSDK_PASSWORD:
-        raise RuntimeError("TQSDK 凭证未配置（.env 中 TQSDK_PHONE/TQSDK_PASSWORD）")
-    api = TqApi(auth=TqAuth(s.TQSDK_PHONE, s.TQSDK_PASSWORD))
     stats: dict[str, int] = {}
-    try:
-        for sym in symbols:
-            tq = _to_tq_symbol(sym)
-            print(f"[fetch-min] {sym} -> tqsdk {tq}")
-            klines = api.get_kline_serial(tq, duration_seconds=60, data_length=data_length)
-            # 等待序列完整下载：tqsdk 主连 1 分钟上限约 10000 根，需多轮 wait_update 才填满；
-            # 早退会导致只抓到半截。超时才放行（合约历史不足 data_length 时也靠它收尾）。
-            _deadline = time.monotonic() + min(300.0, max(30.0, data_length / 50.0))
-            while klines is not None and len(klines) < data_length:
-                try:
-                    api.wait_update(timeout=20)
-                except Exception:
-                    break
-                if time.monotonic() > _deadline:
-                    break
-            if klines is None or len(klines) == 0:
-                print(f"[fetch-min] {sym} 无数据")
-                stats[sym] = 0
-                continue
-            rows = _parse_tq_klines(klines, sym)
-            if rows:
-                # PostgreSQL 单条语句参数上限 65535；1 分钟 1 万行 ×15 列会超限，按 2000 行分批
-                _CH = 2000
-                for _i in range(0, len(rows), _CH):
-                    _batch = rows[_i:_i + _CH]
-                    session.execute(
-                        pg_insert(_MINUTE_BAR).values(_batch).on_conflict_do_nothing(
-                            index_elements=["symbol", "ts"]
-                        )
+    for sym in symbols:
+        ak_sym = _to_ak_symbol(sym)
+        print(f"[fetch-min] {sym} -> akshare {ak_sym}")
+        df = ak.futures_zh_minute_sina(symbol=ak_sym, period="1")
+        rows = _parse_ak_minutes(df, sym)
+        if rows:
+            # PostgreSQL 单条语句参数上限 65535；1 分钟分批 2000 行
+            _CH = 2000
+            for _i in range(0, len(rows), _CH):
+                _batch = rows[_i:_i + _CH]
+                session.execute(
+                    pg_insert(_MINUTE_BAR).values(_batch).on_conflict_do_nothing(
+                        index_elements=["symbol", "ts"]
                     )
-                session.commit()
-            stats[sym] = len(rows)
-            print(f"[fetch-min] {sym} upsert {len(rows)} 行")
-    finally:
-        api.close()
+                )
+            session.commit()
+        stats[sym] = len(rows)
+        print(f"[fetch-min] {sym} upsert {len(rows)} 行")
     return stats
 
 
@@ -443,15 +426,15 @@ def _parse_date(s: str | None) -> date | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="获取1分钟合约数据并合成多周期/日线")
-    ap.add_argument("--symbols", help="逗号分隔：主连(结束888)或完整tqsdk代码(含.)，如 RB888,SHFE.rb2510")
+    ap.add_argument("--symbols", help="逗号分隔：主连(结束888)或完整合约码(含.)，如 RB888,SHFE.rb2510")
     ap.add_argument("--start", help="YYYY-MM-DD（日线/增量起点）")
     ap.add_argument("--end", help="YYYY-MM-DD")
-    ap.add_argument("--data-length", type=int, default=8000, help="tqsdk 单次拉取根数")
+    ap.add_argument("--data-length", type=int, default=8000, help="akshare 单次拉取根数（period=1 约 1024 根）")
     ap.add_argument("--since", help="合成增量起点(含该天)，如 2025-05-01")
     ap.add_argument("--full", action="store_true", help="合成全量重算（TRUNCATE 后重建，谨慎）")
     ap.add_argument("--ensure-schema", action="store_true", help="确保5张表存在并转超表")
     ap.add_argument("--prune-1m-5m", action="store_true", help="清空 minute_bar/bar_5m（本地清理）")
-    ap.add_argument("--fetch-min", action="store_true", help="tqsdk 拉取1分钟")
+    ap.add_argument("--fetch-min", action="store_true", help="天勤 拉取1分钟")
     ap.add_argument("--synth", action="store_true", help="合成5/15/30/60分钟（默认增量最近7天）")
     ap.add_argument("--fetch-daily", action="store_true", help="akshare 拉取主连日线")
     ap.add_argument("--all", action="store_true", help="fetch-min + synth")

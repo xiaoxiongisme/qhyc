@@ -31,7 +31,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS dim_symbol (
     symbol        text PRIMARY KEY,
     product       text NOT NULL,              -- 品种代码：A / FG / AP
-    namespace     text NOT NULL,              -- main | index | contract | tqsdk | other
+    namespace     text NOT NULL,              -- main | index | contract | kq | other
     exchange      text,                       -- 交易所：DCE/CZCE/SHFE/CFFEX/GFEX/INE
     is_preferred  boolean NOT NULL DEFAULT false,  -- 同 (product, namespace) 内的首选符号
     first_seen    date,
@@ -46,12 +46,12 @@ CREATE INDEX IF NOT EXISTS ix_dim_symbol_pref ON dim_symbol(product, namespace, 
 
 COMMENT ON TABLE dim_symbol IS
     'symbol 维度表（数据层唯一字典）。namespace: main=888主连 / index=8888指数连 / '
-    'contract=标准合约 / tqsdk=KQ.m@天勤原生码。跨周期 join 必须先经本表映射。';
+    'contract=标准合约 / kq=KQ.m@天勤原生码。跨周期 join 必须先经本表映射。';
 
 -- ---------------------------------------------------------------------------
 -- 2. 回填：从各行情/因子表收集 DISTINCT symbol 并解析命名空间
 --    规则（有优先级，先匹配先生效）：
---      ^KQ\.m@([A-Z]+)\.([A-Z0-9]+)$  → tqsdk，exchange=$1，product=$2
+--      ^KQ\.m@([A-Z]+)\.([A-Z0-9]+)$  → kq，exchange=$1，product=$2
 --      ^([A-Za-z0-9]+)8888$           → index，product=$1
 --      ^([A-Za-z]+)888$               → main，  product=$1
 --      ^([A-Za-z]+)(\d{4})$           → contract，product=$1
@@ -64,7 +64,7 @@ BEGIN
     -- 天勤原生连续码：KQ.m@DCE.A
     IF s ~ '^KQ\.m@[A-Z]+\.[A-Z0-9]+$' THEN
         m := regexp_match(s, '^KQ\.m@([A-Z]+)\.([A-Z0-9]+)$');
-        RETURN QUERY SELECT upper(m[2]), 'tqsdk'::text, m[1];
+        RETURN QUERY SELECT upper(m[2]), 'kq'::text, m[1];
     -- 指数连：A8888
     ELSIF s ~ '^[A-Za-z0-9]+8888$' THEN
         m := regexp_match(s, '^([A-Za-z0-9]+)8888$');
@@ -174,7 +174,7 @@ END $$;
 
 -- ---------------------------------------------------------------------------
 -- 3. is_preferred：同一 (product, namespace) 内只留一个首选
---    规则：main/index/contract 天然唯一；tqsdk 与 main 并存时 prefer main。
+--    规则：main/index/contract 天然唯一；kq 与 main 并存时 prefer main。
 --    实测冲突样例：FG → FG888(72,192 行, 2015~) 优于 KQ.m@CZCE.FG(18,866 行, 2023~)
 -- ---------------------------------------------------------------------------
 UPDATE dim_symbol SET is_preferred = false;
@@ -187,9 +187,9 @@ WHERE d.namespace IN ('main', 'index', 'contract')
         AND (o.symbol < d.symbol)
   );
 
--- tqsdk：仅当该 product 没有 main 命名空间时才作首选
+-- kq（天勤 KQ.m@）：仅当该 product 没有 main 命名空间时才作首选
 UPDATE dim_symbol d SET is_preferred = true
-WHERE d.namespace = 'tqsdk'
+WHERE d.namespace = 'kq'
   AND NOT EXISTS (SELECT 1 FROM dim_symbol o
                   WHERE o.product = d.product AND o.namespace = 'main');
 
@@ -201,9 +201,9 @@ SELECT product,
        max(symbol) FILTER (WHERE namespace='main'     AND is_preferred) AS main_symbol,
        max(symbol) FILTER (WHERE namespace='index'    AND is_preferred) AS index_symbol,
        max(symbol) FILTER (WHERE namespace='contract' AND is_preferred) AS contract_symbol,
-       max(symbol) FILTER (WHERE namespace='tqsdk'    AND is_preferred) AS tqsdk_symbol,
+       max(symbol) FILTER (WHERE namespace='kq'       AND is_preferred) AS kq_symbol,
        count(*) AS symbol_count,
-       count(*) FILTER (WHERE namespace='tqsdk') > 0
+       count(*) FILTER (WHERE namespace='kq') > 0
          AND count(*) FILTER (WHERE namespace='main') > 0 AS has_namespace_conflict
 FROM dim_symbol
 GROUP BY product;

@@ -33,38 +33,21 @@ def list_anomalies(
 
 
 class ResolveRequest(BaseModel):
-    action: str  # accept_tqsdk / false_positive
+    action: str  # false_positive
     note: str | None = None
 
 
 @router.post("/{ticket_id}/resolve")
 def resolve_anomaly(ticket_id: int, req: ResolveRequest, db: Session = Depends(fastapi_db_dep)):
-    """⑰ 异常处置：只允许采纳 tqsdk 或标记误报，不手改数值"""
+    """⑰ 异常处置：标记误报（不手改数值）；天勤采纳路径已随 C9 去天勤退役"""
     ticket = db.get(AnomalyTicket, ticket_id)
     if not ticket:
         raise HTTPException(404, f"ticket {ticket_id} not found")
     if ticket.status != "pending":
         raise HTTPException(400, f"ticket already {ticket.status}")
 
-    if req.action == "accept_tqsdk":
-        # 用 tqsdk 的值覆盖 daily_bar 对应字段（⑰ 唯一允许的自动覆盖路径）
-        if ticket.tqsdk_val is None:
-            raise HTTPException(400, "tqsdk_val is null, cannot accept")
-        row = db.get(DailyBar, (ticket.symbol, ticket.trade_date))
-        if not row:
-            raise HTTPException(404, f"daily_bar ({ticket.symbol}, {ticket.trade_date}) not found")
-        if ticket.field == "close":
-            row.close = ticket.tqsdk_val
-        elif ticket.field == "settle":
-            row.settle = ticket.tqsdk_val
-        elif ticket.field == "volume":
-            row.volume = int(ticket.tqsdk_val)
-        else:
-            raise HTTPException(400, f"unsupported field {ticket.field}")
-        row.src = "tqsdk"
-        ticket.status = "fixed"
-        ticket.resolved_at = datetime.utcnow()
-        ticket.note = (ticket.note or "") + f" | resolved: accept_tqsdk ({req.note or ''})"
+    if req.action == "accept_legacy":
+        raise HTTPException(410, "accept_legacy 已退役（C9 去天勤，天勤不再作为校准源）")
     elif req.action == "false_positive":
         ticket.status = "false_positive"
         ticket.resolved_at = datetime.utcnow()
@@ -83,7 +66,6 @@ def _to_out(t: AnomalyTicket) -> AnomalyOut:
         trade_date=t.trade_date,
         field=t.field,
         akshare_val=float(t.akshare_val) if t.akshare_val is not None else None,
-        tqsdk_val=float(t.tqsdk_val) if t.tqsdk_val is not None else None,
         diff=float(t.diff) if t.diff is not None else None,
         threshold=float(t.threshold) if t.threshold is not None else None,
         status=t.status,

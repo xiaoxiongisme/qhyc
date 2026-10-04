@@ -1,5 +1,5 @@
 """
-CLI：手动触发一次全量 ingest（akshare + tqsdk 校准）
+CLI：手动触发一次全量 ingest（akshare + 天勤 校准）
 - 用法：
   docker compose exec api python scripts/ingest_now.py [--symbol FG888]
 """

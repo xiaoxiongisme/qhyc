@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """D:/学习资料 交易所分钟包 → minute_bar 缺口补录转换（本地跑，输出 gz csv 供服务器 COPY）
 
-源 A（tqsdk 按日按合约）: 2026 3-4月.zip → 只取 *9999(主连)/*8888(指数) 文件
+源 A（交易所分钟包按日按合约）: 2026 3-4月.zip → 只取 *9999(主连)/*8888(指数) 文件
     列: exchange,symbol,open,close,high,low,amount,volume,position,bob,eob,type,sequence
     映射: ts=bob(+08), symbol=品种码大写+888/8888, contract=原symbol, oi=position, amount=amount, src=csv_1min
 
@@ -35,7 +35,7 @@ def fmt_ts(s, has_tz=False):
 
 def convert_a(zip_path, outdir):
     os.makedirs(outdir, exist_ok=True)
-    tag = 'a_tqsdk'
+    tag = 'a_1min'
     idx, nrows = 1, 0
     f, w = new_writer(outdir, tag, idx)
     pat = re.compile(r'(?:^|/)(\d{8})/([A-Za-z]+)(9999|8888)\.csv$')

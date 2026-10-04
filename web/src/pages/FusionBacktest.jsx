@@ -81,7 +81,6 @@ export default function FusionBacktest() {
           <label>小时线口径
             <select value={form.src} onChange={set("src")}>
               <option value="akshare">akshare</option>
-              <option value="tqsdk">tqsdk</option>
             </select>
           </label>
           <label>初始止损 sl_atr×ATR

@@ -77,7 +77,7 @@ ON CONFLICT (switch_key) DO UPDATE
 CREATE TABLE IF NOT EXISTS cfg_basic_indicator (
     indicator_code text PRIMARY KEY,                   -- warehouse_receipt / inventory / ...
     indicator_name text NOT NULL,
-    source         text,                               -- 交易所 / akshare / tqsdk / 计算
+    source         text,                               -- 交易所 / akshare / 天勤 / 计算
     frequency      text,                               -- daily / weekly / 事件
     unit           text,                               -- 吨 / 手 / %
     layer          text NOT NULL DEFAULT 'L0',         -- 绝大多数基本面是 L0 原始采集

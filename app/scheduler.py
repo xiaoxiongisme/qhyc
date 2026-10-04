@@ -4,7 +4,7 @@ APScheduler 调度（M1，§4.2）
 - 小时线每小时自动更新（决策 7）：整点触发一次全品种小时线增量采集
 - 龙虎榜（新浪）每日 17:30 入库；库存（周频周五）与基差（日频）自动调度（决策 2）
 - 触发后：
-  1. 采集 + 校准（akshare → tqsdk 补缺 + 比对）
+  1. 采集 + 入库（akshare 单一源；天勤清理后不再有双源校准/比对）
   2. 入库完成后 → M1 阶段占位（预测待 M2 接入）
 - 任务状态写入 task_run 表
 """
@@ -95,7 +95,7 @@ def _predict_job(session, symbols: list[str], label: str) -> int:
 
 
 def _ingest_job(label: str) -> None:
-    """单次完整 ingest 任务（akshare + tqsdk 校准）→ 成功后联动预测（⑦）"""
+    """单次完整 ingest 任务（akshare 单一源）→ 成功后联动预测（⑦）"""
     logger.info(f"[scheduler] ingest job start label={label}")
     try:
         with session_scope() as s:
@@ -563,7 +563,7 @@ def _collect_hourly_settled(s, f) -> None:
     """
     from app.ingest.hourly_collector import HourlyCollector
 
-    hc = HourlyCollector(s, prefer="tqsdk")
+    hc = HourlyCollector(s)
     hc.collect_all(data_length=800)
 
     settle = int(getattr(f, "settle_delay_sec", 0) or 0)
@@ -634,7 +634,7 @@ def _fusion_scan_job() -> None:
                 if not in_push_window(now, f.push_windows):
                     logger.info(f"[scheduler] fusion scan {now:%H:%M} 非推送时段，跳过")
                     return
-            # 1) 拉最新小时线（akshare 新浪60分钟线免费；失败则 tqsdk 兜底，再失败沿用已有数据）
+            # 1) 拉最新小时线（akshare 新浪60分钟线，单一源；失败沿用已有数据）
             #    只取尾部 ~800 根：足够覆盖 max_bars(400) + min_bars(160)，
             #    避免每 15 分钟都做一次 8000 根的全历史回填（那是分钟级耗时）
             try:
@@ -872,102 +872,6 @@ def _fusion_scan_job() -> None:
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] fusion scan failed: {e}")
 
-def _fut_kline_job() -> None:
-    """fut_kline 增量入库（天勤 tqsdk）：subprocess 隔离跑增量抓取。
-
-    背景（2026-09-23 实测）：scheduler 只注册了 `adjust_fdf`（02:30 由 fut_kline
-    生成 cont_adj），**从未定时抓取原始行情** → fut_kline 原始层停滞 7~12 天，
-    adjust 只能在陈数据上重算。本作业补齐这一环，跑在 adjust 之前（夜盘已收）。
-
-    隔离原因同 M8 §4.3：抓取耗时长，放进程里避免占满 APScheduler 线程池。
-    """
-    import subprocess
-    import sys as _sys
-    from pathlib import Path
-
-    fk = get_settings().fut_kline_config
-    # G9 修复：容器内 __file__=/app/app/scheduler.py，parents[1]=/app，
-    # 而 parents[2]=/ → 旧写法拼出 /scripts/...（不存在）导致作业每天静默失败。
-    script = (Path(__file__).resolve().parents[1]
-              / "scripts" / "ingest_fut_kline_incremental.py")
-    if not script.exists():
-        logger.error(f"[scheduler] 找不到增量脚本 {script}")
-        return
-    cmd = [_sys.executable, str(script),
-           "--freqs", ",".join(fk.freqs),
-           "--buffer-days", str(fk.buffer_days)]
-    if fk.adjust_after:
-        cmd.append("--adjust")
-    if fk.max_stale_days:
-        cmd += ["--max-stale-days", str(fk.max_stale_days)]
-    logger.info(f"[scheduler] fut_kline incremental start: {' '.join(cmd)}")
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=int(fk.timeout_sec))
-        logger.info(f"[scheduler] fut_kline incremental exit={proc.returncode} "
-                    f"tail={(proc.stdout or '')[-400:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] fut_kline stderr={(proc.stderr or '')[-600:]}")
-    except subprocess.TimeoutExpired:
-        logger.warning(f"[scheduler] fut_kline incremental timeout>{fk.timeout_sec}s")
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"[scheduler] fut_kline incremental failed: {e}")
-
-
-def _rebuild_fut_kline_job() -> None:
-    """fut_kline 夜间派生重建（方案 1：物化派生）。
-
-    从权威分钟源重建 fut_kline（cont_adj←minute_bar_adj / continuous←bar_* /
-    contract←contract_daily UPSERT），替代旧的 fetch_fdf+adjust_fdf+_adjust_bars
-    三个独立写入。subprocess 隔离（耗时长，避免占满 APScheduler 线程池）。
-
-    依赖：04:30 _adjust_minute_job 已生成 minute_bar_adj，且 minute_and_bars
-    已刷新 bar_*；故排在 05:00 之后跑。
-    """
-    rb = get_settings().fut_kline_rebuild_config
-    if not rb.enabled:
-        return
-    import sys as _sys
-    from pathlib import Path as _P
-
-    script = (_P(__file__).resolve().parents[1] / "scripts" / "rebuild_fut_kline.py")
-    if not script.exists():
-        logger.error(f"[scheduler] 找不到重建脚本 {script}")
-        return
-    # 前置校验（fail-loud）：脚本生产模式是「先 DELETE fut_kline 的 cont_adj/continuous，
-    # 再从 minute_bar_adj 重建」。源表缺失或为空 ⇒ 删光后重建失败，数据回不来
-    # （云端这两个 kind 合计约 1,992 万行）。实测本地无 minute_bar_adj，属真实事故路径。
-    # 脚本内还有第二道同样的守卫，这里是第一道：让失败发生在删库之前、并留下 ERROR 日志。
-    try:
-        with session_scope() as s:
-            missing = [
-                t for t in ("minute_bar_adj",)
-                if not s.execute(text(f"select to_regclass('{t}') is not null")).scalar()
-            ]
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"[scheduler] 重建前置校验异常，跳过本次重建: {e}")
-        return
-    if missing:
-        logger.error(
-            f"[scheduler] 重建前置校验失败：源表 {missing} 不存在，跳过本次重建"
-            f"（避免把 fut_kline 的 cont_adj/continuous 删空后重建失败）"
-        )
-        return
-    cmd = [_sys.executable, str(script)]
-    logger.info(f"[scheduler] rebuild fut_kline start: {' '.join(cmd)}")
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=int(rb.timeout_sec))
-        logger.info(f"[scheduler] rebuild fut_kline exit={proc.returncode} "
-                    f"tail={(proc.stdout or '')[-600:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] rebuild fut_kline stderr={(proc.stderr or '')[-800:]}")
-    except subprocess.TimeoutExpired:
-        logger.warning(f"[scheduler] rebuild fut_kline timeout>{rb.timeout_sec}s")
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"[scheduler] rebuild fut_kline failed: {e}")
-
-
 def _sync_cloud_local_job() -> None:
     """统一云地同步链路（PRD §14）：subprocess 隔离跑 scripts/sync_cloud_local.py。
 
@@ -993,7 +897,7 @@ def _sync_cloud_local_job() -> None:
     mode = os.getenv("CLOUD_SYNC_MODE", "incremental")
     tables = os.getenv(
         "CLOUD_SYNC_TABLES",
-        "bar_15m,bar_30m,bar_60m,fut_kline,daily_bar,factor_value,"
+        "bar_15m,bar_30m,bar_60m,daily_bar,factor_value,"
         "warehouse_receipt,inventory,member_position_rank_summary",
     )
     cmd = [_sys.executable, str(script), "--tables", tables,
@@ -1022,8 +926,6 @@ def _sync_cloud_local_job() -> None:
 #: 这 5 个作业**每天静默失败**（日志仅一行 error，无人看）。此处集中登记，
 #: 启动时 fail-fast 校验，缺一个就大声报错，杜绝再次静默。
 SUBPROCESS_SCRIPTS = (
-    "ingest_fut_kline_incremental.py",
-    "rebuild_fut_kline.py",
     "sync_cloud_local.py",
     "adjust_bars.py",
     "adjust_minute.py",
@@ -1194,43 +1096,14 @@ def _build_scheduler() -> BlockingScheduler:
         )
         logger.info("[scheduler] registered fusion_scan at :05/:35 (post hourly collect)")
 
-    # 复权主连每日重算（02:30）：方案 1（fut_kline 物化派生）启用时，cont_adj 改由
-    # 05:00 的 _rebuild_fut_kline_job 从分钟源统一重建，此处停用（保持可逆）。
-    rb_cfg = settings.fut_kline_rebuild_config
-    if not rb_cfg.enabled:
-        sched.add_job(
-            _adjust_job,
-            trigger=CronTrigger(hour=2, minute=30, timezone=settings.env.TZ),
-            id="adjust_cont_adj",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
-        logger.info("[scheduler] registered cron 02:30 (adjust_cont_adj)")
-    else:
-        logger.info("[scheduler] adjust_cont_adj 停用（fut_kline 由 05:00 派生作业重建）")
+    # 复权主连每日重算（adjust_cont_adj）已于 2026-10-04 随 fdf 模块退役停用：
+    # cont_adj 不再由定时作业生成（fdf 为唯一生产者，已删）。保留 minute_bar（L0 原始）。
+    logger.info("[scheduler] adjust_cont_adj 停用（fdf 退役，无生产者）")
 
-    # 1 分钟复权（云端 minute_bar → minute_bar_adj）：04:30 增量（since=72h，
-    # 期间有换月的品种全量重算、其余追加）。表独立于 fut_kline/bar_*，与 02:30 链路不冲突。
-    # ★ 2026-10-03 退役：minute_bar_adj 是【加法前复权】，与项目"后复权唯一口径"冲突，
-    #   且云端实测已崩坏（5,862 万行 / 201.7 万行负价 3.4% / 最低 -2571.6），
-    #   同时是 cont_adj 的唯一上游。retire 前复权链 → 停本作业。
-    #   保留 minute_bar（未复权 L0 原始数据）作为唯一可再生基础。
-    rb_cfg_min = settings.fut_kline_rebuild_config
-    if getattr(rb_cfg_min, "retire_minute_adj", False):
-        logger.info("[scheduler] adjust_minute_bar_adj 已退役"
-                    "（minute_bar_adj 为前复权且已崩坏，2026-10-03 停采集）")
-    else:
-        sched.add_job(
-            _adjust_minute_job,
-            trigger=CronTrigger(hour=4, minute=30, timezone=settings.env.TZ),
-            id="adjust_minute_bar_adj",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=3600,
-        )
-        logger.info("[scheduler] registered cron 04:30 (adjust_minute_bar_adj)")
+    # 1 分钟复权作业（adjust_minute_bar_adj）已于 2026-10-03 退役：minute_bar_adj 为
+    # 加法前复权，与项目"后复权唯一口径"冲突且云端实测已崩坏；保留 minute_bar（未复权
+    # L0 原始数据）作为唯一可再生基础。本作业不再注册。
+    logger.info("[scheduler] adjust_minute_bar_adj 已退役（2026-10-03 停采集，不再注册）")
 
     # 会员持仓排名（龙虎榜）每日收盘后入库（交易所官方 CSV）
     rp = settings.yaml.rank_position
@@ -1272,41 +1145,9 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info("[scheduler] registered minute_and_bars every :30 (minute-first pipeline)")
 
-    # fut_kline 增量入库（天勤 tqsdk）：在方案 1 物化派生启用时停用——cont_adj/continuous
-    # 改由 05:00 _rebuild_fut_kline_job 从分钟源重建；contract 由该作业 UPSERT。
-    # 用 subprocess 隔离：抓取耗时长，避免占满 APScheduler 线程池（M8 §4.3 同因）
-    fk = settings.fut_kline_config
-    if fk.enabled and not rb_cfg.enabled:
-        sched.add_job(
-            _fut_kline_job,
-            trigger=CronTrigger(hour=fk.run_hour, minute=fk.run_minute,
-                                timezone=settings.env.TZ),
-            id="fut_kline_incremental",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=1800,
-        )
-        logger.info(f"[scheduler] registered fut_kline incremental "
-                    f"{fk.run_hour:02d}:{fk.run_minute:02d} freqs={fk.freqs}")
-    else:
-        logger.info("[scheduler] fut_kline incremental 停用（fut_kline 由 05:00 派生作业重建）")
-
-    # fut_kline 夜间派生重建（方案 1：物化派生）：05:00 跑，依赖 04:30 minute_bar_adj
-    # 与每 30 分钟的 bar_* 已就绪。subprocess 隔离（耗时长）。
-    if rb_cfg.enabled:
-        sched.add_job(
-            _rebuild_fut_kline_job,
-            trigger=CronTrigger(hour=rb_cfg.run_hour, minute=rb_cfg.run_minute,
-                                timezone=settings.env.TZ),
-            id="fut_kline_rebuild",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=3600,
-        )
-        logger.info(f"[scheduler] registered fut_kline rebuild "
-                    f"{rb_cfg.run_hour:02d}:{rb_cfg.run_minute:02d}")
+    # fut_kline 增量/派生重建作业已于 2026-10-04 随 fdf 模块退役一并停用（天勤清理专项）。
+    # fut_kline 表保留为孤儿表待观测，不再有写入通路（_fut_kline_job/_rebuild_fut_kline_job 已删除）。
+    logger.info("[scheduler] fut_kline 增量/重建作业已停用（fdf 退役，天勤清理）")
 
     # 统一云地同步链路（PRD §14）：在 CLOUD_SYNC_ENABLED=1 时，本函数已在顶部
     # 以「同步专用」模式提前返回（仅注册 cloud_local_sync）。此处不再重复注册。
@@ -1340,6 +1181,23 @@ def _build_scheduler() -> BlockingScheduler:
         )
         logger.info(f"[scheduler] registered spot_basis daily "
                     f"{sbc.run_hour:02d}:{sbc.run_minute:02d}")
+
+    # ---- 每日期货数据刷新（C6：消除 C1/C2/C5 陈旧的唯一种子）----------------
+    # 收盘后 + spot_basis 入库后运行；惰性导入脚本模块，避免其异常拖垮整个调度器
+    # （F7/F12：顶层 `from scripts import ...` 曾导致 21 个作业全挂）。
+    # 注：本作业属「采集类」；若本实例 CLOUD_SYNC_ENABLED=1（本地同步专用）会在上方
+    #     早退分支直接返回、不注册；由云端（非同步）调度器注册运行。
+    def _daily_futures_refresh_job():
+        from scripts.daily_futures_refresh import main as _refresh
+        _refresh()
+    sched.add_job(
+        _daily_futures_refresh_job,
+        trigger=CronTrigger(hour=18, minute=10, timezone=settings.env.TZ),
+        id="daily_futures_refresh", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=1800,
+    )
+    logger.info("[scheduler] registered cron 18:10 daily_futures_refresh "
+                "(①contract_daily ②main_contract_map；本地同步实例不注册)")
 
     # ---- 因子层（Phase 4 / 新 PRD T22）-------------------------------------
     # 顺序：收盘(15:00) → 16:20 因子计算 → 16:45 IC 监控 → 17:35 数据自检。
@@ -1732,7 +1590,7 @@ def _hourly_job() -> None:
         with session_scope() as s:
             from app.ingest.hourly_collector import HourlyCollector
 
-            hc = HourlyCollector(s, prefer="tqsdk")
+            hc = HourlyCollector(s)
             h_stats = hc.collect_all()
             h_ok = sum(1 for r in h_stats if "error" not in r)
             logger.info(f"[scheduler] hourly collect done: {h_ok}/{len(h_stats)} symbols")
@@ -1743,8 +1601,8 @@ def _hourly_job() -> None:
 def _minute_and_bars_job() -> None:
     """#5 分钟优先管线：实时 1 分钟入库 → 增量合成 5/15/30/60 分钟。
 
-    使 minute_bar 成为唯一事实来源（历史 CSV + 实时 tqsdk 1 分钟同口径），
-    bar_*（含 bar_60m = 小时数据）随调度低成本刷新。hourly_bar（tqsdk 直拉）的去留
+    使 minute_bar 成为唯一事实来源（历史 CSV + 实时 akshare 1 分钟同口径），
+    bar_*（含 bar_60m = 小时数据）随调度低成本刷新。hourly_bar（akshare 直拉）的去留
     取决于 #5 分叉决策——本作业只负责 bar_* 一侧，互不冲突。
     """
     logger.info("[scheduler] minute_and_bars start")
@@ -1753,7 +1611,7 @@ def _minute_and_bars_job() -> None:
             from app.ingest.minute_collector import MinuteCollector
             from app.ingest.synthesizer import synthesize_bars_incremental
 
-            mc = MinuteCollector(s, prefer="tqsdk")
+            mc = MinuteCollector(s)
             m_stats = mc.collect_all()
             m_ok = sum(1 for r in m_stats if "error" not in r)
             synth_stats = synthesize_bars_incremental(s)
@@ -1920,7 +1778,7 @@ def _adjust_minute_job() -> None:
 def _ensure_hourly_uniq_index() -> None:
     """G5：为 hourly_bar 补 (symbol, trade_datetime, src) 唯一约束（幂等、失败不阻断启动）。
 
-    单表混存 csv/akshare/tqsdk 三 src，靠 src 过滤隔离；若历史已存在同主键重复行，
+    单表混存 csv/akshare 多 src，靠 src 过滤隔离；若历史已存在同主键重复行，
     建索引会失败——此时跳过并告警（重复行需先清洗），不阻断调度启动。
     """
     from sqlalchemy import text

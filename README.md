@@ -8,7 +8,7 @@
 
 1. PG + TimescaleDB 建库（含 6 张业务表 + 3 张超表 + 1 张连续聚合）
 2. akshare 主源接入（日线）
-3. tqsdk 校准（补缺 + 二次比对 + 异常工单）
+3. akshare 数据质量校验（异常工单生成）
 4. 自动（每日 12:00 / 16:00 / 08:00）+ 手动更新
 5. 按 §4.5 模板导入用户本地 FG/SA 历史数据
 
@@ -65,7 +65,7 @@ cd E:\Docker\qhyc
 ```powershell
 # 在工程根目录 E:\Docker\qhyc
 copy .env.example .env
-# 编辑 .env：填写 tqsdk 账号（已预填）/ DB 密码 / API Key 等
+# 编辑 .env：填写 DB 密码 / API Key 等
 ```
 
 ### 2. 一键起停
@@ -119,7 +119,7 @@ docker compose exec api python scripts/ingest_now.py --symbol FG888
 | POST | `/ingest` | 手动触发采集（async_run=true 后台） |
 | POST | `/ingest/symbol/{symbol}` | 单品种采集 |
 | GET  | `/anomalies` | 异常工单列表（status=pending/all） |
-| POST | `/anomalies/{id}/resolve` | 裁决：`accept_tqsdk` 或 `false_positive` |
+| POST | `/anomalies/{id}/resolve` | 裁决：`false_positive`（天勤采纳路径已退役） |
 | GET  | `/calendar/open` | 交易日历查询 |
 | GET  | `/calendar/missing` | 缺失检测 |
 | POST | `/imports/local` | 本地历史数据导入 |
@@ -164,7 +164,7 @@ E:\Docker\qhyc\imports\
 | FG | 1605 行（2020-01-02~2026-08-17） | 1602 行 | 20 次换月 | 21 合约 / 5311 行 | 9076 行 |
 | SA | 1623 行（2019-12-06~2026-08-17） | 1622 行 | 17 次换月 | 18 合约 / 4336 行 | 8260 行 |
 
-注意：`E:\Docker\qhyc\imports` 下还有 `SX`、`TS`、`tqsdk` 等无关目录，导入器只认
+注意：`E:\Docker\qhyc\imports` 下还有 `SX`、`TS` 等无关目录，导入器只认
 `data/` 目录内 `{PROD}_daily.json` / `{PROD}_rolls.csv` 前缀文件，不会误导入。
 
 ## 调度（§4.2）
@@ -173,7 +173,7 @@ E:\Docker\qhyc\imports\
 - `16:00`：日盘收盘后完整入库
 - 次日 `08:00`：含夜盘修正版
 
-每次触发：akshare 拉取 → upsert daily_bar → tqsdk 补缺 → tqsdk 二次比对 → 异常工单。
+每次触发：akshare 拉取 → upsert daily_bar → 异常工单（数据质量校验）。
 任务状态可在 `/tasks` 查看。
 
 ## 资源占用（§9.1）
@@ -184,8 +184,8 @@ E:\Docker\qhyc\imports\
 ## 安全注意
 
 - `.env` 不入库（已加入 .gitignore）
-- tqsdk 账号仅在容器内使用，不写日志、不打印
-- 异常工单裁决接口只允许 `accept_tqsdk` 或 `false_positive`，禁止手改数值（⑰）
+- 凭据仅在容器内使用，不写日志、不打印
+- 异常工单裁决接口只允许 `false_positive`，禁止手改数值（⑰）
 
 ## M2 预测链路（已上线）
 
@@ -215,7 +215,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/predict?symbol=FG888&limit=10'
 - 传导特征 v1（9 个，全部滞后防前视）：sector 动量、sector_excess、上游 lag1/lag5、cost_gap、corr_regime、te_topk——rf/xgb/gpr/lstm 特征集已统一接入
 - 金融期货（IF/IH/IC/IM/国债）默认**不纳入预测**（单品种请求返回 400）
 - 预测响应新增 `drivers` 字段（v1 契约不变，v2 预留）
-- 品种扩至 73（新增 HC/SF/SM + GFEX 的 SI/LC/PS，走 tqsdk 兜底采集）
+- 品种扩至 73（新增 HC/SF/SM + GFEX 的 SI/LC/PS）
 
 ## §16 跨品种传导（M3 动态层已上线）
 

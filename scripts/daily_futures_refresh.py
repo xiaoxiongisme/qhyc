@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """每日期货刷新编排（由 crontab 收盘后调用）：
 
-  ① 采集/更新合约日频价 contract_daily（经 spot_basis 的 dominant/near 合约，sina/tqsdk）
+  ① 采集/更新合约日频价 contract_daily（经 spot_basis 的 dominant/near 合约，sina/天勤）
   ② 由 spot_basis.dominant_contract 派生主力合约映射 main_contract_map（全品种）
 
 两步相互独立：任一步失败不影响另一步，错误记入日志。

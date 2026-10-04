@@ -117,3 +117,5 @@ dce_member_position_rank.csv
 # 本地备份 / 运行日志（含 pg_dump 全备，体积 GB 级，禁止入库）
 # =====================================================
 backups/
+# 本地实验产物(273MB pkl/csv.gz)，勿入库
+docs/_swing_out/

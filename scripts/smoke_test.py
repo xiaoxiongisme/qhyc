@@ -1,6 +1,6 @@
 """
 M1 验收脚本（PRD §12）
-- 不依赖 akshare/tqsdk 网络（在数据未拉取时也可单独验）：
+- 不依赖 akshare 网络（在数据未拉取时也可单独验）：
   1. DB 连接 + TimescaleDB 扩展 + 超表存在
   2. 元数据种子（品种列表）
   3. 本地历史数据导入（§4.5）
@@ -106,7 +106,6 @@ def check_anomaly_roundtrip() -> bool:
             trade_date=date(2024, 1, 2),
             field="close",
             akshare_val=1500.0,
-            tqsdk_val=1510.0,
             diff=0.0066,
             threshold=0.005,
             status="pending",

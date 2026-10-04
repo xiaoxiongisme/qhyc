@@ -95,7 +95,7 @@ def upsert_main_continuous(session: Session, rows: Sequence[dict]) -> int:
 
 
 def _bar_row_is_valid(row: dict) -> bool:
-    """剔除脏行：tqsdk 回填时未填充的槽位会给出 1970-01-01 时间戳 / NaN 价。"""
+    """剔除脏行：天勤回填时未填充的槽位会给出 1970-01-01 时间戳 / NaN 价。"""
     dt = row.get("trade_datetime")
     if dt is None or getattr(dt, "year", 9999) <= 1970:
         return False
@@ -115,7 +115,7 @@ def _bar_row_is_valid(row: dict) -> bool:
 def upsert_hourly_bars(session: Session, rows: Sequence[dict]) -> int:
     """upsert hourly_bar（按主键 (symbol, trade_datetime)），自动分块。
 
-    同一批 rows 内可能含重复主键（tqsdk 回填的未填充槽位大量落在同一时间戳），
+    同一批 rows 内可能含重复主键（天勤回填的未填充槽位大量落在同一时间戳），
     而 `INSERT ... ON CONFLICT DO UPDATE` 不允许同一命令里重复命中同一行
     （psycopg `CardinalityViolation: cannot affect row a second time`）——
     故先按主键去重（后出现的覆盖先出现的），并剔除 1970/NaN 脏行。
