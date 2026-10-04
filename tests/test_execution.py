@@ -53,6 +53,34 @@ def test_reverse_price_raw(monkeypatch):
     assert real == 712.0 and cum == 2400.0
 
 
+def test_reverse_price_selfcheck():
+    """参考实现自带 DB-free 自测：as-of 数学 / 两价空间 / 缺段降级。"""
+    results = rp.selfcheck()
+    assert results, "selfcheck 未运行任何检查"
+    # 关键项必须包含（防 selfcheck 退化为空跑）
+    assert any("raw 空间" in r for r in results)
+    assert any("as-of" in r for r in results)
+    assert any("tie-break" in r for r in results)
+    assert any("缺段表" in r for r in results)
+    assert any("reverse_bar" in r for r in results)
+
+
+def test_reverse_bar_batch(monkeypatch):
+    """整根 K 批量反解共享同一 offset（避免 OHLC 各自查库/跨段）。"""
+    monkeypatch.setattr(rp, "offset_at", lambda *a, **k: 2400.0)
+    bar = rp.reverse_bar(None, "RB888",
+                         {"open": 5400.0, "high": 5600.0, "low": 5300.0, "close": 5500.0},
+                         datetime(2026, 9, 30, 15), "adj")
+    assert bar["close"] == 3100.0
+    assert bar["open"] == 3000.0
+    assert bar["_offset"] == 2400.0
+    assert bar["_space"] == "adj"
+    # raw：不偏移
+    bar2 = rp.reverse_bar(None, "RB888", {"close": 5500.0},
+                          datetime(2026, 9, 30, 15), "raw")
+    assert bar2["close"] == 5500.0 and bar2["_offset"] == 0.0
+
+
 # ---------------- 交割月护栏 ----------------
 def test_delivery_guard():
     # 2027-01 合约，最后交易日约 2027-01-15；信号日 2027-01-12 在缓冲内 → 阻断

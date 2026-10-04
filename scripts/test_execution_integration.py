@@ -18,6 +18,7 @@ from sqlalchemy import text
 from app.core.db import session_scope
 from app.execution.schemas import ReverseRequest
 from app.execution.service import resolve_signal_to_order
+from app.execution import reverse_price as rp
 
 SYMBOLS = ["RB888", "AG888", "AU888", "I888", "FG888", "MA888",
            "SA888", "TA888", "BU888", "HC888"]
@@ -113,6 +114,40 @@ def main():
         log("## C. HTTP 路由冒烟（localhost:8000）")
         for k, v in http_smoke().items():
             log(f"  {k}: {v}")
+        log("")
+
+        log("## D. 参考实现验收（生产库，覆盖新增 reverse_bar + selfcheck）")
+        # D1: reverse_bar 与 reverse_price(close) 在真实库上必须一致
+        try:
+            row = s.execute(text(
+                "SELECT open, high, low, close, trade_datetime FROM hourly_bar "
+                "WHERE symbol='RB888' ORDER BY trade_datetime DESC LIMIT 1")).fetchone()
+            if row:
+                o, h, l, c, dt = (float(row[0]), float(row[1]), float(row[2]),
+                                  float(row[3]), row[4])
+                bar = rp.reverse_bar(s, "RB888",
+                                     {"open": o, "high": h, "low": l, "close": c},
+                                     dt, "raw")
+                rc, off = rp.reverse_price(s, "RB888", c, dt, "raw")
+                assert abs(bar["close"] - rc) < 1e-6, f"bar.close≠reverse_price: {bar['close']} vs {rc}"
+                assert abs(bar["_offset"] - off) < 1e-6, f"bar._offset≠offset: {bar['_offset']} vs {off}"
+                log(f"  D1 reverse_bar✓ RB888 dt={dt} close={c}→real={bar['close']} "
+                    f"(与单点接口一致, offset={bar['_offset']})")
+            else:
+                log("  D1 SKIP: hourly_bar 无 RB888 数据")
+        except Exception as e:  # noqa: BLE001
+            log(f"  D1 EXCEPTION: {type(e).__name__}: {e}")
+
+        # D2: 运行参考实现的 DB-free 自测（验证 as-of 数学/两价空间分支）
+        try:
+            sc = rp.selfcheck()
+            ok_count = sum(1 for x in sc if x.startswith("✓"))
+            fail_count = sum(1 for x in sc if x.startswith("❌"))
+            for line in sc:
+                log(f"    {line}")
+            log(f"  D2 selfcheck: 通过 {ok_count} / 失败 {fail_count}")
+        except Exception as e:  # noqa: BLE001
+            log(f"  D2 EXCEPTION: {type(e).__name__}: {e}")
 
     print("\n".join(L))
 

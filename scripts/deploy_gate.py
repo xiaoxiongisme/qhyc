@@ -130,8 +130,16 @@ def main() -> int:
         n_map = s.execute(text(
             "SELECT count(DISTINCT product) FROM main_contract_map "
             "WHERE trade_date >= :c"), {"c": cutoff}).scalar() or 0
-        add("PASS" if n_map >= 30 else "WARN", "coverage.main_contract_map",
-            f"近 7 天有主力映射的品种数 = {n_map}")
+        latest_map = s.execute(text(
+            "SELECT max(trade_date) FROM main_contract_map")).scalar()
+        fresh = latest_map is not None and latest_map >= cutoff
+        if n_map >= 30 and fresh:
+            add("PASS", "coverage.main_contract_map",
+                f"近 7 天主力映射品种 = {n_map}，最新 {latest_map}")
+        else:
+            add("BLOCK", "coverage.main_contract_map",
+                f"主力映射陈旧：近7天品种={n_map}，最新={latest_map}"
+                f"（须先跑 scripts/refresh_main_contract_map.py）")
         # roll_segment 行数
         n_seg = s.execute(text("SELECT count(*) FROM roll_segment")).scalar() or 0
         add("PASS" if n_seg > 0 else "BLOCK", "coverage.roll_segment",
@@ -150,8 +158,14 @@ def main() -> int:
             ok_t = s.execute(text("SELECT count(*) FROM futures_symbol "
                                   "WHERE (is_main IS TRUE OR symbol LIKE '%888') "
                                   "AND price_tick IS NOT NULL")).scalar() or 0
-            add("PASS" if ok_t == tot else "WARN", "coverage.price_tick",
-                f"price_tick 非空 = {ok_t}/{tot}（缺失不影响导入，仅 tick 校验跳过）")
+            cov_t = (ok_t / tot) if tot else 0.0
+            if ok_t == tot or cov_t >= 0.95:
+                add("PASS", "coverage.price_tick",
+                    f"price_tick 非空 = {ok_t}/{tot} ({cov_t:.0%})")
+            else:
+                add("BLOCK", "coverage.price_tick",
+                    f"price_tick 覆盖率 {ok_t}/{tot} ({cov_t:.0%}) < 95%"
+                    f"（P0-1 必填，须跑 scripts/seed_price_tick.py --apply）")
         else:
             add("WARN", "coverage.price_tick",
                 f"price_tick 列缺失（共 {tot} 个主力/连续品种）；先应用迁移 012")
@@ -190,6 +204,32 @@ def main() -> int:
                 ("【REQUIRE_AUTH=1 视为阻断】" if REQUIRE_AUTH else "（上云前须启用）"))
         else:
             add("WARN", "http.auth", f"GET /symbols -> {sc}（无法判定鉴权态）")
+
+    # ---------- 7. 实盘通道（P0-2，仅 execution.enabled=true 时校验） ----------
+    print("\n[7] P0-2 实盘通道（受 execution.enabled 门禁）")
+    try:
+        from app.core.config import get_settings
+        exec_on = get_settings().execution.enabled
+    except Exception:  # noqa: BLE001
+        exec_on = False
+    if not exec_on:
+        add("PASS", "execution.gated",
+            "execution.enabled=false：P0-2 实盘校验全部跳过（数据层 SOP 不依赖实盘）")
+    else:
+        _need = {
+            "SIMNOW_USER": os.getenv("SIMNOW_USER"),
+            "SIMNOW_PASSWORD": os.getenv("SIMNOW_PASSWORD"),
+            "EXECUTION_ACCOUNT": os.getenv("EXECUTION_ACCOUNT"),
+            "RISK_LIMIT_PER_ORDER": os.getenv("RISK_LIMIT_PER_ORDER"),
+        }
+        missing = [k for k, v in _need.items() if not v]
+        if missing:
+            add("BLOCK", "execution.config",
+                f"实盘开关已开但缺环境变量：{missing}（须先完成 SimNow 接入与风控配置）")
+        else:
+            add("PASS", "execution.config", "实盘环境变量齐备（账户/风控/SimNow）")
+        # 下单链路可达性 / 账户余额 / SimNow 会话存活需在部署环境实测，
+        # 此处仅做配置门禁；端到端连通由人工在 SimNow 仿真环境复核。
 
     # ---------- 汇总 ----------
     print("\n" + BAR)

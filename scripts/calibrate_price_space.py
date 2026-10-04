@@ -54,21 +54,27 @@ def calibrate(session, symbols, trade_date):
             {"p": prod, "d": trade_date}).fetchone()
         underlying = row[0] if row else None
         und_exch = row[1] if row else None
+        # 2026-10-04 修正：真值合约优先 dim_main_contract_inferred（888 当日实际所跟，价格匹配
+        # 反推），回退 main_contract_map.underlying（参考主力，可能≠实际所跟，如 MA888 恒跟近月）。
+        inferred = session.execute(text(
+            "SELECT inferred_symbol FROM dim_main_contract_inferred "
+            "WHERE variety_code=:p AND trade_date <= :d ORDER BY trade_date DESC LIMIT 1"),
+            {"p": prod, "d": trade_date}).scalar()
+        truth = inferred or underlying
         r = None
-        if underlying:
-            from app.core.symbol_code import to_native
-            native = to_native(underlying, und_exch) if und_exch else underlying
-            rr = session.execute(text(
-                "SELECT close FROM contract_daily WHERE symbol=:s AND trade_date <= :d "
-                "ORDER BY trade_date DESC LIMIT 1"), {"s": native, "d": c_dt.date()}).fetchone()
-            r = float(rr[0]) if rr else None
+        if truth:
+            # 2026-10-04 修复：与 validator.fetch_market_price 同源（contract_code_map.observed_native
+            # 字典解析 + 大小写兜底），替代 to_native——后者 CZCE 退化 3 位/SHFE 转小写，
+            # 与 contract_daily 的 4 位大写存储不符，导致此前所有品种 r=None。
+            from app.execution.validator import fetch_market_price
+            r, _gran = fetch_market_price(session, truth, c_dt)
         if c is None or r is None:
-            results.append((s, c, off, underlying, r, None, "数据不足"))
+            results.append((s, c, off, f"{underlying}/true:{truth}", r, None, "数据不足"))
             continue
         raw_dev = abs(c - r) / r
         adj_dev = abs((c - (off or 0)) - r) / r if off is not None else None
         verdict = "raw" if (adj_dev is None or raw_dev <= adj_dev) else "adj"
-        results.append((s, c, off, underlying, r, verdict,
+        results.append((s, c, off, f"{underlying}/true:{truth}", r, verdict,
                         f"c_date={c_dt.date()} raw_dev={raw_dev:.2%} adj_dev={adj_dev:.2%}"))
     return results
 

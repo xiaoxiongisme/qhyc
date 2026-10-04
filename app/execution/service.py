@@ -102,9 +102,9 @@ def resolve_signal_to_order(session: Session, req: ReverseRequest) -> ExecutionO
     if multiplier and order.price:
         order.notional = lots * multiplier * order.price
 
-    # ---- ④ 点位校验（含盘口一致性安全闸，源=contract_daily）----
+    # ---- ④ 点位校验（含盘口一致性安全闸，源=contract_daily，仅 raw 空间生效）----
     if order.price is not None and real_symbol:
-        v_warns, v_blocks = validate(session, real_symbol, order.price, when)
+        v_warns, v_blocks = validate(session, real_symbol, order.price, when, space or "raw")
         order.warnings += v_warns
         order.blocking_reasons += v_blocks
 

@@ -98,13 +98,19 @@ def check_tick(price: float, tick: Optional[float]) -> list[str]:
 
 
 def check_consistency(price: float, market: Optional[float], real_symbol: str,
-                      granularity: Optional[str]) -> tuple[list[str], list[str]]:
+                      granularity: Optional[str],
+                      price_space: str = "raw") -> tuple[list[str], list[str]]:
     """盘口一致性安全闸：偏差 > 硬阈值 → 阻断；> 软阈值 → 告警。
 
     返回 (warnings, blocking_reasons)。
     ⚠️ 2026-10-02 修正：此前 validate 把本函数返回值一律并入 blocks，
     导致软偏差（应仅告警）被误判为阻断。现改为显式返回 (warns, blocks)。
+    ⚠️ 2026-10-04 修正（space-aware）：盘口价源 contract_daily 为 **raw 空间** 日频价。
+    当 entry 处于 adj 空间时，反解价已减 cum_offset，与 raw 盘口不可比 → 跳过阻断
+    （仅记提示）。生产信号走 raw 空间，故不影响实盘；adj 仅用于研究/回测对照。
     """
+    if (price_space or "raw").lower() == "adj":
+        return [f"adj 空间跳过盘口一致性校验（盘口价源 contract_daily 为 raw 空间，不可比）"], []
     if market is None:
         return [], [f"取不到 {real_symbol} 盘口价（contract_daily 无数据），跳过一致性校验（建议人工核对）"]
     dev = abs(price - market) / max(market, 1e-9)
@@ -137,8 +143,12 @@ def check_limit(session: Session, real_symbol: str, price: float, when) -> list[
 
 
 def validate(session: Session, real_symbol: str, price: float,
-             when) -> tuple[list[str], list[str]]:
-    """返回 (warnings, blocking_reasons)。"""
+             when, price_space: str = "raw") -> tuple[list[str], list[str]]:
+    """返回 (warnings, blocking_reasons)。
+
+    price_space：信号价空间（"raw" 默认 / "adj"）。仅 raw 空间执行盘口一致性闸，
+    adj 空间由 check_consistency 内部跳过（盘口价源为 raw 空间，不可比）。
+    """
     warns: list[str] = []
     blocks: list[str] = []
 
@@ -153,7 +163,7 @@ def validate(session: Session, real_symbol: str, price: float,
     warns += check_tick(price, meta["price_tick"])
 
     market, gran = fetch_market_price(session, real_symbol, when)
-    c_warns, c_blocks = check_consistency(price, market, real_symbol, gran)
+    c_warns, c_blocks = check_consistency(price, market, real_symbol, gran, price_space)
     warns += c_warns
     blocks += c_blocks
     warns += check_limit(session, real_symbol, price, when)
