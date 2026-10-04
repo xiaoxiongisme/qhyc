@@ -39,7 +39,7 @@ QHYC 是一个面向国内期货市场的量化预测平台，覆盖从数据采
 | 后端框架 | FastAPI + SQLAlchemy 2.x + APScheduler | Python 3.11 |
 | 前端 | React 18 + Vite（多阶段构建） | 8 页面 |
 | 容器编排 | Docker Compose（4 容器） | Docker 29.1 |
-| 数据源 | akshare + tqsdk + 交易所官网爬取 | — |
+| 数据源 | akshare + 天勤 + 交易所官网爬取 | — |
 | ML 库 | scikit-learn + XGBoost + PyTorch(CPU) + statsmodels + arch + hmmlearn | — |
 
 ### 1.3 规模指标
@@ -125,7 +125,7 @@ pipeline:  image: qhyc:latest  # WB 决策链路
 ```
 
 **影响**：
-- 镜像 3.69GB（含 torch、XGBoost、akshare、tqsdk 等全部依赖），但 pipeline 只需 psycopg2 + httpx
+- 镜像 3.69GB（含 torch、XGBoost、akshare、天勤 等全部依赖），但 pipeline 只需 psycopg2 + httpx
 - 任何一个角色改代码 → 全部重新构建部署
 - scheduler 直接 import app.engine.service / app.ingest.orchestrator，运行时强耦合
 
@@ -409,7 +409,7 @@ app/scheduler/
 ```dockerfile
 # Dockerfile.base    — 公共依赖（fastapi, sqlalchemy, pandas, numpy）
 # Dockerfile.api     — + uvicorn, 前端构建
-# Dockerfile.worker  — + APScheduler, akshare, tqsdk, torch, XGBoost
+# Dockerfile.worker  — + APScheduler, akshare, 天勤, torch, XGBoost
 # Dockerfile.pipeline — 仅 psycopg2, httpx, loguru（最小镜像）
 ```
 

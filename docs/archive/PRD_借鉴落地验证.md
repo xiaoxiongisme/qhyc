@@ -107,7 +107,7 @@
    - 缺失比例统计：`>5%` 报警并切备用源重拉（lh3:176）；
    - 异常值/时间对齐校验（某合约某日成交为 0 但非停板 → 报警）；
    - 换月断层检测复用 `build_continuous` 的 `oi` 主导逻辑，主连 888 vs 指数连 8888 对照区分真实跳空 vs 换月断层。
-2. **备用源**：akshare 主 + tqsdk/东方财富备，获取函数失败自动切换。
+2. **备用源**：akshare 主 + 天勤/东方财富备，获取函数失败自动切换。
 3. **验证**：注入"3 天缺失恰好在大跌段""成交量连续为 0"样本，确认自检报警并切换。
 
 ---
@@ -207,7 +207,7 @@
 
 ### 7.1 系统运行时拓扑（已确认）
 - 生产仓 `E:/Docker/qhyc`，多容器栈：`qhyc-api`、`qhyc-scheduler`（Python 引擎，只读挂载 `./app:/app/app:ro`，**不热重载**）、`qhyc-timescaledb`（PG `localhost:5432/futures`，基本面/研究）、`qhyc-pipeline`（M8 容器化简报，skill 目录只读挂载 + 启动快照）。
-- 行情真源：DolphinDB `localhost:8848`（K 线）。公网源：akshare / tqsdk。
+- 行情真源：DolphinDB `localhost:8848`（K 线）。公网源：akshare / 天勤。
 - **线上引擎单一真源**：`E:/Docker/qhyc/app/strategies/fusion_signal.py`（`walk_fusion_states`，V3.4），与 Qi Analisy skill **逐位一致**——改策略逻辑须**引擎与 skill 两处同步改**。
 
 ### 7.2 统一部署原则（D5）

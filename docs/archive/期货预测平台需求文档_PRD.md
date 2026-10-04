@@ -25,8 +25,8 @@
 
 ```
 [数据源] akshare(主) ──┐
-                      ├─→ [采集/校准层] 入库 + tqsdk 补缺/比对 + 异常工单
-[校准源] tqsdk ────────┘
+                      ├─→ [采集/校准层] 入库 + 天勤 补缺/比对 + 异常工单
+[校准源] 天勤 ────────┘
                           ↓
 [数据层] PostgreSQL + TimescaleDB（超表：日线/小时线/日历/元数据/预测/回测/异常/简报信号）
                           ↓
@@ -49,7 +49,7 @@
 | 前端看板 | React 18 + Vite + TypeScript + Ant Design + ECharts | 已确认直接用 React；K线/热力图用 ECharts |
 | 计算 | scipy / statsmodels / scikit-learn / PyTorch / prophet | 模型实现 |
 | 调度 | APScheduler | 本地常驻定时任务 |
-| 行情源 | akshare（主）+ tqsdk（校准） | 见 §4.1 |
+| 行情源 | akshare（主）+ 天勤（校准） | 见 §4.1 |
 | 部署 | Docker Compose（本地起步） | 资源预估见 §9.1；云端演进见 §14 |
 
 ---
@@ -59,18 +59,18 @@
 ### 4.1 数据源与校准（已确认）
 
 - **主源 akshare**：免费，覆盖 CZCE / SHFE / DCE / CFFEX / INE 全品种日线 + 小时线。
-- **校准源 tqsdk（天勤）**：行情质量高，用于**补缺**与**二次比对**。
-- **tqsdk 账号**：已提供（手机号 + 密码），凭据存项目 `.env`，不写入文档 / git / 日志。
+- **校准源 天勤（天勤）**：行情质量高，用于**补缺**与**二次比对**。
+- **天勤 账号**：已提供（手机号 + 密码），凭据存项目 `.env`，不写入文档 / git / 日志。
 - **入库与校准流程**：
   1. akshare 按品种 + 区间拉取，按主键 `(symbol, trade_date)` upsert 入库。
   2. **缺失检测**：入库结果与交易日历比对，标记 akshare 缺失的交易日/品种。
-  3. **tqsdk 补缺**：对缺失部分调用 tqsdk 拉取补齐入同一张表。
-  4. **二次比对**：全量入库数据再用 tqsdk 拉取同区间比对（重点：收盘价、结算价、成交量）。
+  3. **天勤 补缺**：对缺失部分调用 天勤 拉取补齐入同一张表。
+  4. **二次比对**：全量入库数据再用 天勤 拉取同区间比对（重点：收盘价、结算价、成交量）。
   5. **异常判定**：偏差超阈值（默认：收盘价差异 > 0.5%，或成交量异常缺失/翻倍）→ 生成**异常工单**记录。
-  6. **异常处置**：在日志/看板给出提示，**由人工（用户）判断接受或修正，系统不自动覆盖**。异常工单包含：品种、日期、akshare 值、tqsdk 值、偏差、建议。
-- **兜底**：支持手动导入用户已有本地历史数据（FG/SA 已有成套文件），导入同样走 tqsdk 比对；实际模板见 §4.5。
-- 校准阈值、tqsdk 超时/重试参数放配置文件。
-- 主力连续合约映射表（akshare 代码 ↔ tqsdk `KQ.m@EXCHANGE.CODE`）以配置维护，实现时内置常见品种。
+  6. **异常处置**：在日志/看板给出提示，**由人工（用户）判断接受或修正，系统不自动覆盖**。异常工单包含：品种、日期、akshare 值、天勤 值、偏差、建议。
+- **兜底**：支持手动导入用户已有本地历史数据（FG/SA 已有成套文件），导入同样走 天勤 比对；实际模板见 §4.5。
+- 校准阈值、天勤 超时/重试参数放配置文件。
+- 主力连续合约映射表（akshare 代码 ↔ 天勤 `KQ.m@EXCHANGE.CODE`）以配置维护，实现时内置常见品种。
 
 ### 4.2 更新策略
 
@@ -90,13 +90,13 @@
 
 - `futures_symbol`（品种/合约元数据）：symbol, name, exchange, unit, multiplier, is_main, main_symbol, active
 - `main_contract_map`：trade_date, exchange, product, main_symbol, change_flag（每日主连映射与换月标记）
-- `daily_bar`（日线超表，time=trade_date）：symbol, trade_date, open, high, low, close, settle, volume, amount, oi(持仓), ret_close(收盘价涨跌幅%), ret_settle(结算价涨跌幅%), ret5, ret20, src(akshare/tqsdk/csv)
+- `daily_bar`（日线超表，time=trade_date）：symbol, trade_date, open, high, low, close, settle, volume, amount, oi(持仓), ret_close(收盘价涨跌幅%), ret_settle(结算价涨跌幅%), ret5, ret20, src(akshare/天勤/csv)
 - `main_continuous`（主连表，⑪）：原始主连价 + 平滑主连价（换月比例拼接），模型特征默认取平滑
 - `hourly_bar`（小时线超表，time=trade_datetime，二期）：symbol, trade_datetime, open, high, low, close, volume, oi, ret
 - `trade_calendar`：exchange, trade_date, is_open, sessions(JSON，含日盘/夜盘分段) —— 用于缺失检测
 - `prediction_result`：symbol, target_date, as_of_date, run_id, model_set, direction(涨/跌), direction_prob, ret_point(点估计%), ret_low(P5%), ret_high(P95%), confidence, participated_models(JSON)
 - `backtest_result`：model, window, start, end, dir_acc, mae, rmse, quantile_hit, sample_n
-- `anomaly_ticket`：symbol, trade_date, field, akshare_val, tqsdk_val, diff, threshold, status(待裁决/已接受/已修正/误报), note
+- `anomaly_ticket`：symbol, trade_date, field, akshare_val, 天勤_val, diff, threshold, status(待裁决/已接受/已修正/误报), note
 - `briefing_signal`（对接简报引擎预留）：source, symbol, trade_date, direction, score, note, received_at
 
 `daily_bar` / `hourly_bar` 建为 TimescaleDB 超表；`ret5/ret20` 可由连续聚合或写入时计算。
@@ -105,7 +105,7 @@
 
 本期只落 `daily`，但**表空间与代码逻辑按可平滑扩展小时线设计**，M6 接入时不返工：
 
-- **频率维度参数化**：`freq ∈ {daily, hourly}` 贯穿采集、校准（tqsdk）、特征、模型、预测、回测、API。新增小时线 = 加一张表 + 一个配置，不重写逻辑。
+- **频率维度参数化**：`freq ∈ {daily, hourly}` 贯穿采集、校准（天勤）、特征、模型、预测、回测、API。新增小时线 = 加一张表 + 一个配置，不重写逻辑。
 - **表结构同构**：`hourly_bar` 与 `daily_bar` 同构（仅 `time` 粒度不同），共用 `BarRepository` 抽象层（按 `freq` 路由表名）。
 - **表空间 / 分块规划（TimescaleDB）**：
   - `daily_bar` chunk_time_interval = 3 个月；`hourly_bar` chunk_time_interval = 1 周（小时数据量大）。
@@ -131,7 +131,7 @@
 
 说明：
 - 用户现有数据以**后复权主连 + 换月价差**组织，与 ⑪"平滑主连"设计完全一致，`delta` 即换月拼接价差。
-- `cont_adj_adjusted.csv` 表明 FG / SA 已有**小时级**主连数据——M6 可直接由该模板起步，亦可作为 akshare / tqsdk 之外的第三校验源。
+- `cont_adj_adjusted.csv` 表明 FG / SA 已有**小时级**主连数据——M6 可直接由该模板起步，亦可作为 akshare / 天勤 之外的第三校验源。
 - M1 导入器按上表逐类解析入库，`src` 字段标 `csv`；JSON 字段以实际文件为准（已抽样确认）。
 
 ---
@@ -271,7 +271,7 @@
 
 ## 10. 开发里程碑（分期）
 
-- **M1 数据层**：PG+Timescale 建库（工程根目录 `E:\Docker\qhyc`）、akshare 接入、tqsdk 校准（补缺+比对+异常）、自动/手动更新、按 §4.5 模板导入用户现有 FG/SA 数据
+- **M1 数据层**：PG+Timescale 建库（工程根目录 `E:\Docker\qhyc`）、akshare 接入、天勤 校准（补缺+比对+异常）、自动/手动更新、按 §4.5 模板导入用户现有 FG/SA 数据
 - **M2 特征 + 单模型**：特征工程 + 傅里叶/马尔可夫/ARIMA 跑通预测链路
 - **M3 全模型库 + 集成**：补齐其余模型、Hurst 门控、加权投票
 - **M4 回测引擎**
@@ -287,7 +287,7 @@
 
 | # | 项 | 状态 | 结论 |
 |---|---|---|---|
-| ① | 数据源与校准方案 | ✅ 已定 | akshare 主源 + tqsdk 校准（补缺+二次比对+异常人工裁决） |
+| ① | 数据源与校准方案 | ✅ 已定 | akshare 主源 + 天勤 校准（补缺+二次比对+异常人工裁决） |
 | ② | 自动更新时刻 | ✅ 已定 | 每日三档（决策 7）：早盘前 08:00 / 午盘时 12:30 / 夜盘前 20:00；小时线每小时整点增量刷新 |
 | ③ | 预测标的 | ✅ 已定 | 仅主力连续合约（如 FG888） |
 | ④ | 小时线优先级 | ✅ 已定 | 默认二期 M6；表空间与代码逻辑须向前兼容（见 §4.4） |
@@ -312,10 +312,10 @@
 
 | # | 项 | 结论 |
 |---|---|---|
-| ⑭ | tqsdk 账号 | ✅ 账号已提供，凭据存项目 `.env`（不写入文档/git/日志） |
+| ⑭ | 天勤 账号 | ✅ 账号已提供，凭据存项目 `.env`（不写入文档/git/日志） |
 | ⑮ | 历史回补起始 | ✅ 2015-01-01 起 |
 | ⑯ | CSV 样例 | ✅ 已定稿：按用户现有数据定义模板（5 类文件，见 §4.5），M1 直接实现导入器 |
-| ⑰ | 异常修正边界 | ✅ 只允许"采纳 tqsdk 值"或"标记误报"，不手改数值 |
+| ⑰ | 异常修正边界 | ✅ 只允许"采纳 天勤 值"或"标记误报"，不手改数值 |
 | ⑱ | 深度模型重训频率 | ✅ 轻模型随预测在线更新；LSTM 每周重训一次 |
 | ⑲ | 回测窗口 | ✅ 250 交易日 |
 | ⑳ | 权重更新周期 | ✅ 每月，按近 60 日准确率 |
@@ -327,8 +327,8 @@
 
 ## 12. 验收标准
 
-- 能自动拉取并存储 ≥49 品种日线，akshare 缺失由 tqsdk 补齐，断点可续。
-- 入库数据经 tqsdk 二次比对，异常生成工单并在看板提示，可由人工裁决。
+- 能自动拉取并存储 ≥49 品种日线，akshare 缺失由 天勤 补齐，断点可续。
+- 入库数据经 天勤 二次比对，异常生成工单并在看板提示，可由人工裁决。
 - 给定品种 + 日期，返回结构化预测（方向 + 概率 + 幅度区间 + 置信度），一天三次留痕可追溯。
 - 回测可输出方向准确率等指标。
 - React 看板可浏览预测、回测与数据质量。
@@ -364,10 +364,10 @@
 ### 14.2 数据迁移（一次性初始化）
 1. 本地调试完成后：`pg_dump -Fc`（TimescaleDB 扩展版本云端保持一致）
 2. 云端 `pg_restore`；或按表 `COPY ... TO/FROM CSV`（按 `(symbol, trade_date)` 排序导出）
-3. **迁移校验**：逐表行数比对、各品种 `max(trade_date)` 比对、随机抽 20 条 × tqsdk 复核
+3. **迁移校验**：逐表行数比对、各品种 `max(trade_date)` 比对、随机抽 20 条 × 天勤 复核
 
 ### 14.3 增量数据更新（两条路线，推荐 A）
-- **A（推荐）**：云端自跑同一套定时采集（早盘前 08:00 / 午盘时 12:30 / 夜盘前 20:00，小时线每小时整点 + tqsdk 校准），本地与云端各自独立更新，历史一次性迁移即可，无日常同步负担
+- **A（推荐）**：云端自跑同一套定时采集（早盘前 08:00 / 午盘时 12:30 / 夜盘前 20:00，小时线每小时整点 + 天勤 校准），本地与云端各自独立更新，历史一次性迁移即可，无日常同步负担
 - **B（备选）**：本地更新后按日期区间导出增量 CSV → rsync / 对象存储中转 → 云端导入脚本入库；适合"本地为唯一数据入口"的强管控需求
 - 两条路线均带增量校验：行数 + 最新日期 + 抽样比对
 
@@ -433,7 +433,7 @@
 ### 16.5 数据层新增
 
 - `sector_map`（分类与产业链角色）
-- `sector_index`（大类指数，合成数据，无需 tqsdk 校验）
+- `sector_index`（大类指数，合成数据，无需 天勤 校验）
 - `transmission_weights`（权重快照：method=prior/corr/granger/te, weight, lag_days, updated_at；**每周重算**，与 LSTM 周训对齐）
 
 ### 16.6 看板与对外契约

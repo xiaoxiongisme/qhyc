@@ -25,8 +25,8 @@
 
 ```
 [数据源] akshare(主,含新浪60分) ──┐
-                                  ├─→ [采集/校准层] 入库 + tqsdk 补缺/比对 + 异常工单 + 小时线逐根增量
-[校准源] tqsdk(天勤) ──────────────┘
+                                  ├─→ [采集/校准层] 入库 + 天勤 补缺/比对 + 异常工单 + 小时线逐根增量
+[校准源] 天勤(天勤) ──────────────┘
                                        ↓
 [数据层] PostgreSQL + TimescaleDB
    · 运行时表：daily_bar(日线) / hourly_bar(小时线,逐根增量) / main_continuous(主连)
@@ -53,7 +53,7 @@
 | 前端 | React 18 + Vite + TS + AntD + ECharts |
 | 计算 | scipy / statsmodels / scikit-learn / PyTorch / prophet |
 | 调度 | APScheduler（本地常驻） |
-| 行情源 | akshare（主，含新浪 60 分钟）+ tqsdk（校准/兜底/复权） |
+| 行情源 | akshare（主，含新浪 60 分钟）+ 天勤（校准/兜底/复权） |
 | 推送 | pushplus（微信主通道）+ 通用 webhook（企微/钉钉/飞书 降级） |
 | 部署 | Docker Compose（本地起步，云端演进预留） |
 
@@ -82,7 +82,7 @@
 
 #### 4.3.1 日线更新（路径 A，已接调度）
 - 主源 akshare `futures_main_sina` → `daily_bar`（`src=akshare`，未复权拼接价）。
-- 校准：tqsdk 补缺 + 二次比对，异常开 `anomaly_ticket`（不阻塞主源）。
+- 校准：天勤 补缺 + 二次比对，异常开 `anomaly_ticket`（不阻塞主源）。
 - **频率**：每日三次 cron —— `12:00`(noon) / `16:00`(close) / 次日 `08:00`(night)。
 - 增量幂等：`(symbol, trade_date)` upsert，断点可续；范围 `2015-01-01` 起。
 
@@ -95,12 +95,12 @@
   - (b) **轮询兜底**：每 5 分钟检测"比本品种上次成功更新更晚收盘的 bar"，补采遗漏。
 - **行为**：只抓取「自上次成功更新以来**新收盘**的小时 K」，**逐根 upsert** 到 `hourly_bar`（主键 `(symbol, trade_datetime)` 覆盖）—— 即"完成一根、更新一根"，满足实时性。
 - **定稿守卫**：对最新一根（距现在 < `settle_delay_sec=150s`）等待定稿后重采一次覆盖（复用 `_collect_hourly_settled` 逻辑，防新浪收盘瞬间过渡值致 JD 案例式反手）。
-- **主源/兜底**：akshare 新浪 60 分钟主源；失败/限流 → tqsdk `get_kline_serial` 兜底（全品种**复用单 TqApi 连接**，避免 50× 登录超时）。
-- **断点续传**：记录每个品种最后更新时间；akshare 仅近期窗口、历史回填用 `--prefer tqsdk` 并调大 `data_length`。
+- **主源/兜底**：akshare 新浪 60 分钟主源；失败/限流 → 天勤 `get_kline_serial` 兜底（全品种**复用单 天勤 连接**，避免 50× 登录超时）。
+- **断点续传**：记录每个品种最后更新时间；akshare 仅近期窗口、历史回填用 `--prefer 天勤` 并调大 `data_length`。
 - **与既有机制互补（不冲突）**：保留 ① `16:00` close 档联动的**全量快照** `collect_all()`（对齐/校准用）、② 融合扫描每 15 分钟尾部 800 根**刷新**（容错/补齐）。逐根增量是"准实时主通道"，批量是"兜底校准通道"。
 
 #### 4.3.3 回测底座 `fut_kline` 更新（路径 B/C + 聚合，非 scheduler 自动）
-- `continuous`/`contract`：tqsdk `fetch_fdf.py` → `db_pg.save_bars`。
+- `continuous`/`contract`：天勤 `fetch_fdf.py` → `db_pg.save_bars`。
 - `cont_adj`：`build_continuous.py` + `adjust_fdf.py` 重建（**先 `delete_bars` 清旧再插**，防脏累积）。
 - `daily`（回测用）：由 hourly 聚合（`_build_daily_*.py`，含夜盘归属修正 ≥20:00 归下一交易日）。
 - **触发**：手动 / CI（容器 `RUN_ON_BOOT=0`，避免重启重复全量回补）。数据更新后应重跑路径 B/C + 日线聚合，再跑回测。
@@ -114,7 +114,7 @@
 | 每月 1 日 06:30 | 模型权重月更（近 60 日准确率） |
 
 #### 4.3.5 一致性红线（口径铁律，两边都必须遵守）
-1. **单源消费**：信号引擎按 `fusion.hourly_src`（默认 `akshare`）读 `hourly_bar` 唯一口径；回测按 `(freq,kind,symbol,src)` 单源读 `fut_kline`。**杜绝双源混读**（akshare 结束时刻标 vs tqsdk 起点标会被当成两根喂指标，砍半周期）。
+1. **单源消费**：信号引擎按 `fusion.hourly_src`（默认 `akshare`）读 `hourly_bar` 唯一口径；回测按 `(freq,kind,symbol,src)` 单源读 `fut_kline`。**杜绝双源混读**（akshare 结束时刻标 vs 天勤 起点标会被当成两根喂指标，砍半周期）。
 2. **剔除未收盘 K**：`drop_forming_bars` 丢弃 `now < dt` 的正在形成 K。
 3. **定稿守卫**：`drop_unsettled` 剔除收盘距现在不足 `settle_delay_sec` 秒的最新一根。
 4. **复权唯一权威**：回测复权价只取 `fut_kline.cont_adj`；`daily_bar`/`hourly_bar` 的 akshare 主连**未复权**。
@@ -300,10 +300,10 @@
 ### 8.3 四维测试矩阵（鲁棒性）
 | 维度 | 取值 |
 |---|---|
-| ① 数据源 `src` | tqsdk / akshare / csv |
+| ① 数据源 `src` | 天勤 / akshare / csv |
 | ② 容量 `max_pos` | 1 / 2 / 3 / 5 仓 |
 | ③ 成本 `cost_bp` | 5 / 10 / 20 / 30 / 50 bp |
-| ④ 时段权重 | 不加权(p=1) / 加权(tqsdk 分时段期望) |
+| ④ 时段权重 | 不加权(p=1) / 加权(天勤 分时段期望) |
 交叉组合最多 120 组，UI 可勾选批量跑。
 
 ### 8.4 可调参数面板（手动调参）

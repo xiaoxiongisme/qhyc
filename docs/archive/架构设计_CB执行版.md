@@ -124,7 +124,7 @@ portfolio_brake:
 data_selfcheck:
   enabled: false           # 默认关闭
   missing_pct_alarm: 0.05  # 单合约单日缺失>5% 报警
-  failover_source: tqsdk   # 主 akshare 失败时切换
+  failover_source: 天勤   # 主 akshare 失败时切换
 ```
 
 > 硬约束：任一 `weights` 项 `> max_weight(0.3)` 或全因子 `max_weight` 之和 > `max_weight_registry_sum(1.0)` → `validate_max_weight` 启动即失败。
