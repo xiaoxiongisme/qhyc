@@ -37,7 +37,10 @@ def main() -> None:
         never = []
         for vc in vs:
             hits, ok = [], False
-            for mm in ("10", "01", "05", "12", "11", "09"):
+            # ⚠ 必须包含 06 月：PD/PT(丙烯/PTA) 的档位只对 2606 合约生效，
+            #    早期版本只测 01/05/09/10/11/12，误报为「从未命中档位」（假阳性）。
+            for mm in ("10", "01", "05", "12", "11", "09", "06", "02", "03", "04",
+                       "07", "08"):
                 try:
                     tc = fee_per_lot(vc + "888", "OPEN", contract=_code(vc, mm), on_date=D)
                     hits.append("%s=%s/%s" % (mm, tc.scope_kind[:4], tc.fee_value))
