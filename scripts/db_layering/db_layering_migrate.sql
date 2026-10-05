@@ -59,8 +59,11 @@ INSERT INTO public.layer_migration_map (tab, target, layer, renamed_from) VALUES
   ('macro_china','l0_raw','L0',NULL),
   ('contract_daily','l0_raw','L0',NULL),
   ('dim_variety_tick_history','l0_raw','L0',NULL),
-  -- hourly_bar 特殊处理：改名隔离，避免与 bar_60m(小时线)混淆
-  ('hourly_bar_akshare_deprecated','l0_raw','L0','hourly_bar'),
+  -- hourly_bar：**不再特殊处理**（R1/031 改名后已是普通分层表）。
+  -- 原名 hourly_bar_akshare_deprecated 是 G4 隔离时的临时名，但 G9 退役
+  -- fut_kline.continuous 后它成为小时线主连唯一存储，"deprecated" 后缀属误导性命名，
+  -- 已在 031 改回 hourly_bar；此处按普通表走 4b 通用循环 + Phase 7 通用 shim。
+  ('hourly_bar','l0_raw','L0',NULL),
   -- L1 归一化行情 (l1_mkt)
   ('bar_5m','l1_mkt','L1',NULL),
   ('bar_15m','l1_mkt','L1',NULL),
@@ -123,38 +126,18 @@ BEGIN
 END$$;
 
 -- ====================== Phase 4: 迁表（幂等 + 异常捕获） ====================
--- 4a. hourly_bar 改名隔离（先改名再迁，避免与 bar_60m 歧义）
---
--- 幂等要点（2026-10-05 修复）：原实现只按 (nspname='public' AND relname='hourly_bar')
--- 判存在，**未过滤 relkind**。二次执行时 public.hourly_bar 已是 Phase 7 建的 VIEW，
--- IF EXISTS 仍为真 → ALTER TABLE 抛 42809 "is not a table"；而本块**无 EXCEPTION 兜底**
--- （对比下方 4b 通用循环有），导致整个 migrate.sql 中断、Phase 4b/5/6/7 全部不执行，
--- 与 db_layering_handoff.md 的"幂等"承诺不符，且**使回滚路径真实断点**。
--- 修法：① 加 relkind IN ('r','p') 只匹配真实表；② 包 EXCEPTION 写 migrate_log 不中断。
---
--- ★ migrate_log 必须**先于 4a 建表**：4a 现在要写日志，而它在 EXCEPTION 块内 ——
--- 若表不存在，INSERT 失败会把**同块内已执行的 ALTER TABLE 一起回滚**，隔离静默不生效。
+-- migrate_log 建表（放在最前：后续所有阶段都要写它，且 EXCEPTION 块内 INSERT
+-- 失败会把**同块已执行的 DDL 一起回滚**，故必须保证表先存在）。
 CREATE TABLE IF NOT EXISTS public.migrate_log (ts timestamptz DEFAULT now(), tab text, action text, detail text);
 
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             WHERE n.nspname='public' AND c.relname='hourly_bar'
-               AND c.relkind IN ('r','p')) THEN
-    EXECUTE 'ALTER TABLE public.hourly_bar RENAME TO hourly_bar_akshare_deprecated';
-    EXECUTE 'ALTER TABLE public.hourly_bar_akshare_deprecated SET SCHEMA l0_raw';
-    INSERT INTO public.migrate_log(tab,action,detail)
-      VALUES ('hourly_bar','QUARANTINE','-> l0_raw.hourly_bar_akshare_deprecated');
-    RAISE NOTICE 'hourly_bar -> l0_raw.hourly_bar_akshare_deprecated (quarantined)';
-  ELSE
-    INSERT INTO public.migrate_log(tab,action,detail)
-      VALUES ('hourly_bar','SKIP','not a table in public / already quarantined');
-  END IF;
-EXCEPTION WHEN others THEN
-  INSERT INTO public.migrate_log(tab,action,detail)
-    VALUES ('hourly_bar','ERROR', SQLERRM);
-  RAISE WARNING 'hourly_bar 隔离失败（不中断后续阶段）: %', SQLERRM;
-END$$;
+-- 4a 已删除（原 hourly_bar 改名隔离块）。
+-- 沿革：原实现把 public.hourly_bar 表改名隔离为 hourly_bar_akshare_deprecated 再迁 l0_raw。
+--   ① 2026-10-05 修过它的幂等破口：存在性判断未过滤 relkind，二次执行时
+--      public.hourly_bar 已是 VIEW → ALTER TABLE 抛 42809；且该块无 EXCEPTION 兜底，
+--      会中断整个脚本（Phase 4b/5/6/7 全不执行），是回滚路径的真实断点。
+--   ② 2026-10-06 (R1/031) 该表已改回 hourly_bar，与其他分层表**完全同构**，
+--      由下方 4b 通用循环（按 layer_migration_map, renamed_from IS NULL）统一处理，
+--      特殊分支随之删除。隔离语义已不存在，无需保留。
 
 -- 4b. 通用迁表循环：仅当表仍在 public 时迁移；压缩超表直接 SET SCHEMA（已实测可行）
 DO $$
@@ -272,7 +255,8 @@ BEGIN
   END LOOP;
   -- hourly_bar 兼容 shim：指向被隔离的原始表（行为不变），强制新代码改用 access.v_bar_60m_main
   BEGIN
-    EXECUTE 'CREATE OR REPLACE VIEW public.hourly_bar AS SELECT * FROM l0_raw.hourly_bar_akshare_deprecated';
+    -- R1/031 改名后指向 l0_raw.hourly_bar（原名 hourly_bar_akshare_deprecated 已废弃）
+    EXECUTE 'CREATE OR REPLACE VIEW public.hourly_bar AS SELECT * FROM l0_raw.hourly_bar';
   EXCEPTION WHEN others THEN
     INSERT INTO public.migrate_log(tab,action,detail) VALUES ('hourly_bar','SHIM_ERR', SQLERRM);
   END;

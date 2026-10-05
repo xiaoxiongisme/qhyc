@@ -151,7 +151,11 @@ GRANT SELECT ON access.v_contract_minute TO app_read;
 
 - [ ] `app_read` 能 `SELECT access.*` 全部视图，**不能** `SELECT l0_raw.*`（应报 permission denied）。
 - [ ] `app_read` 能查 `access.v_bar_60m_main` 且行数 ≈ `l1_mkt.bar_60m` 全量（源/视图零丢失）。
-- [ ] `public` 下原表名消失；`hourly_bar` 仅指向 `l0_raw.hourly_bar_akshare_deprecated`（兼容 shim），新代码强制用 `access.v_bar_60m_main`。
+- [x] `public` 下原表名消失；`hourly_bar` 仅指向 `l0_raw.hourly_bar`（兼容 shim），新代码强制用 `access.v_bar_60m_main`。
+      （2026-10-06 R1/031：该表已由 `hourly_bar_akshare_deprecated` 改回 `hourly_bar`——
+      它是 G9 退役 continuous 后**小时线主连的唯一存储**，原名中的 `akshare_deprecated`
+      后缀属误导性命名，死资产审计中差点据此误删。改名后与其他分层表完全同构，
+      Phase 4a 的"隔离改名"特殊分支已删除。）
 - [ ] `etl_ingest`/`l1_builder`/`l2_builder`/`ref_maintainer`/`app_write` 各自只能改本层，互不越权。
 - [ ] 迁移后无孤儿后端（`pg_stat_activity` 干净）。
 - [ ] `pg_dump` 备份文件存在且可列举。
