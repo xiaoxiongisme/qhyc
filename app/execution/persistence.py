@@ -243,6 +243,23 @@ def get_position(
         return dict(row) if row else None
 
 
+def mark_submit_attempt(order_id: int) -> None:
+    """记录一次**已发出但未确认**的提交尝试（超时路径）。
+
+    用于机械阻断「同一 NEW 订单被二次提交」——幂等键只护落库，不护提交；
+    超时后订单仍为 NEW，若无此标记则再次 submit 会**真的再下一次单**。
+    复用 ``retry_count``（DDL 030 已有列，不新增 schema）。
+    """
+    with session_scope() as s:
+        s.execute(
+            text(
+                "UPDATE execution_order SET retry_count = retry_count + 1, updated_at = now() "
+                "WHERE id = :id"
+            ),
+            {"id": order_id},
+        )
+
+
 def record_health(channel: str, *, healthy: bool, latency_ms: int | None = None,
                   detail: str | None = None) -> None:
     """通道健康/延迟（monitor.py 写入，供告警）。"""

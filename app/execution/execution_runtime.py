@@ -40,6 +40,13 @@ def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[s
         # 幂等保护：非 NEW 不再提交（防重复下单的第二道闸）
         return {"state": "SKIPPED", "order_id": order_id,
                 "reason": f"status={order['status']}"}
+    if int(order.get("retry_count") or 0) > 0:
+        # ★防重复下单的第三道闸：状态仍是 NEW，但**已发出过一次且未确认**（超时）。
+        #   幂等键只护「落库」不护「提交」——若无此闸，再次 submit 会真的再下一次单。
+        #   正确处置是走 reconcile_order 查单澄清，而非重下。
+        return {"state": "SKIPPED", "order_id": order_id,
+                "reason": f"已提交过未确认(retry_count={order['retry_count']})，"
+                          f"禁止重试 submit，请走 reconcile_order 查单"}
 
     body = payload or {
         "real_symbol": order["real_symbol"],
@@ -60,7 +67,9 @@ def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[s
         persistence.update_status(order_id, "REJECTED",
                                   error=resp.get("error", "网关拒绝"))
     elif state == "TIMEOUT_UNKNOWN":
-        # 关键：**不重试**、不改成 SENT（未确认送达），留 NEW 交由 recover_on_boot 查单
+        # 关键：**不重试**、不改成 SENT（未确认送达），留 NEW 交由 recover_on_boot 查单；
+        # 同时打上「已尝试」标记，机械阻断二次提交（防重复下单第三道闸）。
+        persistence.mark_submit_attempt(order_id)
         logger.warning(
             f"[exec] 订单 {order_id} 提交超时（TIMEOUT_UNKNOWN），留 NEW 待查单，**禁止重试 submit**"
         )

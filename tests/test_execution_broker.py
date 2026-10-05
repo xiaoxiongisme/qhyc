@@ -120,7 +120,7 @@ def test_b2_ack_fill_position_rolls():
     assert row["status"] == "SENT" and row["broker_order_id"]
 
     st = execution_runtime.reconcile_order(oid)
-    assert st["state"] == "OK" and st["mapped"] == "FILLED"
+    assert st["state"] == "FILLED" and st["mapped"] == "FILLED"
     assert persistence.get_order(oid)["status"] == "FILLED"
 
     position_manager.apply_fill(real_symbol=_real, action="OPEN", direction="BUY",
