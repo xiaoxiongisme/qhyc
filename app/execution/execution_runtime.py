@@ -68,7 +68,12 @@ def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[s
 
 
 def reconcile_order(order_id: int) -> dict[str, Any]:
-    """按 broker_order_id 查单并同步库内状态（超时澄清 / 轮询用）。"""
+    """按 broker_order_id 查单并同步库内状态（超时澄清 / 轮询用）。
+
+    ⚠ 回执里有两个「状态」：``state`` 是**回执信封**（OK / NOT_FOUND / REJECT…），
+    **订单状态**在 ``status`` 字段（FILLED/PARTIAL/…）。曾误用 ``state`` 做映射，
+    导致 mapped 恒为 None、状态机卡在 SENT——由 B2 用例抓出。
+    """
     order = persistence.get_order(order_id)
     if order is None:
         raise ValueError(f"[fail-loud] 订单不存在 id={order_id}")
@@ -77,11 +82,27 @@ def reconcile_order(order_id: int) -> dict[str, Any]:
         return {"state": "NO_BROKER_ID", "order_id": order_id,
                 "detail": "无 broker_order_id，从未确认送达"}
 
-    st = get_broker().query_order(bid)
-    mapped = _QUERY_STATE_MAP.get(st.get("state", ""))
-    if mapped and mapped != order["status"]:
+    resp = get_broker().query_order(bid)
+
+    if str(resp.get("state", "")).upper() == "NOT_FOUND":
+        # 网关查无此单：可能从未送达或已过期。判 ERROR 留痕，**绝不静默重下**。
+        persistence.update_status(
+            order_id, "ERROR",
+            error=f"网关查无此单 broker_order_id={bid}，无法确认送达，需人工核对（未自动重下）")
+        return {"state": "NOT_FOUND", "order_id": order_id, "mapped": "ERROR"}
+
+    raw = str(resp.get("status") or "").upper()
+    if not raw:
+        # 无订单状态字段 → 不猜、不改库
+        return {"state": resp.get("state"), "order_id": order_id,
+                "detail": "回执无 status 字段，无法判定（拒绝猜测）"}
+
+    mapped = _QUERY_STATE_MAP.get(raw)
+    if not mapped:
+        return {"state": raw, "order_id": order_id, "detail": f"未知订单状态 {raw}，未改库"}
+    if mapped != order["status"]:
         persistence.update_status(order_id, mapped, broker_order_id=bid)
-    return {"state": st.get("state"), "order_id": order_id, "mapped": mapped}
+    return {"state": raw, "order_id": order_id, "mapped": mapped}
 
 
 def recover_on_boot() -> int:

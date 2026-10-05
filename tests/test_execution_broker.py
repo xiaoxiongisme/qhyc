@@ -49,6 +49,18 @@ def _mk(signal: str, *, action="OPEN", direction="BUY", lots=1, price=3112.0, **
     return base
 
 
+def _body(sig: str, **extra) -> dict:
+    """构造下发给网关的 body（submit_order 的 payload 覆盖路径）。
+
+    落库 dict 里的额外键不会被 submit_order 转发，故仿真钩子须经此路径传入。
+    """
+    o = _mk(sig)
+    b = {k: o[k] for k in ("real_symbol", "direction", "action", "price", "lots",
+                           "channel", "account")}
+    b.update(extra)
+    return b
+
+
 @pytest.fixture(autouse=True)
 def _clean():
     sim_broker.reset()
@@ -123,8 +135,8 @@ def test_b2_ack_fill_position_rolls():
 def test_b3_reject_records_last_error():
     """B3：网关拒单 → status=REJECTED 且 last_error 非空（fail-loud）。"""
     sig = f"TEST-B3-{uuid.uuid4().hex[:8]}"
-    oid = persistence.save_order(_mk(sig, _simulate="reject"))
-    res = execution_runtime.submit_order(oid)
+    oid = persistence.save_order(_mk(sig))
+    res = execution_runtime.submit_order(oid, payload=_body(sig, _simulate="reject"))
     assert res["state"] == "REJECT"
     row = persistence.get_order(oid)
     assert row["status"] == "REJECTED" and row["last_error"]
@@ -134,8 +146,8 @@ def test_b3_reject_records_last_error():
 def test_b4_timeout_unknown_no_retry_then_query():
     """B4：提交超时 → 留 NEW（未确认送达）且**不重试**；查单后判定终态。"""
     sig = f"TEST-B4-{uuid.uuid4().hex[:8]}"
-    oid = persistence.save_order(_mk(sig, _simulate="timeout"))
-    res = execution_runtime.submit_order(oid)
+    oid = persistence.save_order(_mk(sig))
+    res = execution_runtime.submit_order(oid, payload=_body(sig, _simulate="timeout"))
     assert res["state"] == "TIMEOUT_UNKNOWN"
     assert persistence.get_order(oid)["status"] == "NEW"      # 没改成 SENT
     # 再调一次 submit 必须被幂等保护挡下（不产生第二单）
@@ -238,4 +250,4 @@ def test_b10_channel_health_persisted():
     with session_scope() as s:
         n = s.execute(text("SELECT count(*) FROM execution_channel_health")).scalar()
     assert int(n) >= 1
-    assert get_broker().__name__ == "sim_broker"
+    assert get_broker().__name__.endswith("sim_broker")
