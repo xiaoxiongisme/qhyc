@@ -23,6 +23,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Windows 控制台默认 GBK，输出 emoji 会 UnicodeEncodeError 导致脚本中途崩溃
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # 受管行情/复权表（必须经 barstore.load / caliber 路由）
 GUARDED_TABLES = [
     r"fut_kline", r"minute_bar", r"minute_bar_adj", r"minute_bar_stage",
@@ -43,6 +50,15 @@ EXCLUDE_FILE_PREFIX = ("_",)
 
 TABLE_RE = re.compile(
     r"\b(" + "|".join(GUARDED_TABLES) + r")\b", re.IGNORECASE)
+
+# --- 规则 2：information_schema 查询必须限定 table_schema ---------------------
+# G4 分层后同名对象在两个 schema 并存（如 l1_mkt.bar_60m 表 + public.bar_60m 兼容视图），
+# 而 information_schema 的唯一键是 (table_catalog, table_schema, table_name, column_name)。
+# 只按 table_name 过滤会让每列命中 2 行：探测函数误判、列名列表带重复项。
+IS_QUERY_RE = re.compile(r"information_schema\s*\.\s*(columns|tables)", re.IGNORECASE)
+IS_SCHEMA_GUARD_RE = re.compile(r"table_schema\s*=", re.IGNORECASE)
+# SQL 常以三引号或普通串跨行书写，故按 ±4 行窗口判定是否已限定
+IS_WINDOW = 4
 
 
 def iter_py_files():
@@ -69,6 +85,7 @@ def main() -> int:
     args = ap.parse_args()
 
     hits: dict[Path, list[tuple[int, str, str]]] = {}
+    is_hits: dict[Path, list[tuple[int, str]]] = {}
     for p in iter_py_files():
         try:
             lines = p.read_text(encoding="utf-8").splitlines()
@@ -79,6 +96,11 @@ def main() -> int:
             if m:
                 tbl = m.group(1).lower()
                 hits.setdefault(p, []).append((i, tbl, ln.strip()))
+            if IS_QUERY_RE.search(ln):
+                lo = max(0, i - 1 - IS_WINDOW)
+                window = "\n".join(lines[lo:i + IS_WINDOW])
+                if not IS_SCHEMA_GUARD_RE.search(window):
+                    is_hits.setdefault(p, []).append((i, ln.strip()))
 
     total = sum(len(v) for v in hits.values())
     print(f"== 行情表裸引用扫描（网关外）==")
@@ -100,7 +122,23 @@ def main() -> int:
     print("整改建议：上述裸引用统一改为 "
           "`from app.data import barstore; barstore.load(symbol, freq, caliber, ...)`，"
           "symbol 只传品种代码（如 'FG'）或合约码，888/8888/KQ.m@ 转换由 dim_symbol 完成。")
-    return 0
+
+    # ---- 规则 2 报告 ----
+    is_total = sum(len(v) for v in is_hits.values())
+    print(f"\n== information_schema 查询未限定 table_schema ==")
+    print(f"发现: {is_total} 处 / {len(is_hits)} 个文件")
+    if is_hits:
+        print("原因: G4 分层后同名对象跨 schema 并存，"
+              "只按 table_name 过滤会每列命中 2 行。\n"
+              "修法: 补 `table_schema='public'`（app 走兼容视图）或按需指定分层 schema。\n")
+        for p in sorted(is_hits):
+            print(f"📄 {p.relative_to(ROOT)}  ({len(is_hits[p])} 处)")
+            for i, ln in is_hits[p]:
+                print(f"   L{i:<5} {ln[:120]}")
+    else:
+        print("✅ 全部已限定 table_schema。")
+
+    return 0 if not is_hits else 2
 
 
 if __name__ == "__main__":

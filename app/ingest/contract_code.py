@@ -97,17 +97,26 @@ NORMALIZE_TARGETS: list[dict[str, Any]] = [
 # 工具
 # ===========================================================================
 def _table_exists(conn, name: str) -> bool:
+    """表/视图是否存在。必须限定 ``table_schema='public'``（同名对象跨 schema 并存）。"""
     row = conn.execute(
-        text("SELECT 1 FROM information_schema.tables WHERE table_name = :t"),
+        text("SELECT 1 FROM information_schema.tables "
+             "WHERE table_schema='public' AND table_name = :t LIMIT 1"),
         {"t": name},
     ).first()
     return row is not None
 
 
 def _column_exists(conn, table: str, col: str) -> bool:
+    """列是否存在。
+
+    必须限定 ``table_schema='public'``：G4 分层后同名对象在两个 schema 并存
+    （如 ``l3_ref.contract_code_map`` 表 + ``public.contract_code_map`` 兼容视图），
+    只按 ``table_name`` 过滤会命中 2 行 —— 底层表新增列时会被误判成视图也有该列。
+    """
     row = conn.execute(
         text("""SELECT 1 FROM information_schema.columns
-                WHERE table_name = :t AND column_name = :c"""),
+                WHERE table_schema = 'public'
+                  AND table_name = :t AND column_name = :c LIMIT 1"""),
         {"t": table, "c": col},
     ).first()
     return row is not None

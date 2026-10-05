@@ -26,7 +26,8 @@ V1V6_FACTORS = ("f_vol_ratio", "f_vol_z", "f_voldiv_divergence", "f_atr_pctile")
 
 def _table_exists(s, name: str) -> bool:
     return bool(s.execute(text(
-        "SELECT 1 FROM information_schema.tables WHERE table_name=:t"
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema='public' AND table_name=:t LIMIT 1"
     ), {"t": name}).scalar())
 
 

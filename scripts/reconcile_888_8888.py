@@ -26,7 +26,8 @@ BAR = "=" * 72
 
 def _has(s, table: str) -> bool:
     return bool(s.execute(text(
-        "SELECT 1 FROM information_schema.tables WHERE table_name=:t"
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema='public' AND table_name=:t LIMIT 1"
     ), {"t": table}).scalar())
 
 

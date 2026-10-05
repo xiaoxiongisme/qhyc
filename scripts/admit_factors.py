@@ -280,7 +280,8 @@ def _has_updated_at(conn) -> bool:
     try:
         return bool(conn.execute(text("""
             SELECT 1 FROM information_schema.columns
-             WHERE table_name='factor_registry' AND column_name='updated_at'
+             WHERE table_schema='public' AND table_name='factor_registry'
+               AND column_name='updated_at' LIMIT 1
         """)).scalar())
     except Exception:  # noqa: BLE001
         return False

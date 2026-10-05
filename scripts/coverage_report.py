@@ -57,8 +57,9 @@ def main() -> int:
     for tbl in ["spot_basis", "member_position_rank", "warehouse_receipt", "roll_yield"]:
         try:
             cols = [r[0] for r in _q(eng,
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name=:t AND column_name IN ('src','version','created_at')", {"t": tbl})]
+                "SELECT DISTINCT column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name=:t "
+                "AND column_name IN ('src','version','created_at')", {"t": tbl})]
             ok = {"src", "version", "created_at"}.issubset(set(cols))
             print(f"     {tbl:24s} 命中列={sorted(cols)} -> {'PASS' if ok else 'FAIL'}")
         except Exception as e:  # noqa: BLE001

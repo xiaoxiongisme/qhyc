@@ -72,7 +72,7 @@ def main() -> int:
     with session_scope() as s:
         exists = s.execute(text(
             "SELECT count(*) FROM information_schema.tables "
-            "WHERE table_name='dim_trading_cost'")).scalar()
+            "WHERE table_schema='public' AND table_name='dim_trading_cost'")).scalar()
         if not exists:
             print("✗ dim_trading_cost 不存在，请先应用 migrations/013_trading_cost_dict.sql")
             return 1

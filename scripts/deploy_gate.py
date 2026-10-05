@@ -119,15 +119,19 @@ def main() -> int:
     # ---------- 2. 关键表/列 ----------
     print("\n[2] 关键表与列（PRD §6 / P0-1 数据依赖）")
     with session_scope() as s:
+        # 必须限定 table_schema='public'：G4 分层后同名对象在两个 schema 并存
+        # （如 l3_ref.main_contract_map 表 + public.main_contract_map 兼容视图）。
+        # 不限定时底层表存在即判过 —— 闸门会把"分层表在、app 实际读的视图不在"误判为 PASS。
         def tbl_exists(t):
             return s.execute(text(
                 "SELECT 1 FROM information_schema.tables "
-                "WHERE table_name=:t LIMIT 1"), {"t": t}).first() is not None
+                "WHERE table_schema='public' AND table_name=:t LIMIT 1"),
+                {"t": t}).first() is not None
 
         def col_exists(t, c):
             return s.execute(text(
                 "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name=:t AND column_name=:c LIMIT 1"),
+                "WHERE table_schema='public' AND table_name=:t AND column_name=:c LIMIT 1"),
                 {"t": t, "c": c}).first() is not None
 
         for t in ("futures_symbol", "main_contract_map", "roll_segment"):

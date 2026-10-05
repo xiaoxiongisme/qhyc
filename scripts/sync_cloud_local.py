@@ -70,12 +70,25 @@ def add_months(d, n):
 
 
 def get_cols(cur, table):
-    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name=%s ORDER BY ordinal_position", (table,))
+    """列名列表。
+
+    必须限定 ``table_schema='public'``：G4 分层后同名对象在两个 schema 并存
+    （如 ``l0_raw.daily_bar`` 表 + ``public.daily_bar`` 兼容视图），只按
+    ``table_name`` 过滤会让**每列返回 2 行**，本函数进而返回带重复项的列名列表，
+    被用来拼 INSERT/SELECT 时会产生重复列。另加 DISTINCT 兜底。
+    """
+    cur.execute(
+        "SELECT DISTINCT column_name FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name=%s ORDER BY column_name",
+        (table,))
     return [r[0] for r in cur.fetchall()]
 
 
 def detect_time_col(cur, table):
-    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name=%s ORDER BY ordinal_position", (table,))
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position",
+        (table,))
     cols = [r[0] for r in cur.fetchall()]
     return next((c for c in cols if c in TIME_CANDIDATES), None)
 

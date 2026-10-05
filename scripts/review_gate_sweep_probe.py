@@ -19,7 +19,8 @@ with session_scope() as s:
     cols = pd.read_sql(
         text(
             "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_name='backtest_detail' ORDER BY ordinal_position"
+            "WHERE table_schema='public' AND table_name='backtest_detail' "
+            "ORDER BY column_name"
         ),
         s.get_bind(),
     )

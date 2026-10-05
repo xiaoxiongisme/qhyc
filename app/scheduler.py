@@ -1577,7 +1577,12 @@ def _rank_job() -> None:
         settings = get_settings()
         cfg = settings.yaml.rank_position
         if not cfg.enabled:
-            logger.info("[scheduler] rank_position disabled, skip")
+            # ★ 不得静默 skip：采集类作业被关闭会导致数据断供，而下游
+            # pipeline readiness 依赖 member_position_rank 新鲜度（曾因此恒 False）。
+            logger.warning(
+                "[scheduler] rank_position 已被配置关闭（rank_position.enabled=false），"
+                "本次跳过采集 —— member_position_rank 将逐渐滞后并拖垮 pipeline readiness；"
+                "若非有意停采请检查 config/cloud.yaml 与 app/core/config.py 的默认值")
             return
         from app.ingest import rank_position as RP
         summary = RP.run(exchanges=cfg.exchanges)
@@ -1639,6 +1644,12 @@ def _inventory_job() -> None:
         from app.ingest import inventory as INV
 
         settings = get_settings()
+        if not settings.inventory_config.enabled:
+            # 采集类作业关闭必须告警：静默 skip 会让 inventory 数据断供（曾发生同类事故）
+            logger.warning(
+                "[scheduler] inventory 已被配置关闭（inventory.enabled=false），本次跳过采集；"
+                "若非有意停采请检查 config/cloud.yaml 与 app/core/config.py 的默认值")
+            return
         products = [spec.product for spec in settings.main_contracts]
         with session_scope() as s:
             repo = TaskRepository(s)
@@ -1666,6 +1677,13 @@ def _spot_basis_job() -> None:
         from app.ingest import spot_basis as SB
 
         settings = get_settings()
+        if not settings.spot_basis_config.enabled:
+            # 同 inventory：采集类作业关闭必须告警，不得静默 skip
+            logger.warning(
+                "[scheduler] spot_basis 已被配置关闭（spot_basis.enabled=false），"
+                "本次跳过采集；pipeline readiness 依赖 spot_basis 新鲜度，"
+                "若非有意停采请检查 config/cloud.yaml 与 app/core/config.py 的默认值")
+            return
         end = _dt.date.today()
         start = end - _dt.timedelta(days=settings.spot_basis_config.window_days)
         with session_scope() as s:

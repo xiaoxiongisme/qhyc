@@ -190,8 +190,12 @@ class SchedulerConfig(BaseModel):
 
 
 class InventoryConfig(BaseModel):
-    """库存 / 仓单自动采集（决策 2）。数据源 akshare futures_inventory_em。"""
-    enabled: bool = False
+    """库存 / 仓单自动采集（决策 2）。数据源 akshare futures_inventory_em。
+
+    ★ enabled 默认 True（2026-10-05）：这是**采集类**开关，默认 False 等于"静默停采"。
+    停采必须是显式动作，故默认开启；作业在 enabled=False 时会打 WARNING 而非静默 skip。
+    """
+    enabled: bool = True
     freq: str = "weekly"           # weekly / daily
     run_day: int = 5               # 周频：周几（0=周一 … 6=周日）
     run_hour: int = 17
@@ -199,8 +203,11 @@ class InventoryConfig(BaseModel):
 
 
 class SpotBasisConfig(BaseModel):
-    """基差 / 现货自动采集（决策 2）。数据源 akshare futures_spot_price_daily。"""
-    enabled: bool = False
+    """基差 / 现货自动采集（决策 2）。数据源 akshare futures_spot_price_daily。
+
+    ★ enabled 默认 True（2026-10-05）：理由同 InventoryConfig.enabled。
+    """
+    enabled: bool = True
     freq: str = "daily"
     run_hour: int = 17
     run_minute: int = 10
@@ -306,11 +313,17 @@ class FusionConfig(BaseModel):
 class RankPositionConfig(BaseModel):
     """会员持仓排名（龙虎榜）每日入库。
 
-    数据源：新浪财经期货成交持仓（akshare futures_hold_pos_sina + match_main_contract，
-    见 app/ingest/rank_position.py）。仅商品期货；金融期货（CFFEX）不纳入、不补（决策 3）。
-    exchanges：走新浪 match_main_contract 的商品期货交易所列表。
+    数据源（2026-10-05 按实现与库内 src 值更正，旧 docstring 写"新浪 futures_hold_pos_sina"
+    已不准确）：CZCE/SHFE/GFEX → akshare 交易所官方全量接口；DCE → app.ingest.dce_scrapling
+    （Scrapling 真浏览器绕瑞数动态防护，容器内用自带 Chromium）；INE 无免费源；
+    CFFEX 属金融期货（决策 3）不纳入、不补。见 app/ingest/rank_position.py。
+
+    ★ enabled 默认 True（2026-10-05 修复 P0 数据断供）：原默认 False，而 config/cloud.yaml
+    未配置该段 → 落到默认 False → `_rank_job` 每天 17:30 被调用后**立刻 return**，
+    仅打 INFO 无告警，致 member_position_rank 自 2026-09-24 起停更（pipeline readiness
+    随之恒 False）。采集类开关默认关闭等于"静默停采"，停采必须是显式动作。
     """
-    enabled: bool = False
+    enabled: bool = True
     exchanges: list[str] = Field(default_factory=lambda: ["CZCE", "SHFE", "DCE", "GFEX", "INE"])
     run_hour: int = 17
     run_minute: int = 30

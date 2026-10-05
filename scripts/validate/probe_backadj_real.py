@@ -20,10 +20,12 @@ def col_types():
     cur = cn.cursor()
     cur.execute("""
         SELECT 'bar_15m.bucket' t, data_type, datetime_precision
-        FROM information_schema.columns WHERE table_name='bar_15m' AND column_name='bucket'
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='bar_15m' AND column_name='bucket'
         UNION ALL
         SELECT 'roll_segment.seg_start', data_type, datetime_precision
-        FROM information_schema.columns WHERE table_name='roll_segment' AND column_name='seg_start'
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='roll_segment' AND column_name='seg_start'
     """)
     rows = cur.fetchall()
     cn.close()

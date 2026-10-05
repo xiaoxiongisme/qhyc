@@ -15,6 +15,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.logging import logger
 from app.core.symbol_code import to_std
 from app.execution.roll_policy import real_contract_metadata
 
@@ -157,13 +158,19 @@ def check_limit(session: Session, real_symbol: str, price: float, when) -> list[
     无数据源则静默跳过（不阻断、不告警，避免误报）。
     """
     try:
+        # 必须限定 table_schema='public'：G4 分层后同名对象在两个 schema 并存
+        # （l0_raw.daily_bar 表 + public.daily_bar 兼容视图），只按 table_name 过滤
+        # 会命中 2 行，可能把"底层表新增了列"误判成"app 实际读的视图有该列"。
         has = session.execute(
             text("SELECT 1 FROM information_schema.columns "
-                 "WHERE table_name='daily_bar' AND column_name='limit_up' LIMIT 1")
+                 "WHERE table_schema='public' AND table_name='daily_bar' "
+                 "AND column_name='limit_up' LIMIT 1")
         ).fetchone()
         if has is None:
             return []
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        # 探测失败不能静默：显式告警，避免"以为在校验、其实没校验"
+        logger.warning("[validator] 涨跌停列探测失败，本次跳过校验: %s", e)
         return []
     # 数据源已存在但未接入比对逻辑：提示待补全（不阻断）
     return [f"涨跌停数据源疑似存在但未接入比对（{real_symbol}）"]

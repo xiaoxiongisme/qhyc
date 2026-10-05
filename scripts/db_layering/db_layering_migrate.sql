@@ -124,18 +124,39 @@ END$$;
 
 -- ====================== Phase 4: 迁表（幂等 + 异常捕获） ====================
 -- 4a. hourly_bar 改名隔离（先改名再迁，避免与 bar_60m 歧义）
+--
+-- 幂等要点（2026-10-05 修复）：原实现只按 (nspname='public' AND relname='hourly_bar')
+-- 判存在，**未过滤 relkind**。二次执行时 public.hourly_bar 已是 Phase 7 建的 VIEW，
+-- IF EXISTS 仍为真 → ALTER TABLE 抛 42809 "is not a table"；而本块**无 EXCEPTION 兜底**
+-- （对比下方 4b 通用循环有），导致整个 migrate.sql 中断、Phase 4b/5/6/7 全部不执行，
+-- 与 db_layering_handoff.md 的"幂等"承诺不符，且**使回滚路径真实断点**。
+-- 修法：① 加 relkind IN ('r','p') 只匹配真实表；② 包 EXCEPTION 写 migrate_log 不中断。
+--
+-- ★ migrate_log 必须**先于 4a 建表**：4a 现在要写日志，而它在 EXCEPTION 块内 ——
+-- 若表不存在，INSERT 失败会把**同块内已执行的 ALTER TABLE 一起回滚**，隔离静默不生效。
+CREATE TABLE IF NOT EXISTS public.migrate_log (ts timestamptz DEFAULT now(), tab text, action text, detail text);
+
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             WHERE n.nspname='public' AND c.relname='hourly_bar') THEN
+             WHERE n.nspname='public' AND c.relname='hourly_bar'
+               AND c.relkind IN ('r','p')) THEN
     EXECUTE 'ALTER TABLE public.hourly_bar RENAME TO hourly_bar_akshare_deprecated';
     EXECUTE 'ALTER TABLE public.hourly_bar_akshare_deprecated SET SCHEMA l0_raw';
+    INSERT INTO public.migrate_log(tab,action,detail)
+      VALUES ('hourly_bar','QUARANTINE','-> l0_raw.hourly_bar_akshare_deprecated');
     RAISE NOTICE 'hourly_bar -> l0_raw.hourly_bar_akshare_deprecated (quarantined)';
+  ELSE
+    INSERT INTO public.migrate_log(tab,action,detail)
+      VALUES ('hourly_bar','SKIP','not a table in public / already quarantined');
   END IF;
+EXCEPTION WHEN others THEN
+  INSERT INTO public.migrate_log(tab,action,detail)
+    VALUES ('hourly_bar','ERROR', SQLERRM);
+  RAISE WARNING 'hourly_bar 隔离失败（不中断后续阶段）: %', SQLERRM;
 END$$;
 
 -- 4b. 通用迁表循环：仅当表仍在 public 时迁移；压缩超表直接 SET SCHEMA（已实测可行）
-CREATE TABLE IF NOT EXISTS public.migrate_log (ts timestamptz DEFAULT now(), tab text, action text, detail text);
 DO $$
 DECLARE r record;
 BEGIN

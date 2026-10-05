@@ -13,4 +13,5 @@ UNION ALL SELECT 'bar_30m', min(bucket), max(bucket) FROM bar_30m
 UNION ALL SELECT 'bar_60m', min(bucket), max(bucket) FROM bar_60m;
 
 \echo '=== minute_bar columns ==='
-SELECT column_name, data_type FROM information_schema.columns WHERE table_name='minute_bar' ORDER BY ordinal_position;
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_schema='public' AND table_name='minute_bar' ORDER BY column_name;
