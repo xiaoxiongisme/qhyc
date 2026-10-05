@@ -126,7 +126,7 @@ def test_b2_ack_fill_position_rolls():
     position_manager.apply_fill(real_symbol=_real, action="OPEN", direction="BUY",
                                 fill_lots=2, fill_price=3112.0)
     pos = position_manager.load_position(_real)
-    assert (pos.net_lots, pos.long_lots) == (2, 0)
+    assert (pos.net_lots, pos.long_lots, pos.short_lots) == (2, 2, 0)
     r = persistence.get_position(_real)
     assert float(r["avg_open_price"]) == pytest.approx(3112.0)
 
