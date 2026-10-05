@@ -18,8 +18,9 @@ from typing import Any
 
 import httpx
 
-#: 连接/读取超时分离：连接快失败，读取给足（网关可能慢）
-TIMEOUT = httpx.Timeout(connect=3.0, read=8.0)
+#: 连接/读取超时分离：连接快失败，读取给足（网关可能慢）。
+#: ⚠ httpx.Timeout 必须给全四个参数或含 default，否则构造即 ValueError（实测踩过）。
+TIMEOUT = httpx.Timeout(connect=3.0, read=8.0, write=8.0, pool=8.0)
 
 
 class BrokerUnavailable(RuntimeError):
