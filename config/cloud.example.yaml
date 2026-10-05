@@ -91,6 +91,52 @@ scheduler:
     minute: 0
     run_hour: "all"
 
+# ---- 采集类作业开关（2026-10-05 显式化，勿删）--------------------------------
+# ★ 这些段此前**完全缺失**于 cloud.yaml，落到 app/core/config.py 的代码默认值：
+#   rank_position.enabled 默认 False → _rank_job 每天 17:30 被调用后立刻 return，
+#   仅打 INFO 无告警 → member_position_rank 自 2026-09-24 起停更 11 天，
+#   且 pipeline readiness 恒 False（spot_basis=0 member_position_rank=0）。
+# 约定：采集类开关一律显式声明，停采必须是可见的显式动作；
+#      "只在 local 有、云端缺"的段会让云端静默落到代码默认值。
+rank_position:
+  enabled: true          # 会员持仓排名（龙虎榜）17:30；CZCE/SHFE/GFEX→akshare, DCE→dce_scrapling
+  exchanges: ["CZCE", "SHFE", "DCE", "GFEX"]
+  run_hour: 17
+  run_minute: 30
+# 库存 / 仓单：2026-10-03 已拍板**退役**（akshare 源覆盖不全且与仓单表重叠，
+# inventory_z 在 IC 扫描中无显著贡献）。停采集但**保留历史数据**供因子回溯。
+inventory:
+  enabled: false
+  freq: "weekly"
+  run_day: 5
+  run_hour: 17
+  run_minute: 0
+spot_basis:
+  enabled: true          # 基差/现货日频 17:10（akshare futures_spot_price_daily）
+  freq: "daily"
+  run_hour: 17
+  run_minute: 10
+  window_days: 5
+
+# M8 决策链路容器化：源码真源在 WB skill（compose 只读挂载 /app/pipeline_src），
+# 此处只配调度与闸门。云端此前亦缺此段。
+pipeline:
+  enabled: true
+  daily_cron: { hour: 17, minute: 40 }   # 17:40：给 rank_position(17:30) 留 10 分钟
+  signal_slots: ["09:00", "10:00", "11:00", "13:30", "14:00", "15:00", "21:00", "22:00", "23:00"]
+  intraday_enabled: true
+  check_cron: { day_of_week: mon, hour: 8, minute: 5 }
+  readiness:
+    enabled: true
+    timeout_min: 10                       # 等当日 spot_basis + member_position_rank
+    poll_sec: 60
+  snapshot:
+    src: "/app/pipeline_src"
+    dest: "/app/runtime/pipeline_snapshot"
+  step_timeout_sec: 1800
+  max_instances: 1
+  notify_on_failure: true
+
 imports:
   source_root: ""        # 云端不直接导入本地历史；走 pg_dump 迁移
   container_root: ""
