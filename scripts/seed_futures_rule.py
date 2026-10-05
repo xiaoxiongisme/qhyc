@@ -184,6 +184,24 @@ def main():
 
     print(f"[seed] 完成：交易日 {trading_days} 非交易日跳过 {skipped_non} "
           f"共写入 {total_rows} 行，耗时 {round(time.time()-t0)}s", flush=True)
+
+    # G4：回写「已播种截止日」。futures_rule 只记交易日 → 「无行」二义（休市 or 未来未播种）。
+    # 显式记录截止日，app/data/trade_calendar.py 才能把「<= 截止日的缺失行」判为确定的非交易日，
+    # 而非退化为「周一~周五」把法定节假日误判成交易日（静默错）。
+    try:
+        cur.execute("CREATE TABLE IF NOT EXISTS cfg_calendar_seed_meta ("
+                    "key TEXT PRIMARY KEY, value TEXT, "
+                    "updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+        cur.execute(
+            "INSERT INTO cfg_calendar_seed_meta(key, value) VALUES ('seeded_through', %s) "
+            "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()",
+            (end.isoformat(),))
+        c.commit()
+        print(f"[seed] 已登记 seeded_through={end}（供 G4 判定休市 vs 未来未播种）", flush=True)
+    except Exception as e:  # noqa: BLE001 —— 元数据回写失败不阻断播种，但必须留痕
+        print(f"[seed] ⚠️ seeded_through 回写失败（不影响已播数据，但 G4 将退化为二义判定）: {e}",
+              flush=True)
+
     cur.close()
     c.close()
     return 0
