@@ -526,14 +526,34 @@ _MIGRATIONS = (
 
 
 def ensure_fusion_table(engine) -> None:
-    """运行时建表（容器已启动、不重跑 init SQL，故用 CREATE IF NOT EXISTS 等价机制）。"""
-    # 仅建本模块新增的表，不影响既有表
-    Base.metadata.create_all(
-        engine, tables=[FusionPosition.__table__, FusionPushLog.__table__,
-                        FusionSignalLog.__table__]
-    )
-    # 老库补列（幂等）
+    """运行时建表（容器已启动、不重跑 init SQL）。
+
+    ⚠ 数据层分层（G4）后：三张表已物理迁入 ``app_state``/``l2_adj``，``public.<表>`` 只剩
+    **兼容 shim 视图**。PostgreSQL 视图上不能 ``ALTER TABLE``/``CREATE INDEX``
+    （报 "operation is not supported for views"）。故先用 ``pg_class.relkind`` 作**权威**判定
+    （不依赖 SQLAlchemy has_table 对视图的可见性）：``v``=视图→跳过 DDL 并留痕；
+    ``r``/``p``=真表→照旧建表/补列；``None`=不存在→建表。
+    """
+    tables = (FusionPosition.__table__, FusionPushLog.__table__, FusionSignalLog.__table__)
     with engine.begin() as conn:
+        def _relkind(name: str):
+            return conn.execute(
+                text("SELECT c.relkind FROM pg_class c "
+                     "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                     "WHERE n.nspname='public' AND c.relname=:n"),
+                {"n": name},
+            ).scalar()
+
+        for t in tables:
+            kind = _relkind(t.name)
+            if kind == "v":
+                logger.info(
+                    f"[fusion] public.{t.name} 是分层 shim 视图（真表已迁入 app_state/l2_adj），"
+                    f"跳过建表 DDL")
+                continue
+            if kind is None:
+                Base.metadata.create_all(engine, tables=[t])
+        # 老库补列（幂等；视图上会失败，已被 except 兜住）
         for stmt in _MIGRATIONS:
             try:
                 conn.execute(text(stmt))

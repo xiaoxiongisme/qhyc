@@ -155,7 +155,22 @@ CREATE INDEX IF NOT EXISTS idx_ccm_product  ON contract_code_map (exchange, prod
 
 
 def ensure_table(conn) -> None:
-    """建表（幂等）——容器内 /app/db 未挂载时必须走内联 DDL。"""
+    """建表 + 索引（幂等）——容器内 /app/db 未挂载时必须走内联 DDL。
+
+    ⚠ 数据层分层（G4）后：``contract_code_map`` 已迁入 ``l3_ref``，``public.contract_code_map``
+    只是**兼容 shim 视图**。PostgreSQL **不允许在视图上 CREATE INDEX**
+    （"operation is not supported for views"），故先用 ``pg_class.relkind`` 权威判定：
+    是视图 → 跳过整段 DDL（真表连同其索引已在迁移时一并带走，无需重建）。
+    """
+    kind = conn.execute(
+        text("SELECT c.relkind FROM pg_class c "
+             "JOIN pg_namespace n ON n.oid=c.relnamespace "
+             "WHERE n.nspname='public' AND c.relname='contract_code_map'")
+    ).scalar()
+    if kind == "v":
+        logger.info("[contract_code] public.contract_code_map 是分层 shim 视图"
+                    "（真表已迁入 l3_ref，索引随表迁移），跳过建表/建索引 DDL")
+        return
     conn.execute(text(_INLINE_DDL))
     # 若容器里能读到完整 DDL，也执行一遍（含注释版），无副作用
     try:
