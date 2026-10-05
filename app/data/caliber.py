@@ -116,9 +116,11 @@ ROUTES: dict[tuple[str, str], Route] = {
     #                                note="已废弃：日线前复权（不可达）"),
     ("daily", "contract"):   Route("contract_daily", time_col="trade_date",
                                    note="逐合约日线（symbol=品种大写+YYMM）"),
-    # 【C8 决策·方案A】日线/小时线维持 continuous（未复权）基准（daily_bar / hourly_bar）。
-    # 后复权仅对已有 roll_segment 段的分钟频(5/15/30/60m)生效；日线/小时线无段，
-    # default_caliber_for 对它们显式回退 continuous 并告警（绝不静默用 raw）。此为唯一口径决策。
+    # 【C8 / D1 决策·方案A 正式裁定 2026-10-05】日线/小时线**维持 continuous（未复权）基准**
+    # （daily_bar / hourly_bar），**不为 daily/hourly 补建 roll_segment 段**——这是**明确决策而非
+    # 数据缺口**：回测与对账基线本就是 continuous（真实可交易价格轨迹），且 G3 已对"无段周期"
+    # 显式回退 continuous 并告警（绝不静默用 raw）。后复权仅对已有段的分钟频(5/15/30/60m)生效。
+    # 未来若要用 back_adj 做日线，需先另立项补建 daily/hourly 段（见 PRD D1 裁定）。
 }
 
 
