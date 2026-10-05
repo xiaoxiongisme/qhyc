@@ -26,6 +26,7 @@ load_1min_2026dump.py — D:/学习资料 dump（2026.zip 布局A / GFEX 布局B
   python load_1min_2026dump.py --zip "D:/学习资料/GFEX_广州期货交易所.zip" --gfex --targets local --apply
   python load_1min_2026dump.py --zip "D:/学习资料/2026.zip" --targets cloud --apply
 """
+import os
 from __future__ import annotations
 
 import argparse
@@ -44,9 +45,9 @@ FREQS = {"5m": ("bar_5m", 5), "15m": ("bar_15m", 15),
          "30m": ("bar_30m", 30), "60m": ("bar_60m", 60)}
 CREDS = {
     "local": dict(host="127.0.0.1", port=5432, user="futures",
-                  password="qhyc_dev_pwd_2026", dbname="futures"),
+                  password=os.environ["POSTGRES_PASSWORD"], dbname="futures"),
     "cloud": dict(host="127.0.0.1", port=15432, user="futures",
-                  password="qhyc_dev_pwd_2026", dbname="futures"),
+                  password=os.environ["POSTGRES_PASSWORD"], dbname="futures"),
 }
 SYNTH_SQL = (
     "INSERT INTO {t} (symbol, bucket, open, high, low, close, volume, amount, open_interest)\n"

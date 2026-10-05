@@ -2,6 +2,7 @@
 """用【真实】back_adjust.apply_back_adjust 复验后复权是否抵消换月 gap。
 只读本地库，不改任何数据。目的：确认 R12 缺陷是否真实、并定位根因。
 """
+import os
 import os, sys
 sys.path.insert(0, r"E:\Docker\qhyc")
 os.chdir(r"E:\Docker\qhyc")
@@ -11,7 +12,7 @@ import pandas as pd
 import psycopg2
 
 PG = dict(host="127.0.0.1", port=5432, user="futures",
-          password="qhyc_dev_pwd_2026", dbname="futures")
+          password=os.environ["POSTGRES_PASSWORD"], dbname="futures")
 
 # —— 1) 列类型与时区口径 ——
 def col_types():
@@ -33,7 +34,7 @@ def col_types():
 def real_apply(sym):
     from app.data.back_adjust import apply_back_adjust
     from sqlalchemy import create_engine, text
-    eng = create_engine(f"postgresql+psycopg2://futures:qhyc_dev_pwd_2026@127.0.0.1:5432/futures")
+    eng = create_engine(f"postgresql+psycopg2://futures:{os.environ['POSTGRES_PASSWORD']}@127.0.0.1:5432/futures")
     with eng.connect() as c:
         df = pd.read_sql(text(
             "SELECT bucket,open,high,low,close FROM bar_15m "

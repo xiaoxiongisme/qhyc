@@ -30,7 +30,7 @@ os.makedirs(OUT, exist_ok=True)
 
 import psycopg2
 PG = dict(host="127.0.0.1", port=5432, user="futures",
-          password="qhyc_dev_pwd_2026", dbname="futures")
+          password=os.environ["POSTGRES_PASSWORD"], dbname="futures")
 
 from app.core.config import get_settings
 from app.backtest.fusion_backtest import FusionBacktestParams, _htf_direction

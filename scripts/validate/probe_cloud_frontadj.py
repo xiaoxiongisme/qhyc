@@ -5,11 +5,12 @@
 回答：① 前复权表是否仍在被作业写入（max ts 新鲜度）；② 可再生基础是否完整；
 ③ 是否有视图/函数依赖前复权表。
 """
+import os
 import sys
 import psycopg2
 
 CLOUD = dict(host="127.0.0.1", port=15432, user="futures",
-             password="qhyc_dev_pwd_2026", dbname="futures", connect_timeout=8)
+             password=os.environ["POSTGRES_PASSWORD"], dbname="futures", connect_timeout=8)
 
 
 def main():

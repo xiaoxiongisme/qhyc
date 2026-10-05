@@ -16,7 +16,7 @@
   POSTGRES_HOST      默认 127.0.0.1
   POSTGRES_PORT      默认 5432
   POSTGRES_USER      默认 futures
-  POSTGRES_PASSWORD  默认 qhyc_dev_pwd_2026（开发环境；生产请用 .env 覆盖）
+  POSTGRES_PASSWORD  **无默认**：缺失即抛错（fail-fast）
   POSTGRES_DB        默认 futures
 
 同时提供两把作业级保护（针对 2026-09-27 实测的「bars 尾删重建 vs 复权撞车」竞态）：
@@ -29,18 +29,30 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-DEFAULT_PASSWORD = "qhyc_dev_pwd_2026"
+class MissingPassword(RuntimeError):
+    """未提供数据库口令（fail-fast，不静默用内置默认口令）。"""
 
 
 def resolve_conn(host: Optional[str] = None, port: Optional[int] = None,
                  db: Optional[str] = None, user: Optional[str] = None,
                  pw: Optional[str] = None) -> dict:
-    """按「CLI > 环境变量 > 默认」解析连接参数，返回 psycopg2.connect(**kwargs) 可用字典。"""
+    """按「CLI > 环境变量 > 默认」解析连接参数，返回 psycopg2.connect(**kwargs) 可用字典。
+
+    ⚠ 口令**不再有内置默认**（R7）：此前在此硬编码开发库口令，使密钥随代码分发到
+    数十个文件、且轮换需改代码。现改为：CLI > env > 缺失即抛
+    :class:`MissingPassword`，避免"用旧默认静默连上/连不上"。
+    """
+    password = pw or os.getenv("POSTGRES_PASSWORD")
+    if not password:
+        raise MissingPassword(
+            "[fail-fast] 未提供数据库口令：请设置环境变量 POSTGRES_PASSWORD"
+            "（或用 --pw 显式传入）。代码内不再保留默认口令。"
+        )
     return dict(
         host=host or os.getenv("POSTGRES_HOST") or "127.0.0.1",
         port=int(port or os.getenv("POSTGRES_PORT") or 5432),
         user=user or os.getenv("POSTGRES_USER") or "futures",
-        password=pw or os.getenv("POSTGRES_PASSWORD") or DEFAULT_PASSWORD,
+        password=password,
         dbname=db or os.getenv("POSTGRES_DB") or "futures",
     )
 

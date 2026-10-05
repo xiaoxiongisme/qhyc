@@ -4,7 +4,7 @@
 
 连接：
   - 云端：经本机 SSH 隧道 127.0.0.1:15432 -> 云端 timescaledb:5432
-          db=futures user=futures pwd=qhyc_dev_pwd_2026（可用环境变量 CLOUD_PG* 覆盖）
+          db/user 走 CLOUD_PG* 环境变量（口令无默认，缺失即报错，勿再硬编码）
   - 本地：通过 factor_ic_scan.load_creds() 取本机连接（默认 127.0.0.1:5432）
           （可用环境变量 LOCAL_PG* 覆盖，供在云容器内运行时指向另一侧）
 
@@ -29,6 +29,7 @@
 本地与云端会出现「永久历史分歧」（2026-09-29 实测 bar_60m 差 3,205 行，全在回补窗口内）。
 因此增量每次额外重放 [now-N天, wm] 窗口（先删后拷，幂等）。
 """
+import os
 import argparse, sys, io, datetime as _dt, os
 from pathlib import Path
 
@@ -37,7 +38,7 @@ from factor_ic_scan import load_creds
 import psycopg2
 
 CLOUD = dict(host="127.0.0.1", port=15432, dbname="futures",
-            user="futures", password="qhyc_dev_pwd_2026")
+            user="futures", password=os.environ["POSTGRES_PASSWORD"])
 TIME_CANDIDATES = ("bucket", "trade_date", "trade_datetime", "datetime",
                    "report_date", "date", "timestamp", "ts", "time")
 

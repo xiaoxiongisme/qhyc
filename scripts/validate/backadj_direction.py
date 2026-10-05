@@ -20,7 +20,7 @@ sys.path.insert(0, r"E:\Docker\qhyc")
 sys.argv = ["x"]
 
 PG = dict(host="127.0.0.1", port=5432, user="futures",
-          password="qhyc_dev_pwd_2026", dbname="futures")
+          password=os.environ["POSTGRES_PASSWORD"], dbname="futures")
 OUT = r"E:\Docker\qhyc\docs\_swing_out"
 
 

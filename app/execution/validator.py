@@ -77,6 +77,22 @@ def fetch_market_price(session: Session, real_symbol: str, when) -> tuple[Option
     except Exception:
         pass
     for form in contract_daily_keys(session, real_symbol):
+        # ---- R10：优先**真实合约的分钟/小时级**价源（盘中防错，精度高）----
+        # 库内当前 minute_bar/bar_5m/hourly_bar **全为 888 连续**、无真实合约行，
+        # 故实际仍回退日频；但代码路径已就绪——真实合约分钟线一旦落地即自动收紧容差，
+        # 无需再改校验器（check_consistency 按 granularity 选软阈值）。
+        for table, tcol, gran in (("minute_bar", "ts", "minute"),
+                                  ("hourly_bar", "trade_datetime", "hourly")):
+            try:
+                row = session.execute(
+                    text(f"SELECT close FROM {table} WHERE symbol=:s AND {tcol} <= :t "
+                         f"ORDER BY {tcol} DESC LIMIT 1"),
+                    {"s": form, "t": when}).fetchone()
+                if row and row[0] is not None:
+                    return float(row[0]), gran
+            except Exception:  # noqa: BLE001 —— 表/列缺失或无该合约行 → 继续降级
+                session.rollback()
+        # ---- 回退：真实合约日频（低精度参照）----
         row = session.execute(
             text("SELECT close FROM contract_daily WHERE symbol=:s AND trade_date <= :d "
                  "ORDER BY trade_date DESC LIMIT 1"),
@@ -118,9 +134,20 @@ def check_consistency(price: float, market: Optional[float], real_symbol: str,
         return [], [f"反解价 {price:.2f} 与盘口 {market:.2f} 偏差 {dev:.2%} "
                     f"> 硬阈值 {BLOCK_TOL:.2%}：可能偏移/换月映射错误"]
     soft = DAILY_TOL if granularity == "daily" else PRICE_TOL
+    warns: list[str] = []
+    if granularity == "daily":
+        # ⚠ 参照精度披露（R10）：日频参照只能给到 ±2% 软阈值，**做不了盘中防错**。
+        #   根因：库内 minute_bar/bar_5m/hourly_bar 全为 888 连续，无真实合约行。
+        #   这条告警长期存在是**如实反映能力边界**，不是可忽略的噪音——
+        #   补齐真实合约分钟线后本告警自动消失（届时 granularity=minute/hourly）。
+        warns.append(
+            f"一致性闸参照为**日频**收盘价（软容差放宽至 {soft:.2%}）："
+            f"库内无真实合约分钟/小时线，盘中防错能力受限（R10 待补数据源）")
     if dev > soft:
-        return [f"反解价 {price:.2f} 与盘口 {market:.2f} 偏差 {dev:.2%}（>容差 {soft:.2%}，建议核对）"], []
-    return [], []
+        warns.append(
+            f"反解价 {price:.2f} 与盘口 {market:.2f} 偏差 {dev:.2%}"
+            f"（>容差 {soft:.2%}，建议核对）")
+    return warns, []
 
 
 def check_limit(session: Session, real_symbol: str, price: float, when) -> list[str]:

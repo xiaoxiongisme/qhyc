@@ -55,7 +55,7 @@ _PROD = {m.symbol: m.product.upper() for m in _MC}
 IS_SPLIT = pd.Timestamp("2023-12-31", tz="UTC")
 HALF = pd.Timestamp("2020-12-31", tz="UTC")
 PG = dict(host="127.0.0.1", port=5432, user="futures",
-          password="qhyc_dev_pwd_2026", dbname="futures")
+          password=os.environ["POSTGRES_PASSWORD"], dbname="futures")
 
 
 def cost(sym, mult, lots=1):

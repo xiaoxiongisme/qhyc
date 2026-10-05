@@ -44,7 +44,7 @@ PG = dict(
     port=int(os.environ.get("PGPORT", "5432")),
     dbname=os.environ.get("PGDATABASE", "futures"),
     user=os.environ.get("PGUSER", "futures"),
-    password=os.environ.get("PGPASSWORD", "qhyc_dev_pwd_2026"),
+    password=os.environ["PGPASSWORD"],
 )
 
 # --------------------------------------------------------------- 浏览器

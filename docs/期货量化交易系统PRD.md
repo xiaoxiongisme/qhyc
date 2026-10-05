@@ -247,11 +247,11 @@ L3 口径合成与服务层(连续序列物化 / main_contract_map / anomaly_tic
 
 ## 15. 待裁定 / 已知问题（仅列结论，详情见《测试报告》）
 
-1. **前复权删数据（D3）**：挂起，等 G9（`fut_kline.continuous` 退役/重定位）合并处置，避免顺序错不可逆。
+1. **前复权删数据（D3 / R9）**：⏸ **挂起，不删**。实测残留（2026-10-05 云端）：`fut_kline.cont_adj` 1012.4 万行、`fut_kline.continuous` 1008.6 万行、`minute_bar_adj` 5862.1 万行（库约 29GB）。生成作业已停（只差删数据）。**解锁前置**：必须先完成 G9 对 `fut_kline.continuous` 的退役/重定位裁定，再一次性合并处置。**顺序不可逆的原因**：`minute_bar_adj` 是 `cont_adj` 的唯一上游，先删下游再删上游会导致上游失去存在理由、上游删除后下游无法重建。删除脚本：`scripts/deprecate_cont_adj.py`（默认 dry-run，需 `--action delete --confirm --i-know-production`）。
 2. **roll_segment daily/hourly（D1）**：方案 A 明确决策（维持 continuous + 显式标注），非数据缺口。
 3. **MA888 口径（D4）**：随合约切换自行闭环，其余 888 与主力表不一致仅 JD/LH/SM 三个，纳入日常监控。
 4. **G4 期货日历源**：✅ 已完成（2026-10-05）。新增唯一权威入口 `app/data/trade_calendar.py`（读 `futures_rule` 的 distinct `trade_date`），并收口 4 处原 `tool_trade_date_hist_sina` 调用（`app/scheduler.py` 融合推送日历、`app/ingest/backfill_rank.py` 预筛、`app/ingest/akshare_source.py` 回退源、`vendor/pipeline_src/run_pipeline.py`）；代码内已 0 处 active 引用股票日历。覆盖边界 fail-loud：超出已播种区间时告警/抛错，不静默套用 A 股日历。
-5. **明文口令**：`qhyc_dev_pwd_2026` 硬编码 59 处 → 收敛为 env fail-fast（P2）。
+5. **明文口令**：✅ 已收敛（2026-10-05，R7）。开发库口令原硬编码于 90+ 处（`scripts/pgconn.py` 共享助手、`scripts/validate/*`、`runtime/*` 一次性脚本、`vendor/pipeline_src/*`），全部改为「CLI > 环境变量 > 缺失即抛 `MissingPassword`」；`pgconn.py` 不再保留任何默认口令。密钥不再随代码分发，轮换无需改代码。
 6. **G7 与物理删 tqsdk 方向**：接受物理删，可复活性由 git 历史 + provider 抽象保证。
 
 ---

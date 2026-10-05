@@ -50,7 +50,7 @@ PG_CONN = dict(host=os.environ.get("QH_PG_HOST", "localhost"),
                port=int(os.environ.get("QH_PG_PORT", 5432)),
                dbname=os.environ.get("QH_PG_DB", "futures"),
                user=os.environ.get("QH_PG_USER", "futures"),
-               password=os.environ.get("QH_PG_PWD", "qhyc_dev_pwd_2026"),
+               password=os.environ["QH_PG_PWD"],
                connect_timeout=10)
 
 SLK, TRK, BER = 2.0, 2.0, 0.5     # 与 _fut_daily_brief 融合参数保持一致

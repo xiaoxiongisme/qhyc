@@ -38,7 +38,7 @@ dc.PG = dict(
     port=int(os.getenv("DCE_PG_PORT", "15432")),
     dbname=os.getenv("DCE_PG_DB", "futures"),
     user=os.getenv("DCE_PG_USER", "futures"),
-    password=os.getenv("DCE_PG_PASSWORD", "qhyc_dev_pwd_2026"),
+    password=os.environ["DCE_PG_PASSWORD"],
 )
 
 # ---- 兼容 2020 年代初 DCE 报表列名（持买量/持卖量，缺「单」字）----

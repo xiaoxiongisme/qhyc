@@ -174,7 +174,7 @@ def scan_zip(zpath: str) -> dict:
 def _db_creds():
     import psycopg2  # noqa: F401
     creds = dict(host="127.0.0.1", port=5432, user="futures",
-                 password="qhyc_dev_pwd_2026", dbname="futures")
+                 password=os.environ["POSTGRES_PASSWORD"], dbname="futures")
     env_path = os.path.join(ROOT, ".env")
     try:
         with open(env_path, encoding="utf-8") as f:

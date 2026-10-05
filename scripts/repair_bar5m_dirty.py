@@ -18,7 +18,7 @@ def conn():
     return psycopg2.connect(host=os.getenv("CLOUDPGHOST", "host.docker.internal"),
                             port=int(os.getenv("CLOUDPGPORT", 15432)),
                             user=os.getenv("CLOUDPGUSER", "futures"),
-                            password=os.getenv("CLOUDPGPWD", "qhyc_dev_pwd_2026"),
+                            password=os.environ["CLOUDPGPWD"],
                             dbname=os.getenv("CLOUDPGDBNAME", "futures"),
                             connect_timeout=10)
 

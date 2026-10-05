@@ -7,11 +7,12 @@
  ③ roll_segment 覆盖哪些 freq（能否支撑 1m 后复权再生）；
  ④ 谁还在依赖 minute_bar_adj（视图/函数/外键/物化依赖）。
 """
+import os
 import sys
 import psycopg2
 
 PG = dict(host="127.0.0.1", port=5432, user="futures",
-          password="qhyc_dev_pwd_2026", dbname="futures")
+          password=os.environ["POSTGRES_PASSWORD"], dbname="futures")
 
 
 def q1(cur, sql, params=None):

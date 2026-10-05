@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """严谨复验：用 roll_segment.roll_ts 精确定位换月点，验证真实 back_adjust 是否抵消；
 并统计 price_shift 是否启用、负价真实数量。只读本地库。"""
+import os
 import os, sys
 sys.path.insert(0, r"E:\Docker\qhyc"); os.chdir(r"E:\Docker\qhyc")
 import numpy as np, pandas as pd
 from sqlalchemy import create_engine, text
 from app.data.back_adjust import apply_back_adjust, check_negative
 
-eng = create_engine("postgresql+psycopg2://futures:qhyc_dev_pwd_2026@127.0.0.1:5432/futures")
+eng = create_engine("postgresql+psycopg2://futures:"
+                    + os.environ["POSTGRES_PASSWORD"] + "@127.0.0.1:5432/futures")
 
 def variety_syms():
     with eng.connect() as c:

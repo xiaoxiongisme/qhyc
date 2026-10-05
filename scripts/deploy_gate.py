@@ -33,6 +33,29 @@ API_BASE = "http://127.0.0.1:8000"
 CONTINUOUS_SAMPLE = ["RB888", "FU888", "I888", "TA888", "MA888"]
 
 
+def _brake_switch_on() -> bool:
+    """读 portfolio_brake_enabled 开关。
+
+    ⚠ 真源是 **cfg_feature_switch 表**（与 app/scheduler.py `_switch_on` 一致），
+    env `PORTFOLIO_BRAKE_ENABLED` 仅作回退。此前本检查只看 env，与运行时口径不一致，
+    会出现「DB 已开但闸门报 off」（双开关静默分歧）。表不可用时才回落 env。
+    """
+    try:
+        from sqlalchemy import text
+
+        from app.core.db import session_scope
+
+        with session_scope() as s:
+            v = s.execute(text(
+                "SELECT enabled FROM cfg_feature_switch WHERE switch_key='portfolio_brake_enabled'"
+            )).scalar()
+        if v is not None:
+            return bool(v)
+    except Exception:  # noqa: BLE001 —— 表缺失/无 DB 时回退 env
+        pass
+    return os.getenv("PORTFOLIO_BRAKE_ENABLED") in ("1", "true", "True")
+
+
 def _http(path: str, timeout: int = 5):
     try:
         req = urllib.request.Request(API_BASE + path)
@@ -175,9 +198,10 @@ def main() -> int:
     backup_on = os.getenv("BACKUP_ENABLED") in ("1", "true", "True")
     add("PASS" if backup_on else "WARN", "switch.backup",
         f"BACKUP_ENABLED={'on' if backup_on else 'off（建议置 1）'}")
-    brake_on = os.getenv("PORTFOLIO_BRAKE_ENABLED") in ("1", "true", "True")
+    brake_on = _brake_switch_on()
     add("PASS" if brake_on else "WARN", "switch.portfolio_brake",
-        f"PORTFOLIO_BRAKE_ENABLED={'on' if brake_on else 'off（P0-2 已实现，按需启用）'}")
+        f"portfolio_brake_enabled={'on' if brake_on else 'off（P0-2 已实现，按需启用）'}"
+        f"（真源=cfg_feature_switch，env 仅回退）")
 
     # ---------- 5. 前端产物（§10） ----------
     print("\n[5] 看板前端产物（§10）")

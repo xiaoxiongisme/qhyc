@@ -1439,7 +1439,13 @@ def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
         )
         equity = load_equity_curve(session=session, lookback=cfg.lookback)
         if not equity:
-            logger.info("[portfolio_brake] 无权益曲线 → 恒等（等价关闭）")
+            # ⚠ fail-loud：熔断已开启但**无权益曲线** → 恒等放行等于熔断失效。
+            #   这不是"正常降级"，是"风控空转"——必须告警而非 info 静默。
+            #   权益曲线来自 portfolio_equity（当前 0 行，无已实现盈亏可派生）。
+            logger.warning(
+                "[portfolio_brake] 熔断已开启但 portfolio_equity 无数据 → 恒等放行，"
+                "**风控实际未生效**（非降级，是空转）。请先补权益曲线或关闭开关。"
+            )
             return results
         sc = brake_scalar(equity, cfg)
         if sc >= 1.0:

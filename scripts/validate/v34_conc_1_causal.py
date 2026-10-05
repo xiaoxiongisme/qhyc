@@ -80,7 +80,7 @@ def load_bars():
 
 
 PGX = dict(host="127.0.0.1", port=5432, user="futures",
-           password="qhyc_dev_pwd_2026", dbname="futures")
+           password=os.environ["POSTGRES_PASSWORD"], dbname="futures")
 
 
 def build(bars, p, tag=""):

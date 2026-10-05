@@ -7,8 +7,8 @@
 目标端若不存在对应超表则自动建表 + create_hypertable。
 
 环境变量（均有默认值）：
-  SRC_PGHOST/PORT/DB/USER/PASSWORD   源库（本地），默认 localhost:5432/futures/futures/qhyc_dev_pwd_2026
-  DST_PGHOST/PORT/DB/USER/PASSWORD   目标库（云端隧道），默认 localhost:15432/futures/futures/qhyc_dev_pwd_2026
+  SRC_PGHOST/PORT/DB/USER/PASSWORD   源库（本地），默认 localhost:5432/futures/futures/<无口令默认>
+  DST_PGHOST/PORT/DB/USER/PASSWORD   目标库（云端隧道），默认 localhost:15432/futures/futures/<无口令默认>
   SYNC_TABLES                       逗号分隔表名，默认 bar_15m
   CHUNK_DAYS                        按时间分块天数，默认 60
 用法：
@@ -16,6 +16,7 @@
   python scripts/sync_bar15m_server.py --tables bar_15m,bar_30m,bar_60m
   python scripts/sync_bar15m_server.py --dry-run     # 只打印计划不写库
 """
+import os
 from __future__ import annotations
 import os, sys, argparse, io
 from datetime import timedelta
@@ -59,7 +60,7 @@ def conn_from(prefix):
         port=int(os.environ.get(f"{prefix}_PGPORT", "5432" if prefix == "SRC" else "15432")),
         dbname=os.environ.get(f"{prefix}_PGDATABASE", "futures"),
         user=os.environ.get(f"{prefix}_PGUSER", "futures"),
-        password=os.environ.get(f"{prefix}_PGPASSWORD", "qhyc_dev_pwd_2026"),
+        password=os.environ[f"{prefix}_PGPASSWORD"],
         connect_timeout=30,
     )
 

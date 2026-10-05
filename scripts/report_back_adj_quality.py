@@ -33,7 +33,7 @@ from build_roll_segments import TABLE  # noqa: E402
 CONN = dict(host=os.getenv("POSTGRES_HOST", "timescaledb"),
             port=int(os.getenv("POSTGRES_PORT", "5432")),
             user=os.getenv("POSTGRES_USER", "futures"),
-            password=os.getenv("POSTGRES_PASSWORD", "qhyc_dev_pwd_2026"),
+            password=os.environ["POSTGRES_PASSWORD"],
             dbname=os.getenv("POSTGRES_DB", "futures"))
 
 FREQS = ('min15', 'min30', 'min60')
