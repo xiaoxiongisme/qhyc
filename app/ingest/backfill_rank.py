@@ -89,20 +89,18 @@ def trading_days(start: _dt.date, end: _dt.date) -> list[_dt.date]:
     真正非交易日会在取数时返回空，被按「非交易日」跳过。
     """
     try:
-        import akshare as ak  # type: ignore
+        from app.data import trade_calendar  # type: ignore
 
-        cal = ak.tool_trade_date_hist_sina()
-        days = [
-            _dt.date.fromisoformat(str(x)[:10])
-            for x in (cal["trade_date"] if hasattr(cal, "columns") else cal)
-        ]
-        picked = [d for d in days if start <= d <= end]
+        picked = trade_calendar.futures_trading_days(start, end)
         if picked:
-            logger.info(f"[backfill] 交易日历命中 {len(picked)} 天（{start} ~ {end}）")
-            return sorted(picked)
-        logger.warning("[backfill] 交易日历区间为空，退化为工作日枚举")
+            logger.info(
+                f"[backfill] G4 期货官方日历命中 {len(picked)} 天（{start} ~ {end}）")
+            return picked
+        logger.warning(
+            "[backfill] futures_rule 区间为空（可能超出已播种覆盖），退化为工作日枚举")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[backfill] 交易日历不可用（{type(e).__name__}），退化为工作日枚举")
+        logger.warning(
+            f"[backfill] 期货官方日历不可用（{type(e).__name__}），退化为工作日枚举")
     out, d = [], start
     while d <= end:
         if d.weekday() < 5:

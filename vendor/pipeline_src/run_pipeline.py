@@ -277,13 +277,14 @@ def is_trading_day(d=None):
     if d.weekday() >= 5:
         return False
     try:
-        sys.path.insert(0, SX)
-        import akshare as ak
-        cal = ak.tool_trade_date_hist_sina()
-        days = set(str(x) for x in cal["trade_date"])
-        return d.strftime("%Y-%m-%d") in days
+        # G4：期货官方日历 futures_rule（弃 A 股 tool_trade_date_hist_sina——期货作息
+        # 与 A 股不同：中金所 09:15 开盘、股指/国债无夜盘、节前各所提前收盘）。
+        from app.data import trade_calendar
+
+        return trade_calendar.is_futures_trading_day(d)
     except Exception:
-        return True
+        # app 包不可用（如独立运行）时退化为工作日，不静默套用 A 股日历
+        return d.weekday() < 5
 
 
 def signal_brief(fh=None, push=True):

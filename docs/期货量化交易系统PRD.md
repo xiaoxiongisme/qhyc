@@ -84,7 +84,7 @@ L3 口径合成与服务层(连续序列物化 / main_contract_map / anomaly_tic
 | 决策 | 结论 |
 |---|---|
 | 复权方案 | 存换月事件 offset（后复权），不存复权结果；前复权链退役（NI 累计贴水会推成负价） |
-| 默认口径（v1.3 用户拍板） | `DEFAULT_CALIBER` 由 `continuous` 改为 **`cont_adj`（后复权）**；长周期收益类指标须回真实合约空间，不沿用默认后复权长跨度差值 |
+| 默认口径（v1.3 用户拍板） | `DEFAULT_CALIBER` 由 `continuous` 改为 **`back_adj`（等差后复权）**；长周期收益类指标须回真实合约空间，不沿用默认后复权长跨度差值（`cont_adj` 加法前复权已废弃：会产生负价，C7 移除） |
 | 5 分钟复权（v1.3 用户拍板） | 扩展后复权序列至 5m：`bar_5m` 套 roll_segment offset |
 | 换月检测 | 双门（振幅门 + 指数连比率门 0.40），主力判定持仓量单向不可逆 + T+1 |
 | 夜盘归属 | `hour >= 夜盘开始` → 归属下一交易日 |
@@ -103,7 +103,7 @@ L3 口径合成与服务层(连续序列物化 / main_contract_map / anomaly_tic
 - ③ L0 只采集写入无计算；`minute_bar` 结构就位。
 - ④ L1 上层裸表引用 = 0；`bar_*` 单命名空间无 KQ.m@ 残留。
 - L2 `roll_segment` 双门 A/B 对拍通过、历史段零改写、后复权物化与 legacy 逐 bar 差分 = 0。
-- L3 `caliber_registry` 默认项 = `cont_adj`；`BarStore.load` 缺省返回后复权；`anomaly_ticket` 拦截脏数据。
+- L3 `caliber_registry` 默认项 = `back_adj`；`BarStore.load` 缺省返回后复权；`anomaly_ticket` 拦截脏数据。
 - 去天勤：全库 `import tqsdk` 残留（除只读历史列）= 0；三周期 akshare 取得。
 - 日历：`calendar_mode()=official`，`sessions` 日/夜盘非空且逐品种核对通过。
 - 换月治理：护栏对账一致；`rule_version` 样本期唯一；`roll_switch_log` 可复算。
@@ -250,7 +250,7 @@ L3 口径合成与服务层(连续序列物化 / main_contract_map / anomaly_tic
 1. **前复权删数据（D3）**：挂起，等 G9（`fut_kline.continuous` 退役/重定位）合并处置，避免顺序错不可逆。
 2. **roll_segment daily/hourly（D1）**：方案 A 明确决策（维持 continuous + 显式标注），非数据缺口。
 3. **MA888 口径（D4）**：随合约切换自行闭环，其余 888 与主力表不一致仅 JD/LH/SM 三个，纳入日常监控。
-4. **G4 期货日历源**：`futures_rule` 已建，官方源切换细节待复核（弃股票日历 `tool_trade_date_hist_sina`）。
+4. **G4 期货日历源**：✅ 已完成（2026-10-05）。新增唯一权威入口 `app/data/trade_calendar.py`（读 `futures_rule` 的 distinct `trade_date`），并收口 4 处原 `tool_trade_date_hist_sina` 调用（`app/scheduler.py` 融合推送日历、`app/ingest/backfill_rank.py` 预筛、`app/ingest/akshare_source.py` 回退源、`vendor/pipeline_src/run_pipeline.py`）；代码内已 0 处 active 引用股票日历。覆盖边界 fail-loud：超出已播种区间时告警/抛错，不静默套用 A 股日历。
 5. **明文口令**：`qhyc_dev_pwd_2026` 硬编码 59 处 → 收敛为 env fail-fast（P2）。
 6. **G7 与物理删 tqsdk 方向**：接受物理删，可复活性由 git 历史 + provider 抽象保证。
 

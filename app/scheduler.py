@@ -286,15 +286,15 @@ def _load_trade_calendar(max_age_days: int = 7) -> set[str]:
     except Exception as e:  # noqa: BLE001
         logger.debug(f"[fusion] 交易日历缓存读取失败: {e}")
     try:
-        import akshare as ak
+        from app.data import trade_calendar
 
-        df = ak.tool_trade_date_hist_sina()
-        dates = {str(d)[:10] for d in df["trade_date"].tolist()}
+        dates = {d.isoformat() for d in trade_calendar.futures_trading_days()}
         if dates:
             os.makedirs(os.path.dirname(_CAL_PATH), exist_ok=True)
             with open(_CAL_PATH, "w", encoding="utf-8") as f:
                 json.dump({"ts": time.time(), "dates": sorted(dates)}, f)
-            logger.info(f"[fusion] 交易日历已刷新：{len(dates)} 个交易日")
+            logger.info(
+                f"[fusion] 期货官方交易日历已刷新（G4 futures_rule）：{len(dates)} 个交易日")
         return dates
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[fusion] 交易日历获取失败（退化为仅周末判断）: {e}")

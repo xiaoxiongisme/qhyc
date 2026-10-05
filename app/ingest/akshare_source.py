@@ -68,14 +68,16 @@ class AkShareSource:
         if out.ok and out.value is not None and not out.value.empty:
             return out.value
         logger.warning(
-            f"[calendar] 期货专属日历不可用（{out.error}），**回退股票日历** —— "
-            f"该结果对中金所/国债/节假日前后可能有偏差（G4 已知遗留）")
-        df = ak.tool_trade_date_hist_sina()
-        df = df.copy()
-        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-        df = df[(df["trade_date"] >= date(year, 1, 1))
-                & (df["trade_date"] <= date(year, 12, 31))]
-        return df
+            f"[calendar] akshare 期货专属日历接口不可用（{out.error}），"
+            f"**回退 futures_rule 官方源**（G4）")
+        from app.data import trade_calendar  # local import 避免循环依赖
+
+        days = trade_calendar.futures_trading_days(date(year, 1, 1), date(year, 12, 31))
+        if not days:
+            raise RuntimeError(
+                f"[fail-loud] {year} 年期货交易日历为空（futures_rule 未播种该区间）；"
+                f"拒绝回退 A 股 tool_trade_date_hist_sina（G4）")
+        return pd.DataFrame({"trade_date": days})
 
     @staticmethod
     def _futures_calendar(ak, exchange: str, year: int) -> pd.DataFrame:
