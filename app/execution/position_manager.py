@@ -73,18 +73,32 @@ def derive_action(*, direction: str, pos: Position, exchange: str) -> str:
 
 
 def apply_fill(*, real_symbol: str, action: str, direction: str, fill_lots: int,
+               fill_price: float | None = None,
                channel: str = "SIM", account: str | None = None) -> Position:
-    """成交后滚动持仓（写回 execution_position），返回新快照。"""
+    """成交后滚动持仓（写回 execution_position），返回新快照。
+
+    ``fill_price`` 给出时按**加权平均**维护 avg_open_price（G3 止损的成本价基准；
+    缺失则不更新该字段——止损读不到成本价时须 fail-loud，不猜）。
+    """
     pos = load_position(real_symbol, channel=channel, account=account)
     sign = 1 if direction == "BUY" else -1
     net, lng, shrt, today = pos.net_lots, pos.long_lots, pos.short_lots, pos.today_lots
+    row = persistence.get_position(real_symbol, channel=channel, account=account)
+    avg = (row or {}).get("avg_open_price")
 
     if action == "OPEN":
-        net += sign * fill_lots
+        net_before = net
+        net = net_before + sign * fill_lots
         if sign > 0:
             lng += fill_lots
         else:
             shrt += fill_lots
+        if fill_price is not None:
+            if net_before == 0:
+                avg = float(fill_price)          # 原为平仓 → 成本价=本次成交价
+            else:
+                # 加权平均（与持仓方向一致，net_before 与 sign 同号）
+                avg = (float(avg) * abs(net_before) + float(fill_price) * fill_lots) / abs(net)
     elif action in ("CLOSE", "CLOSE_TODAY", "CLOSE_YEST"):
         net -= sign * fill_lots
         if sign > 0:      # 买入平空
@@ -96,11 +110,13 @@ def apply_fill(*, real_symbol: str, action: str, direction: str, fill_lots: int,
         elif action == "CLOSE":   # CZCE 不区分今昨，按今仓优先扣（best-effort）
             today = max(0, today - min(today, fill_lots))
         # CLOSE_YEST：不动 today
+        if net == 0:
+            avg = None      # 平净后成本价失效
     else:
         raise ValueError(f"[fail-loud] 未知 action {action!r}")
 
     persistence.upsert_position(
         real_symbol=real_symbol, net_lots=net, long_lots=lng, short_lots=shrt,
-        today_lots=today, channel=channel, account=account,
+        today_lots=today, avg_open_price=avg, channel=channel, account=account,
     )
     return Position(net_lots=net, long_lots=lng, short_lots=shrt, today_lots=today)

@@ -365,6 +365,14 @@ class ExecutionConfig(BaseModel):
     """
     enabled: bool = (os.getenv("EXECUTION_ENABLED") == "1")
 
+    #: 网关选择：``sim`` = 进程内仿真网关（SimNow 等价，零资金风险，Sprint 1 默认）；
+    #: ``ctp``/``qmt`` = 走 HTTP 网关（需 EXECUTION_BROKER_BASE_URL + 真实账号）。
+    #: ⚠ 非 sim 时必须显式配置 base_url，否则 broker_http fail-loud 拒绝下单。
+    broker: str = os.getenv("EXECUTION_BROKER", "sim")
+    base_url: str = os.getenv("EXECUTION_BROKER_BASE_URL", "")
+    account: str = os.getenv("EXECUTION_ACCOUNT", "")
+    channel: str = os.getenv("EXECUTION_CHANNEL", "SIM")
+
 
 class FactorBiasConfig(BaseModel):
     """因子偏置乘子配置（因子接入 PRD §5）。"""

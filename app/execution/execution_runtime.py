@@ -14,7 +14,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.logging import logger
-from app.execution import broker_http, persistence
+from app.execution import persistence
+from app.execution.broker import get_broker
 
 #: 启动恢复时需回查的未终态
 POLL_STATES = ("NEW", "SENT", "PARTIAL")
@@ -49,7 +50,7 @@ def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[s
         "channel": order["channel"],
         "account": order["account"],
     }
-    resp = broker_http.submit(body)
+    resp = get_broker().submit(body)
     state = resp["state"]
 
     if state == "ACK":
@@ -76,7 +77,7 @@ def reconcile_order(order_id: int) -> dict[str, Any]:
         return {"state": "NO_BROKER_ID", "order_id": order_id,
                 "detail": "无 broker_order_id，从未确认送达"}
 
-    st = broker_http.query_order(bid)
+    st = get_broker().query_order(bid)
     mapped = _QUERY_STATE_MAP.get(st.get("state", ""))
     if mapped and mapped != order["status"]:
         persistence.update_status(order_id, mapped, broker_order_id=bid)
