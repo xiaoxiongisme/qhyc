@@ -191,9 +191,32 @@ def main() -> int:
     # ---------- 6. HTTP 探测（鉴权 / 前端） ----------
     if DO_HTTP:
         print("\n[6] HTTP 探测（localhost:8000）")
-        code, _ = _http("/assets/")
-        add("PASS" if code == 200 else "WARN", "http.assets",
-            f"GET /assets/ -> {code}（200=前端已挂载，404=未构建）")
+        # ⚠ 口径修正（2026-10-05，R8）：原探 `/assets/`（**目录**），但 StaticFiles 按规范
+        #   **不列目录** → 无论前端是否挂载成功都恒返回 404，属**探测口径错误（假 WARN）**。
+        #   实测：/ -> 200、/assets/ -> 404、/assets/index-*.js -> 200，看板本已正常服务。
+        #   改为探测**真实静态文件**（assets 下任一 .js/.css），并辅以 `/` 交叉判定。
+        asset_probe = None
+        assets_dir = os.path.join(web_dist, "assets")
+        if os.path.isdir(assets_dir):
+            for fn in sorted(os.listdir(assets_dir)):
+                if fn.endswith((".js", ".css")):
+                    asset_probe = f"/assets/{fn}"
+                    break
+        if asset_probe:
+            code, _ = _http(asset_probe)
+            root_code, _ = _http("/")
+            ok = code == 200 and root_code == 200
+            add("PASS" if ok else "WARN", "http.assets",
+                f"GET {asset_probe} -> {code}；GET / -> {root_code}（200=前端已挂载可用）")
+        else:
+            root_code, _ = _http("/")
+            if root_code == 200:
+                add("WARN", "http.assets",
+                    "web/dist/assets 下无 .js/.css（前端可能未构建），但 GET / -> 200")
+            else:
+                add("WARN", "http.assets",
+                    f"未找到静态资源且 GET / -> {root_code}（前端未挂载）")
+
         sc, _ = _http("/symbols?limit=1")
         if sc in (401, 403):
             add("PASS", "http.auth", f"GET /symbols -> {sc}（鉴权已启用）")
