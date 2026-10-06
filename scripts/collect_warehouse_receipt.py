@@ -156,6 +156,40 @@ def pick_browser() -> str | None:
     return None
 
 
+_BROWSER_OK: bool | None = None
+
+
+def browser_available() -> bool:
+    """检测 StealthyFetcher 所需的无头 chromium 是否可用。
+
+    云端镜像不安装浏览器（CDN 受限，且 DCE/GFEX 本就由宿主机采集器供给），
+    此时返回 False，调用方跳过 DCE/GFEX 而非崩溃。
+    可用环境变量 WR_BROWSER=0 强制跳过、=1 强制启用（用于显式报错）。
+    """
+    global _BROWSER_OK
+    if _BROWSER_OK is not None:
+        return _BROWSER_OK
+    force = os.environ.get("WR_BROWSER", "").lower()
+    if force == "0":
+        _BROWSER_OK = False
+        return False
+    if force == "1":
+        _BROWSER_OK = True
+        return True
+    try:
+        from patchright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            try:
+                b = p.chromium.launch(headless=True)
+                b.close()
+                _BROWSER_OK = True
+            except Exception:
+                _BROWSER_OK = False
+    except Exception:
+        _BROWSER_OK = False
+    return _BROWSER_OK
+
+
 def _safe_goto(page, url: str, wait_ms: int = 3500, tries: int = 3):
     for _ in range(tries):
         try:
@@ -485,6 +519,10 @@ def collect_one(d: _date, exchange: str) -> int:
     if exchange == "CZCE":
         return upsert(fetch_czce(d))
     if exchange in ("DCE", "GFEX"):
+        if not browser_available():
+            log(f"[warehouse_receipt] {exchange} 需无头浏览器，当前环境不可用，跳过"
+                f"（由宿主机采集器负责）")
+            return 0
         return fetch_browser(exchange, [d])
     log(f"[warehouse_receipt] {exchange} 未知交易所，跳过")
     return 0
@@ -500,6 +538,9 @@ def collect_range(start: _date, end: _date, exchanges: list[str]) -> int:
             for d in days:
                 total += collect_one(d, ex)
         else:
+            if not browser_available():
+                log(f"[{ex}] 无头浏览器不可用，跳过（由宿主机采集器负责）")
+                continue
             done = existing_dates(ex, start, end)
             todo = [d for d in days if d not in done]
             log(f"[{ex}] 已存在 {len(done)} 天，待抓取 {len(todo)} 天")
