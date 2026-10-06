@@ -88,6 +88,19 @@ BROWSER_CANDIDATES = [
 RE_FILENAME = re.compile(r"^(\d{8})_([A-Za-z]+\d+)_")
 RE_HEADER = re.compile(r"合约代码[:：]\s*([A-Za-z]+\d+)\s*.*?Date[:：]\s*(\d{4}-\d{2}-\d{2})")
 
+#: Chromium 启动参数（追加进 scrapling 的 ``extra_flags``）。
+#: ``--no-sandbox`` 是**容器内必需**：云端容器无 user-namespace 权限，Chromium 的
+#: setuid/namespace sandbox 会让渲染进程秒退，表现为 page 已打开首页却在
+#: ``page.wait_for_timeout`` 处抛 ``TargetClosedError``（2026-10-06 实测）。
+#: ``--disable-dev-shm-usage`` 规避容器 ``/dev/shm`` 默认仅 64MB 导致的渲染崩溃。
+#: 可用环境变量 ``DCE_CHROMIUM_FLAGS``（逗号分隔）追加/覆盖，便于按环境调整。
+DCE_CHROMIUM_FLAGS: list[str] = [
+    f.strip() for f in os.environ.get(
+        "DCE_CHROMIUM_FLAGS",
+        "--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu",
+    ).split(",") if f.strip()
+]
+
 METRIC_MAP = {"成交量": "vol", "持买单量": "long", "持卖单量": "short"}
 
 # 页面上下文内下载 zip（带 credentials，复用浏览器解出的瑞数会话 cookie）
@@ -127,13 +140,42 @@ def _log(msg: str) -> None:
 
 
 def pick_browser() -> str | None:
-    """返回可复用的本机浏览器路径；无则 None（交给 Scrapling 自带 Chromium）"""
+    """返回可复用的浏览器可执行文件路径；无则 None（交给 Scrapling 自行解析）。
+
+    ★容器内（2026-10-06）：基础镜像 slim，`scrapling install` / `patchright install`
+    下载的 Chromium 落在 ``~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome``，
+    但其**系统依赖库不在系统路径**（实测缺 25 个 .so，已解包到
+    ``$HOME/chromedeps`` 并需 ``LD_LIBRARY_PATH`` 注入）。这里显式返回该路径，
+    配合 ``DCE_CHROMIUM_FLAGS`` 与 ``DCE_LD_LIBRARY_PATH`` 环境变量使用。
+    """
+    # 1) 显式覆盖优先
+    env_exe = os.environ.get("DCE_BROWSER_EXE")
+    if env_exe and os.path.exists(env_exe):
+        return env_exe
+    # 2) 宿主机浏览器候选
     for p in BROWSER_CANDIDATES:
         try:
             if os.path.exists(p):
                 return p
         except OSError:
             continue
+    # 3) 容器内 playwright 缓存的 chromium
+    #    路径顺序与 playwright 的默认一致：$PLAYWRIGHT_BROWSERS_PATH 优先
+    #    （镜像里装在 /opt/ms-playwright，见 Dockerfile 的 WITH_SCRAPLING 层），
+    #    其次回退 ~/.cache/ms-playwright（宿主机 scrapling install 的位置）。
+    try:
+        import glob
+        roots = []
+        env_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+        if env_dir:
+            roots.append(env_dir)
+        roots.append(os.path.expanduser("~/.cache/ms-playwright"))
+        for root in roots:
+            hits = sorted(glob.glob(os.path.join(root, "chromium-*", "chrome-linux64", "chrome")))
+            if hits:
+                return hits[-1]
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
@@ -375,9 +417,21 @@ def fetch_zips(dates: list[dt.date], *, headless: bool = True,
             time.sleep(0.6)
         return page
 
+    # ★云端容器必需（2026-10-06）：容器内无 user-namespace 能力，Chromium 的
+    #   setuid/namespace sandbox 会让渲染进程**立刻退出**（表现为 page 已 goto
+    #   首页、随后 `TargetClosedError: Target page, context or browser has been closed`
+    #   在 `page.wait_for_timeout` 处炸掉）。
+    #   scrapling 0.4.15 走 `extra_flags` 追加 chromium 启动参数
+    #   （见 scrapling/engines/_browsers/_base.py:480，会并入 launch(args=...)），
+    #   注意不是 `no_sandbox`/`chromium_args` 这类名字，传错会被静默忽略。
+    #   本模块只访问公开行情页面、不做登录态操作，关沙箱风险可接受；
+    #   宿主机本地运行同样适用（保持两端行为一致）。
+    extra_flags: list[str] = list(DCE_CHROMIUM_FLAGS)
+
     kwargs: dict[str, Any] = dict(
         headless=headless, network_idle=False, timeout=180000, wait=2000,
         locale="zh-CN", google_search=False, retries=1, page_action=page_action,
+        extra_flags=extra_flags,
     )
     exe = pick_browser()
     if exe:

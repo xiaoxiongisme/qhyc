@@ -114,6 +114,11 @@ def main() -> int:
                 s.execute(upsert_sql, p)
                 upserted += 1
         print(f"[done] 闭合旧行 {closed} 条；UPSERT {upserted} 条")
+        # 费率字典已变 → 必须清掉进程内费率缓存，否则同一进程后续读取会拿到旧费率
+        # （app/data/cost.py 自 2026-10-06 起对 fee_per_lot 结果做只读缓存）。
+        from app.data.cost import clear_fee_cache
+        clear_fee_cache()
+        print("[done] 已清空费率查询缓存（clear_fee_cache）")
     else:
         with session_scope() as s:
             n_close = sum(s.execute(close_sql, _params(r, close_only=True)).rowcount

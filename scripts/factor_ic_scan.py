@@ -60,6 +60,24 @@ def load_creds():
 
 
 # ---------------------------------------------------------------- 数据加载
+def _ymd(s) -> str:
+    """把 --since/--until 规整为 YYYY-MM-DD（兼容 年 / 年月 / 完整日期 三种写法）。
+
+    历史接口按「年」设计：调用方直接传 ``f"{since}-01-01"``。但调度器
+    ``_factor_v1v6_job`` 传的是完整日期（``datetime.now()-60d`` 的 ISO），两者混用
+    会拼出 ``2026-08-07-01-01`` 这种非法值 → SQL 报 InvalidDatetimeFormat，
+    **每日因子作业整段失败、factor_value 自 2026-09-29 起停更**（2026-10-06 实测）。
+    这里统一规整：年(2026)→2026-01-01；年月(2026-08)→2026-08-01；完整日期原样透传。
+    年份入参行为与旧版完全一致，故不破坏既有脚本。
+    """
+    s = str(s).strip()
+    if len(s) == 4:            # 2026
+        return f"{s}-01-01"
+    if len(s) == 7:            # 2026-08
+        return f"{s}-01"
+    return s                   # 2026-08-07 / 2026-08-07 00:00:00 原样
+
+
 def _is_main(s: str) -> bool:
     """888 = 主力连续；8888 = 商品指数（两者不可同时进入截面）。"""
     return s.endswith("888") and not s.endswith("8888")
@@ -69,7 +87,7 @@ def pick_symbols(cur, since):
     """选出用于截面的合约：同一品种只保留主力连续（888），去掉商品指数（8888）。"""
     cur.execute(
         "SELECT DISTINCT symbol FROM bar_15m "
-        "WHERE bucket >= %s AND close IS NOT NULL", (f"{since}-01-01",)
+        "WHERE bucket >= %s AND close IS NOT NULL", (_ymd(since),)
     )
     syms = [r[0] for r in cur.fetchall()]
     # 8888（商品指数）与 888（主力连续）视为同一品种，优先保留 888
@@ -89,7 +107,7 @@ def load_symbol_bars(cur, symbol, since, until):
         "SELECT bucket, open, high, low, close, volume, amount, open_interest "
         "FROM bar_15m WHERE symbol=%s AND bucket >= %s AND bucket < %s "
         "  AND close IS NOT NULL ORDER BY bucket",
-        (symbol, f"{since}-01-01", f"{until}-01-01"),
+        (symbol, _ymd(since), _ymd(until)),
     )
     rows = cur.fetchall()
     if not rows:

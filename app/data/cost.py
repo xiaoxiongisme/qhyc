@@ -39,9 +39,32 @@ from app.core.db import session_scope
 PCT_DIVISOR = 10000.0
 
 __all__ = ["TradingCost", "CostNotFoundError", "fee_per_lot",
-           "fee_yuan_per_lot", "round_trip_cost", "PCT_DIVISOR"]
+           "fee_yuan_per_lot", "round_trip_cost", "PCT_DIVISOR",
+           "clear_fee_cache"]
 
 _SCOPE_RANK = {"CONTRACTS": 3, "MONTHS": 2, "ALL": 1}
+
+# ---------------------------------------------------------------------------
+# 费率查询缓存（2026-10-06）
+# ---------------------------------------------------------------------------
+#: 为什么需要：费率表 dim_trading_cost 是**低频变更的参照数据**，但回测里
+#: ``cost_coefficients`` / ``fee_yuan_per_lot`` 会被逐笔调用十万量级，且每次都
+#: 至少 1~2 条 SQL（历史日期必走 fallback → 同一 action 查两次）。
+#: 不缓存 = 回测全程把连接池当查询接口用，必然成为最慢的一环。
+#:
+#: 为什么安全：键是 (variety_code, action, contract, on_date, kind)，且只在
+#: **单次查询**结果上缓存——``dim_trading_cost`` 的行在一次运行内不变；
+#: 费率字典重载后必须调 :func:`clear_fee_cache`（``load_cost_dict.py`` 已调用）。
+#:
+#: ⚠ 不可缓存的是「取不到时抛 CostNotFoundError」的结果**之外**的任何状态；
+#:   异常不进缓存，避免一次误判被永久固化。
+_FEE_CACHE: dict = {}
+_FEE_CACHE_MAX = 8192
+
+
+def clear_fee_cache() -> None:
+    """清空费率查询缓存（费率字典重载 / 迁移后必须调用，否则读到旧费率）。"""
+    _FEE_CACHE.clear()
 
 
 class CostNotFoundError(LookupError):
@@ -116,6 +139,20 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
     c4, cmonth = _contract_parts(contract)
     cdigits = c4
 
+    # 缓存命中则直接返回（见 _FEE_CACHE 处的说明：为什么安全、什么时候必须清）
+    ck = (vc, action, cdigits, cmonth, d, kind)
+    hit = _FEE_CACHE.get(ck)
+    if hit is not None:
+        return hit
+
+    # ★两条查询必须在**同一个 session 作用域内**（2026-10-06 修连接泄漏）
+    #   原实现在 `with session_scope()` 块**外**继续执行 fallback 查询
+    #   （`s.execute(...)`），而 `session_scope` 的 finally 已 `session.close()`。
+    #   SQLAlchemy 2.x 下 close() 后再 execute 会**重新开事务、从池里再取一条
+    #   连接**，且该 s 此后永不 close → **每次 fee_per_lot 调用净泄漏一条连接**。
+    #   费率表最早 effective_from=2026-03-11，历史回测**必然**走 fallback 分支，
+    #   而 cost_coefficients 单次调用会调 fee_per_lot 3~6 次 → 批量回测
+    #   必然耗尽连接池（pool_size=10 + max_overflow=20）。
     with session_scope() as s:
         rows = s.execute(text(
             "SELECT scope_kind, scope_months, scope_contracts, fee_type, fee_value, "
@@ -126,28 +163,27 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
             "  AND effective_from <= :d AND (effective_to IS NULL OR effective_to > :d)"),
             {"vc": vc, "kind": kind, "act": action, "d": d}).fetchall()
 
-    if not rows:
-        # ── 用户 2026-10-03 裁定：「没有历史费率就按当前费率计算」────────────────
-        # 费率表最早 effective_from = 2026-03-11（交易所通知日），更早的回测无历史行。
-        # 口径选择：退到**当期有效行**，而不是报错。
-        # ⚠ 但降级必须**可观测**（返回对象带 fee_as_of / fell_back_to_current），
-        #   否则就成了本项目最典型的「静默失效」陷阱（见 memory: 静默失效是主要缺陷类型）。
-        cur = s.execute(text(
-            "SELECT scope_kind, scope_months, scope_contracts, fee_type, fee_value, "
-            "       exchange_fee_value, broker_markup_type, broker_markup_value, "
-            "       slip_ticks, effective_from, source, note "
-            "FROM dim_trading_cost "
-            "WHERE upper(variety_code) = :vc AND instrument_kind = :kind AND action = :act "
-            "  AND effective_to IS NULL"),
-            {"vc": vc, "kind": kind, "act": action}).fetchall()
-        if not cur:
-            raise CostNotFoundError(
-                f"{vc}/{action}: dim_trading_cost 中完全无该动作费率（{d}）。"
-                f"拒绝按 0 成本计算 —— 请补费率来源后重跑 "
-                f"scripts/sync_cost_from_exchange.py --apply")
-        rows, fell_back = cur, True
-    else:
         fell_back = False
+        if not rows:
+            # ── 用户 2026-10-03 裁定：「没有历史费率就按当前费率计算」────────────
+            # 费率表最早 effective_from = 2026-03-11（交易所通知日），更早的回测无历史行。
+            # 口径选择：退到**当期有效行**，而不是报错。
+            # ⚠ 但降级必须**可观测**（返回对象带 fee_as_of / fell_back_to_current），
+            #   否则就成了本项目最典型的「静默失效」陷阱（见 memory: 静默失效是主要缺陷类型）。
+            cur = s.execute(text(
+                "SELECT scope_kind, scope_months, scope_contracts, fee_type, fee_value, "
+                "       exchange_fee_value, broker_markup_type, broker_markup_value, "
+                "       slip_ticks, effective_from, source, note "
+                "FROM dim_trading_cost "
+                "WHERE upper(variety_code) = :vc AND instrument_kind = :kind AND action = :act "
+                "  AND effective_to IS NULL"),
+                {"vc": vc, "kind": kind, "act": action}).fetchall()
+            if not cur:
+                raise CostNotFoundError(
+                    f"{vc}/{action}: dim_trading_cost 中完全无该动作费率（{d}）。"
+                    f"拒绝按 0 成本计算 —— 请补费率来源后重跑 "
+                    f"scripts/sync_cost_from_exchange.py --apply")
+            rows, fell_back = cur, True
 
     best = None
     for r in rows:
@@ -183,7 +219,7 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
 
     r = best[1]
     ex_src = r[5] if r[5] is not None else r[4]
-    return TradingCost(
+    out = TradingCost(
         variety_code=vc, action=action, fee_type=r[3], fee_value=float(r[4] or 0),
         exchange_fee_yuan=float(ex_src or 0),
         broker_markup_type=r[6] or "NONE",
@@ -191,6 +227,12 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
         slip_ticks=float(r[8] or 0), scope_kind=r[0], effective_from=r[9],
         source=r[10], note=r[11],
         fee_as_of=d, fell_back_to_current=fell_back)
+    if len(_FEE_CACHE) >= _FEE_CACHE_MAX:
+        # 简单的容量上限：费率键空间有限（品种×动作×日期），正常不会触顶；
+        # 触顶时整体清空重来，宁可多查也不让内存无界增长。
+        _FEE_CACHE.clear()
+    _FEE_CACHE[ck] = out
+    return out
 
 
 def fee_yuan_per_lot(symbol, action, price, *, contract=None, on_date=None, kind="FUTURE"):

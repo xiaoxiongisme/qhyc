@@ -1152,16 +1152,19 @@ def _build_scheduler() -> BlockingScheduler:
 
     # #5 分钟优先管线：每 30 分钟把实时 1 分钟并入 minute_bar 并增量合成 bar_5/15/30/60m
     # （bar_60m 即"小时数据"）。与 hourly_collect 解耦，各自服务不同表，互不冲突。
+    # ★错峰（2026-10-06）：由 minute="*/30"（:00/:30）改为 "7,37" —— 避开整点，
+    #   使本作业不与 hourly_collect（:00）及任何整点拉取峰值重叠；配合作业内
+    #   advisory 锁 + 合成后追平校验，彻底消除 bar_* 最新日静默漏桶（见 job 注释）。
     sched.add_job(
         _minute_and_bars_job,
-        trigger=CronTrigger(minute="*/30", timezone=settings.env.TZ),
+        trigger=CronTrigger(minute="7,37", timezone=settings.env.TZ),
         id="minute_and_bars",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
         misfire_grace_time=900,
     )
-    logger.info("[scheduler] registered minute_and_bars every :30 (minute-first pipeline)")
+    logger.info("[scheduler] registered minute_and_bars at :07/:37 (staggered, minute-first pipeline)")
 
     # fut_kline 增量/派生重建作业已于 2026-10-04 随 fdf 模块退役一并停用（天勤清理专项）。
     # fut_kline 表保留为孤儿表待观测，不再有写入通路（_fut_kline_job/_rebuild_fut_kline_job 已删除）。
@@ -1666,17 +1669,25 @@ def _minute_and_bars_job() -> None:
     使 minute_bar 成为唯一事实来源（历史 CSV + 实时 akshare 1 分钟同口径），
     bar_*（含 bar_60m = 小时数据）随调度低成本刷新。hourly_bar（akshare 直拉）的去留
     取决于 #5 分叉决策——本作业只负责 bar_* 一侧，互不冲突。
+
+    ★错峰（2026-10-06）：整个「采集 + 合成」持会话级 advisory 锁
+    ``LOCK_MINUTE_PIPELINE``，与并发实例（本作业另一副本 / 手动脚本 /
+    其它进程写 minute_bar）互斥。并发是 bar_* 最新交易日**静默整段漏桶**的根因：
+    DELETE 已删最近桶、INSERT 却读到 minute_bar 未提交快照，脚本 rowcount 仍为正
+    不报错（实测 09-30 一度回退到 09-29）。拿不到锁则等待，超时抛错而非带病运行。
+    合成函数内部另有「落库后追平校验 + 重试」作为第二道防线。
     """
     logger.info("[scheduler] minute_and_bars start")
     try:
         with session_scope() as s:
             from app.ingest.minute_collector import MinuteCollector
-            from app.ingest.synthesizer import synthesize_bars_incremental
+            from app.ingest.synthesizer import minute_pipeline_lock, synthesize_bars_incremental
 
-            mc = MinuteCollector(s)
-            m_stats = mc.collect_all()
-            m_ok = sum(1 for r in m_stats if "error" not in r)
-            synth_stats = synthesize_bars_incremental(s)
+            with minute_pipeline_lock(s):
+                mc = MinuteCollector(s)
+                m_stats = mc.collect_all()
+                m_ok = sum(1 for r in m_stats if "error" not in r)
+                synth_stats = synthesize_bars_incremental(s)
             logger.info(
                 f"[scheduler] minute_and_bars done: minute_ok={m_ok}/{len(m_stats)} "
                 f"synth={synth_stats}"

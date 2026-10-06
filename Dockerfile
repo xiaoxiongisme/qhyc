@@ -60,15 +60,58 @@ RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
 # 需要「容器内自持 DCE 采集」时启用：
 #     docker compose build --build-arg WITH_SCRAPLING=1
 # 不启用时 DCE 由宿主机 DCE_scrapling_crawler.py 采集（同 src，双向幂等）。
+#
+# ★ 2026-10-06 实测补齐（此前本层只装 scrapling 库、不装浏览器，导致
+#   dce_scrapling.available()=True 但一跑就 TargetClosedError / 无浏览器）：
+#   该层现在把「浏览器 + 全部系统库 + LD_LIBRARY_PATH」一并装好：
+#   1) 系统库：slim 镜像缺 25 个 .so（libnss3/libgbm/libasound…），
+#      chromium 起来就报 "error while loading shared libraries"。
+#      必须用 root 装，且 --no-install-recommends 以控制体积。
+#      apt 源：官方 deb.debian.org 在部分云端极慢，故默认走清华镜像，
+#      可用 --build-arg APT_MIRROR=... 覆盖。
+#   2) 浏览器：走 npmmirror 的 playwright 镜像（官方 cdn.playwright.dev
+#      实测仅 ~0.5KB/s，会卡死在 0%；镜像源 186MB 秒级完成）。
+#      装到 PLAYWRIGHT_BROWSERS_PATH 指定的共享目录，appuser 亦可读。
+#   3) 运行时：ENV LD_LIBRARY_PATH 让 chromium 能找到上面装的库。
 ARG WITH_SCRAPLING=0
-# 云端仅需 scrapling 的 Fetcher（SHFE/CZCE 仓单，纯 HTTP，无需浏览器）。
-# DCE/GFEX 仓单的 StealthyFetcher 浏览器采集按原架构由宿主机采集器供给，
-# 且云端到 cdn.playwright.dev 下载受限，故镜像不安装浏览器二进制。
+# Debian 镜像（国内云端建议保持清华；可传 APT_MIRROR 覆盖）
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+# playwright 浏览器下载源（官方 CDN 在本云端不可用，必须镜像）
+ARG PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
+# 浏览器安装位置（需在 USER appuser 之前 chown）
+ARG PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
 RUN if [ "$WITH_SCRAPLING" = "1" ]; then \
+        set -eux; \
         pip install "scrapling[fetchers]" -i ${PIP_INDEX_URL} ; \
+        # ---- 1) 系统库（chromium 运行时依赖，缺一即起不来）----
+        printf 'deb %s trixie main contrib non-free non-free-firmware\n' "${APT_MIRROR}" > /etc/apt/sources.list ; \
+        apt-get update ; \
+        apt-get install -y --no-install-recommends \
+            libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+            libdbus-1-3 libcups2 libexpat1 libxcb1 libxkbcommon0 libasound2 \
+            libgbm1 libx11-6 libxext6 libcairo2 libpango-1.0-0 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libatspi2.0-0 libdrm2 libxshmfence1 \
+            libxi6 libxrender1 libavahi-client3 libavahi-common3 libfontconfig1 \
+            libfreetype6 libfribidi0 libharfbuzz0b libpixman-1-0 libpng16-16 \
+            libthai0 libxcb-render0 libxcb-shm0 libxau6 libxdmcp6 \
+            fonts-liberation ; \
+        rm -rf /var/lib/apt/lists/* ; \
+        # ---- 2) 浏览器二进制（npmmirror 源）----
+        PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST}" \
+        PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH}" \
+        patchright install chromium || python -m patchright install chromium ; \
+        mkdir -p "${PLAYWRIGHT_BROWSERS_PATH}" ; \
+        echo "[build] chromium 已安装到 ${PLAYWRIGHT_BROWSERS_PATH}" ; \
     else \
         echo "[build] 跳过 Scrapling 层（WITH_SCRAPLING=0）：DCE 由宿主机采集器供给" ; \
     fi
+
+# 运行时环境：chromium 需要这些库 + 浏览器路径
+# （ENV 对 WITH_SCRAPLING=0 也无害：目录不存在时 dce_scrapling.pick_browser()
+#   返回 None，StealthyFetcher 会走自己的解析逻辑）
+ENV PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH} \
+    LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu
 
 # 源码
 COPY app ./app
@@ -90,6 +133,10 @@ COPY vendor/pipeline_src ./pipeline_src
 
 # 运行用户（非 root）
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
+# 浏览器目录归 appuser（仅 WITH_SCRAPLING=1 时存在；不存在时此段是 no-op）
+RUN if [ -d "${PLAYWRIGHT_BROWSERS_PATH}" ]; then \
+        chown -R appuser:appuser "${PLAYWRIGHT_BROWSERS_PATH}" ; \
+    fi
 USER appuser
 
 EXPOSE 8000

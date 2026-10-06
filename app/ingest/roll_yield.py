@@ -113,6 +113,81 @@ def fetch_roll_yield(date: _dt.date, var: str, retries: int = 2) -> list[dict]:
     return []
 
 
+def _months_between(sym_a: str, sym_b: str) -> int | None:
+    """两个合约代码（品种+YYMM）之间的月差；无法解析返回 None。"""
+    import re
+
+    ma = re.search(r"(\d{2})(\d{2})$", str(sym_a))
+    mb = re.search(r"(\d{2})(\d{2})$", str(sym_b))
+    if not ma or not mb:
+        return None
+    ya, mma = int(ma.group(1)), int(ma.group(2))
+    yb, mmb = int(mb.group(1)), int(mb.group(2))
+    if not (1 <= mma <= 12 and 1 <= mmb <= 12):
+        return None
+    return (ya - yb) * 12 + (mma - mmb)
+
+
+def fetch_roll_yield_db(date: _dt.date, var: str) -> list[dict]:
+    """**库内兜底**：用 contract_daily 自算展期收益（akshare 链路不可用时）。
+
+    为什么需要（2026-10-06 实测）：``ak.get_roll_yield`` 内部走
+    ``get_futures_daily(market=...)``，**DCE 等品种该端点返回非 JSON** →
+    ``Expecting value: line 1 column 1`` 逐品种重试全失败，roll_yield 的
+    DCE 17 品种自 09-24 起停更。本函数不依赖任何外部源。
+
+    口径与 akshare ``get_roll_yield`` **完全一致**（对照其源码）：
+      1. 取该品种当日全部合约，按 **open_interest 降序**；
+      2. symbol1 = 第一（主力/近月），symbol2 = 第二（次主力/远月）；
+      3. ``c`` = 两者月份差；``roll = log(close2/close1) / c * 12``（年化）；
+      4. 返回 (roll, near, far)：c>0 时 near=symbol2，否则 near=symbol1。
+
+    与 akshare 版的差异：``near_price/far_price`` 这里**有值**（akshare 版留 NULL，
+    因其价格接口需 JS）；``src`` 标记 ``db:contract_daily`` 以便溯源区分。
+    """
+    import math
+
+    eng = get_engine()
+    with eng.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT symbol, close, oi FROM contract_daily "
+                "WHERE trade_date = :d AND upper(product) = upper(:v) "
+                "  AND close IS NOT NULL AND oi IS NOT NULL "
+                "ORDER BY oi DESC"
+            ),
+            {"d": date, "v": var},
+        ).fetchall()
+    if len(rows) < 2:
+        return []
+    sym1, close1 = rows[0][0], rows[0][1]
+    sym2, close2 = rows[1][0], rows[1][1]
+    c = _months_between(sym1, sym2)
+    if not c:
+        return []
+    try:
+        c1, c2 = float(close1), float(close2)
+    except (TypeError, ValueError):
+        return []
+    if c1 == 0 or c2 == 0:
+        return []
+    roll = math.log(c2 / c1) / c * 12
+    near, far = (sym2, sym1) if c > 0 else (sym1, sym2)
+    near_px, far_px = (c2, c1) if c > 0 else (c1, c2)
+    return [{
+        "report_date": date,
+        "symbol": f"{var.upper()}888",
+        "exchange": None,
+        "near_contract": near,
+        "far_contract": far,
+        "near_price": near_px,
+        "far_price": far_px,
+        "roll_yield": roll,
+        "src": "db:contract_daily",
+        "version": VERSION,
+    }]
+
+
 def save_rows(rows: list[dict]) -> int:
     if not rows:
         return 0
@@ -126,15 +201,30 @@ def save_rows(rows: list[dict]) -> int:
 
 
 def run(date: _dt.date, vars_list: list[str], sleep: float = 0.3) -> dict:
-    """单交易日批量抓取展期收益率。返回 {var: 行数/错误}。"""
+    """单交易日批量抓取展期收益率。返回 {var: 行数/错误}。
+
+    两级取数（2026-10-06 起）：先 akshare 官方链路；**取不到则回落库内
+    contract_daily 自算**（口径等价，见 :func:`fetch_roll_yield_db` 注释）。
+    绝不因为某个品种外部源挂了就整日留空。
+    """
     summary: dict[str, Any] = {}
     for var in vars_list:
         try:
             rows = fetch_roll_yield(date, var)
+            if not rows:
+                rows = fetch_roll_yield_db(date, var)
+                if rows:
+                    logger.info(
+                        f"[roll_yield] {var} {date} akshare 无数据，已用库内 contract_daily 兜底")
             n = save_rows(rows)
             summary[var] = n
         except Exception as e:  # noqa: BLE001
-            summary[var] = f"失败: {type(e).__name__}: {e}"
+            try:
+                rows = fetch_roll_yield_db(date, var)
+                n = save_rows(rows)
+                summary[var] = f"{n}(db_fallback)"
+            except Exception as e2:  # noqa: BLE001
+                summary[var] = f"失败: {type(e).__name__}: {e} | db兜底亦失败: {e2}"
         time.sleep(sleep)
     return summary
 
