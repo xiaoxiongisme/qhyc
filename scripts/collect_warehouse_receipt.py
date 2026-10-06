@@ -46,13 +46,24 @@ _scrapling_scripts = os.environ.get("SCRAPLING_SCRIPTS_PATH")
 if _scrapling_scripts and os.path.isdir(_scrapling_scripts):
     sys.path.insert(0, _scrapling_scripts)
 
-PG = dict(
-    host=os.environ.get("PGHOST", "localhost"),
-    port=int(os.environ.get("PGPORT", "5432")),
-    dbname=os.environ.get("PGDATABASE", "futures"),
-    user=os.environ.get("PGUSER", "futures"),
-    password=os.environ["PGPASSWORD"],
-)
+def _pg_conn():
+    """构建 DB 连接（运行时读取，不在模块顶层）。
+
+    优先级：DATABASE_URL > POSTGRES_* > PG* > 默认值。
+    云端容器（scheduler/api）环境为 POSTGRES_HOST/USER/PASSWORD/DB/PORT；
+    本地开发可用 PGHOST/PGUSER/PGPASSWORD 或 DATABASE_URL。
+    """
+    url = os.environ.get("DATABASE_URL")
+    if url and url.startswith("postgresql"):
+        return psycopg2.connect(connect_timeout=10, dsn=url)
+    return psycopg2.connect(
+        connect_timeout=10,
+        host=os.environ.get("POSTGRES_HOST", os.environ.get("PGHOST", "localhost")),
+        port=int(os.environ.get("POSTGRES_PORT", os.environ.get("PGPORT", "5432"))),
+        dbname=os.environ.get("POSTGRES_DB", os.environ.get("PGDATABASE", "futures")),
+        user=os.environ.get("POSTGRES_USER", os.environ.get("PGUSER", "futures")),
+        password=os.environ.get("POSTGRES_PASSWORD", os.environ.get("PGPASSWORD", "")),
+    )
 
 # --------------------------------------------------------------- 浏览器
 # 容器（Linux）与生产/开发机（Windows）都要能跑：优先用 PATH 里的
@@ -166,7 +177,7 @@ def _int(v):
 def upsert(rows: list[dict]) -> int:
     if not rows:
         return 0
-    conn = psycopg2.connect(connect_timeout=10, **PG)
+    conn = _pg_conn()
     try:
         with conn, conn.cursor() as cur:
             execute_batch(cur, """
@@ -187,7 +198,7 @@ def upsert(rows: list[dict]) -> int:
 
 def existing_dates(exchange: str, start: _date, end: _date) -> set:
     """查询某交易所已存在于 DB 的 report_date 集合，用于断点续跑。"""
-    conn = psycopg2.connect(connect_timeout=10, **PG)
+    conn = _pg_conn()
     try:
         with conn, conn.cursor() as cur:
             cur.execute(

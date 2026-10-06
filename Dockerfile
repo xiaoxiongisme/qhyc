@@ -63,7 +63,8 @@ RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
 ARG WITH_SCRAPLING=0
 RUN if [ "$WITH_SCRAPLING" = "1" ]; then \
         pip install "scrapling[fetchers]" -i ${PIP_INDEX_URL} \
-        && (scrapling install || echo "[build] scrapling install 失败，容器内 DCE 采集将降级") ; \
+        && scrapling install \
+        && patchright install chromium ; \
     else \
         echo "[build] 跳过 Scrapling 层（WITH_SCRAPLING=0）：DCE 由宿主机采集器供给" ; \
     fi
