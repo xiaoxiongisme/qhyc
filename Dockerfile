@@ -133,6 +133,14 @@ COPY vendor/pipeline_src ./pipeline_src
 
 # 运行用户（非 root）
 RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
+# ★预建运行时目录并授权（2026-10-06）
+#   /app/logs、/app/runtime 在 compose 里是 **named volume**，docker 只会「首次
+#   创建」时从镜像内容初始化属主；若镜像内不存在该目录，卷会被建成 root:root，
+#   容器内 appuser(uid 10001) 写不进去 → 启动即崩：
+#     PermissionError: [Errno 13] Permission denied: '/app/logs/qhyc.log'
+#   （表现为 api/scheduler 无限重启，healthcheck 永不通过。）
+#   这里在镜像内先建好并 chown，卷初始化即可继承正确属主。
+RUN mkdir -p /app/logs /app/runtime && chown -R appuser:appuser /app/logs /app/runtime
 # 浏览器目录归 appuser（仅 WITH_SCRAPLING=1 时存在；不存在时此段是 no-op）
 RUN if [ -d "${PLAYWRIGHT_BROWSERS_PATH}" ]; then \
         chown -R appuser:appuser "${PLAYWRIGHT_BROWSERS_PATH}" ; \
