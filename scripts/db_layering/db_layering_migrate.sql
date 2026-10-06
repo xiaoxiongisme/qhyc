@@ -214,17 +214,15 @@ CREATE OR REPLACE VIEW access.v_bar_60m_main AS
   SELECT * FROM l1_mkt.bar_60m;                       -- 小时线主连(原始/执行空间),2015+
 CREATE OR REPLACE VIEW access.v_hourly_main AS
   SELECT * FROM l1_mkt.bar_60m;                        -- 同上别名：bar_60m 即小时线
-CREATE OR REPLACE VIEW access.v_fut_kline_cont_hourly AS
-  SELECT * FROM l0_raw.fut_kline
-  WHERE kind='continuous' AND freq IN ('hourly','min60');  -- 小时线后复权主连(信号空间),2015+
+-- v_fut_kline_cont_hourly / cont_daily 已随 034(G9-a) 退役并删除：
+-- 它们读 kind='continuous'，而该 kind 已于 2026-10-04 G9 退役、034 中数据被删除；
+-- 小时线主连信号空间改读 l0_raw.hourly_bar（见 app/data/caliber.py ROUTES）。
+-- 此处**不再创建**这两个视图，否则会得到空视图（verify 脚本亦已移除其非空断言）。
 CREATE OR REPLACE VIEW access.v_fut_kline_raw_hourly AS
   SELECT * FROM l0_raw.fut_kline
   WHERE kind='contract' AND freq IN ('hourly','min60');    -- 小时线原始合约(执行精确价)
 CREATE OR REPLACE VIEW access.v_daily_main AS
   SELECT * FROM l0_raw.daily_bar;                      -- 日线主连
-CREATE OR REPLACE VIEW access.v_fut_kline_cont_daily AS
-  SELECT * FROM l0_raw.fut_kline
-  WHERE kind='continuous' AND freq='daily';            -- 日线后复权主连
 CREATE OR REPLACE VIEW access.v_main_continuous AS
   SELECT * FROM l2_adj.main_continuous;                -- 主连连续序列
 CREATE OR REPLACE VIEW access.v_dim_trading_cost AS SELECT * FROM l3_ref.dim_trading_cost;
