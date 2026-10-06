@@ -148,7 +148,7 @@ BEGIN
       -- data_layer_catalog 最后单独迁，保证循环中回写目录时它仍在 public
       IF r.tab='data_layer_catalog' THEN CONTINUE; END IF;
       IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-                 WHERE n.nspname='public' AND c.relname=r.tab) THEN
+                 WHERE n.nspname='public' AND c.relname=r.tab AND c.relkind IN ('r','p')) THEN
         EXECUTE format('ALTER TABLE public.%I SET SCHEMA %I', r.tab, r.target);
         INSERT INTO public.migrate_log(tab,action,detail) VALUES (r.tab,'MOVE', r.target);
         -- 回写目录 physical_schema（不破坏已有 layer/source_layer/derived_by/mutable_policy）
@@ -164,7 +164,7 @@ BEGIN
   END LOOP;
   -- data_layer_catalog 自身最后迁移（循环里它还在 public 时才能被 upsert）
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             WHERE n.nspname='public' AND c.relname='data_layer_catalog') THEN
+             WHERE n.nspname='public' AND c.relname='data_layer_catalog' AND c.relkind IN ('r','p')) THEN
     EXECUTE 'ALTER TABLE public.data_layer_catalog SET SCHEMA l3_ref';
     INSERT INTO public.migrate_log(tab,action,detail) VALUES ('data_layer_catalog','MOVE','l3_ref');
     INSERT INTO l3_ref.data_layer_catalog(table_name, layer, physical_schema, updated_at)

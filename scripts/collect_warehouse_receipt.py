@@ -28,16 +28,23 @@ import datetime as _dt
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import date as _date
-
-sys.path.insert(0, r"C:/Users/Seven/.codebuddy/skills/scrapling-qi/scripts")
 
 import psycopg2  # noqa: E402
 from psycopg2.extras import execute_batch  # noqa: E402
 
 SRC = "scrapling:warehouse_receipt"
 VERSION = "v1.0"
+
+# scrapling 在容器内由 requirements 安装（见 Dockerfile），直接 import 即可。
+# 仅在开发机未 pip 安装、且通过环境变量 SCRAPLING_SCRIPTS_PATH 显式指向其 scripts
+# 目录时才追加到 sys.path（原先硬编码宿主机的
+# C:/Users/Seven/.codebuddy/skills/scrapling-qi/scripts，在 Linux 容器里不存在）。
+_scrapling_scripts = os.environ.get("SCRAPLING_SCRIPTS_PATH")
+if _scrapling_scripts and os.path.isdir(_scrapling_scripts):
+    sys.path.insert(0, _scrapling_scripts)
 
 PG = dict(
     host=os.environ.get("PGHOST", "localhost"),
@@ -48,13 +55,26 @@ PG = dict(
 )
 
 # --------------------------------------------------------------- 浏览器
+# 容器（Linux）与生产/开发机（Windows）都要能跑：优先用 PATH 里的
+# chrome/chromium（playwright/scrapling 自带 chromium 时返回 None，由 scrapling 接管），
+# 找不到再回退到常见安装路径。
 BROWSER_CANDIDATES = [
+    # Linux / 容器（playwright、apt 安装、scrapling 自带均可能落在这里）
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/opt/google/chrome/chrome",
+    # Windows 开发机回退
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
 ]
+
+# 常见浏览器命令名，用 PATH 探测（容器里最可靠的方式）
+BROWSER_WHICH = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
 
 JS_FETCH = """
 async (args) => {
@@ -86,8 +106,10 @@ async (args) => {
 SHFE_URL = "https://www.shfe.com.cn/data/tradedata/future/dailydata/{d}dailystock.dat"
 # 2025-11-18 起 SHFE 停更 dailystock.dat，仓单改由该 HTML 报表提供
 SHFE_HTML_URL = "https://www.shfe.com.cn/data/tradedata/future/stockdata/dailystock_{d}/ZH/all.html"
-# CZCE 下载的临时文件目录（运行时自动创建，避免依赖 PoC 目录）
-TMP_DIR = "e:/Docker/qhyc/_tmp"
+# CZCE 下载的临时文件目录（运行时自动创建，避免依赖 PoC 目录）。
+# 容器里用 /app/runtime 下子目录（docker-compose 已挂为可写卷），
+# 开发机可用环境变量 WAREHOUSE_RECEIPT_TMP 覆盖。
+TMP_DIR = os.environ.get("WAREHOUSE_RECEIPT_TMP", "/app/runtime/_tmp/warehouse_receipt")
 GFEX_API = "http://www.gfex.com.cn/u/interfacesWebTdWbillWeeklyQuotes/loadList"
 GFEX_HOME = "http://www.gfex.com.cn/"
 DCE_API = "http://www.dce.com.cn/dcereport/publicweb/dailystat/wbillWeeklyQuotes"
@@ -111,9 +133,15 @@ def log(msg: str) -> None:
 
 
 def pick_browser() -> str | None:
+    # 先按 PATH 探测（容器里最可靠：playwright 自带 chromium 不一定在固定路径）
+    for name in BROWSER_WHICH:
+        found = shutil.which(name)
+        if found:
+            return found
     for p in BROWSER_CANDIDATES:
-        if os.path.exists(p):
+        if p and os.path.exists(p):
             return p
+    # 返回 None → scrapling/StealthyFetcher 使用自身捆绑的 chromium
     return None
 
 

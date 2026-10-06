@@ -214,6 +214,17 @@ class SpotBasisConfig(BaseModel):
     window_days: int = 5           # 每次增量回填最近 N 天
 
 
+class WarehouseReceiptConfig(BaseModel):
+    """仓单日报自动采集（R3，scrapling 浏览器版，四所全量）。
+
+    ★ enabled 默认 False：需镜像以 WITH_SCRAPLING=1 构建（装 scrapling + 无头 Chromium）
+    后作业才能成功；否则会 fail-loud（而非静默）。停采须是显式动作，与采集类开关约定一致。
+    """
+    enabled: bool = False
+    run_hour: int = 18
+    run_minute: int = 40
+
+
 class ImportsConfig(BaseModel):
     source_root: str = ""
     container_root: str = "/app/imports"
@@ -404,6 +415,7 @@ class YamlConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     inventory: InventoryConfig = Field(default_factory=InventoryConfig)
     spot_basis: SpotBasisConfig = Field(default_factory=SpotBasisConfig)
+    warehouse_receipt: WarehouseReceiptConfig = Field(default_factory=WarehouseReceiptConfig)
     imports: ImportsConfig = Field(default_factory=ImportsConfig)
     readiness: ReadinessConfig = Field(default_factory=ReadinessConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)

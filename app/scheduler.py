@@ -935,6 +935,8 @@ SUBPROCESS_SCRIPTS = (
     # Phase 4/6（准入裁决 / 迁移执行）：人工与部署入口
     "admit_factors.py",
     "db_apply_migrations.py",
+    # R3：仓单日报采集（scrapling 浏览器版，四所）；依赖镜像 WITH_SCRAPLING=1 装好 scrapling+chromium
+    "collect_warehouse_receipt.py",
 )
 
 
@@ -1116,6 +1118,22 @@ def _build_scheduler() -> BlockingScheduler:
         coalesce=True,
     )
     logger.info(f"[scheduler] registered cron {rp.run_hour:02d}:{rp.run_minute:02d} (rank_position)")
+
+    # R3：仓单日报（四所，scrapling 浏览器版）每日收盘后采集。
+    # 开关走 cloud.yaml 的 warehouse_receipt.enabled（与采集类开关约定一致，可见且显式）。
+    wrc = settings.yaml.warehouse_receipt
+    if wrc.enabled:
+        sched.add_job(
+            _warehouse_receipt_job,
+            trigger=CronTrigger(hour=wrc.run_hour, minute=wrc.run_minute, timezone=settings.env.TZ),
+            id="warehouse_receipt",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info(f"[scheduler] registered cron {wrc.run_hour:02d}:{wrc.run_minute:02d} (warehouse_receipt)")
+    else:
+        logger.info("[scheduler] warehouse_receipt 按配置关闭（warehouse_receipt.enabled=false）")
 
     # 小时线每小时自动更新（决策 7）：整点触发一次全品种增量采集
     hcfg = settings.hourly_config
@@ -1589,6 +1607,39 @@ def _rank_job() -> None:
         logger.info(f"[scheduler] rank_position done: {summary}")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] rank_position job error: {e}")
+
+
+def _warehouse_receipt_job() -> None:
+    """仓单日报采集（scrapling 浏览器版，四所全量）。
+
+    依赖容器内已装 scrapling + 无头 chromium（镜像须以 WITH_SCRAPLING=1 构建）。
+    未装时脚本/导入会直接抛错（fail-loud），便于发现镜像缺漏，而非静默缺数据。
+    默认关闭：镜像重建并置 WAREHOUSE_RECEIPT_ENABLED=1 后启用。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "collect_warehouse_receipt.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到脚本 {script}")
+        return
+    # 抓最近 2 个交易日（含周末/节假日补采），脚本内部按交易所工作日过滤
+    end = datetime.now().date()
+    start = end - timedelta(days=2)
+    cmd = [_sys.executable, str(script), "--start", start.isoformat(),
+           "--end", end.isoformat(), "--exchange", "all"]
+    logger.info(f"[scheduler] warehouse_receipt start {cmd}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5400)
+        logger.info(f"[scheduler] warehouse_receipt exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-600:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] warehouse_receipt stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] warehouse_receipt timeout>5400s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] warehouse_receipt failed: {e}")
 
 
 def _hourly_job() -> None:
