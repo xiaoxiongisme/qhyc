@@ -61,10 +61,11 @@ RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
 #     docker compose build --build-arg WITH_SCRAPLING=1
 # 不启用时 DCE 由宿主机 DCE_scrapling_crawler.py 采集（同 src，双向幂等）。
 ARG WITH_SCRAPLING=0
+# 云端仅需 scrapling 的 Fetcher（SHFE/CZCE 仓单，纯 HTTP，无需浏览器）。
+# DCE/GFEX 仓单的 StealthyFetcher 浏览器采集按原架构由宿主机采集器供给，
+# 且云端到 cdn.playwright.dev 下载受限，故镜像不安装浏览器二进制。
 RUN if [ "$WITH_SCRAPLING" = "1" ]; then \
-        pip install "scrapling[fetchers]" -i ${PIP_INDEX_URL} \
-        && scrapling install \
-        && patchright install chromium ; \
+        pip install "scrapling[fetchers]" -i ${PIP_INDEX_URL} ; \
     else \
         echo "[build] 跳过 Scrapling 层（WITH_SCRAPLING=0）：DCE 由宿主机采集器供给" ; \
     fi
