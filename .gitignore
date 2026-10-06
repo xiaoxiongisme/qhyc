@@ -96,6 +96,15 @@ qhyc_review_tmp/
 #     应改用 git 提交 + 重建镜像，故同样不入库。
 # =====================================================
 scripts/_*.py
+# 根目录一次性排障脚本同样不入库（2026-06 补：反复出现 _xxx.py 忘记清理，
+#   污染 git status 并有被误提交的风险）。
+/_*.py
+/_*.sh
+
+# 临时 compose override（以 root 跑 api/scheduler，绕过 qhyc_logs/qhyc_runtime
+# 卷属主问题）。属**临时兜底**，正确修法是把卷 chown 成 uid 10001 后删除本文件，
+# 故不入库，避免长期以 root 跑服务。
+docker-compose.override.rootfix.yml
 
 # 因子配对分析产物（可由 factor_pairs_ic.py 重跑生成）
 scripts/factor_pairs_out/
