@@ -34,7 +34,7 @@ def prod_of(sym):  # "FG888" -> "FG"
     return sym[:-3].upper()
 
 
-def real_cost_per_lot(sym, mult, price=None, cost_mode="dict"):
+def real_cost_per_lot(sym, mult, price=None, cost_mode="dict", on_date=None):
     """一次开平的**每手**成本（元）。
 
     ⚠ 2026-10-03（用户拍板"真乘数口径"）：``SPEC`` 这份硬编码表把**百分比费率当成
@@ -44,12 +44,24 @@ def real_cost_per_lot(sym, mult, price=None, cost_mode="dict"):
 
     :param price: 成交价。PCT 费率按成交额计，缺价时退回 legacy 口径。
     :param cost_mode: ``dict``（默认，真实费率）/ ``legacy``（旧 SPEC，仅作对照）
+    :param on_date: **建仓日**（2026-10-07 新增）。不传则用「今天」的费率算历史 ——
+        滚动费率表的意义正是在此，历史基准必须按建仓日取费率。
+        另按建仓日反查当时主力合约，使「特定合约」档位（如螺纹 1/5/10 月 1‱
+        而其余 0.2‱）能够命中，避免主力合约成本低估 5 倍。
     """
     if cost_mode == "legacy" or price is None:
         tick, fee = SPEC[prod_of(sym)]
         return 2 * fee + 2 * 1.0 * (tick * mult)   # 旧：往返 1 跳滑点 + 双边手续费
-    from app.data.cost import cost_coefficients, cost_yuan_at
-    return cost_yuan_at(cost_coefficients(sym, close_action="CLOSE_YEST"), price)
+    from app.data.cost import (cost_coefficients, cost_yuan_at,
+                               main_contract_at, _variety as _vc)
+    d0 = None
+    ctr = None
+    if on_date is not None:
+        d0 = on_date.date() if hasattr(on_date, "date") else on_date
+        ctr = main_contract_at(_vc(sym), d0)
+    return cost_yuan_at(
+        cost_coefficients(sym, contract=ctr, close_action="CLOSE_YEST", on_date=d0),
+        price)
 
 
 ANCHOR = dict(events=16400, executed=3226, win_rate=0.2349659,
@@ -180,12 +192,15 @@ def replay_capacity5(positions, mult_map, pnl_mode="perlot", cost_mode="dict"):
             first_px=pos["first_px"]; exit_px=pos["exit_px"]
             if pnl_mode=="perlot":
                 gross=sum(dirn*(exit_px-px)*mult for px in pos["lot_pxs"])
-                # 成本按**各自入场价**计（PCT 费率随成交额变动），与 gross 口径对齐
-                cost=sum(real_cost_per_lot(sym,mult,px,cost_mode) for px in pos["lot_pxs"])
+                # 成本按**各自入场价**计（PCT 费率随成交额变动），与 gross 口径对齐；
+                # 费率按**建仓日**取（2026-10-07：历史基准必须用当时费率，见 real_cost_per_lot）
+                cost=sum(real_cost_per_lot(sym,mult,px,cost_mode,on_date=pos["entry_dt"])
+                         for px in pos["lot_pxs"])
             else:
                 # 研究近似：gross = 方向×(exit−首仓价)×mult×手数（ATR 抵消）
                 gross=dirn*(exit_px-first_px)*mult*lots
-                cost=real_cost_per_lot(sym,mult,first_px,cost_mode)*lots
+                cost=real_cost_per_lot(sym,mult,first_px,cost_mode,
+                                       on_date=pos["entry_dt"])*lots
             Y=gross-cost
             win = Y>0 if pnl_mode=="perlot" else (dirn*(exit_px-first_px))>0
             open_pos[sym]=dict(Y=Y, win=win)
