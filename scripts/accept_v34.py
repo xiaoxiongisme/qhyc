@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from app.core.db import session_scope
 from app.core.config import get_settings
+from app.core.logging import logger
 from app.backtest.fusion_backtest import FusionBacktestParams, _htf_direction
 from app.strategies.fusion_signal import walk_fusion_states
 
@@ -66,6 +67,32 @@ def real_cost_per_lot(sym, mult, price=None, cost_mode="dict", on_date=None):
 
 ANCHOR = dict(events=16400, executed=3226, win_rate=0.2349659,
               net=695715.0, mdd=167865.2, mar=4.1445, addons=1583)
+
+#: ★ 锚点的可复现性元数据（2026-10-07 补记）
+#:
+#: 锚点来自**已退役的数据源** ``fut_kline(freq='hourly', kind='continuous')``，
+#: 且**没有记录品种列表与时间窗口**。G9 退役 continuous 后该口径已无法复现，
+#: 本脚本改用 ``hourly_bar`` 的 888 主力连续（2020-02 起，多数品种 2021+ 才
+#: 有数据）。因此：
+#:
+#:   **锚点与当前实测不在同一数据集上，`ok` 判定不成立、不可作为验收依据。**
+#:
+#: 2026-10-07 实测（云端权威库，50 品种）：信号事件 13432 vs 锚点 16400（-2968）；
+#: 且实测**加仓口径无关**——`add_max_lots=2`/`add_on_times=2/3` 三种口径下
+#: 信号事件恒为 13432（仅加仓手数 6487/10413/13046 变化），故该偏差**不是**
+#: 「总手数上限 vs 加仓次数」语义映射导致（已排除工单假设 1）。
+#:
+#: 结论：偏差来自**数据窗口/品种集合差异**。后续验收应以「同一脚本、同一数据源
+#: 的自洽重跑」为准（`--save-baseline` 落盘后作新锚点），而非继续比对legacy 数字。
+ANCHOR_META = dict(
+    source="fut_kline(freq='hourly', kind='continuous') [已随 G9 退役]",
+    reproducible=False,
+    note="锚点未记录品种列表/时间窗口，与当前 hourly_bar 口径不同数据集；"
+         "2026-10-07 实测偏差 -2968 已排除加仓语义映射，主因为数据窗口差异。",
+)
+
+#: 是否把当前实测落盘为新基线（`--save-baseline`），用作后续自洽回归的锚点。
+SAVE_BASELINE = False
 
 def _resolve_fut_symbol(session, product, exchange):
     """解析 hourly_bar 里的 888 主力连续码。
@@ -225,7 +252,17 @@ def replay_capacity5(positions, mult_map, pnl_mode="perlot", cost_mode="dict"):
 def main():
     settings=get_settings()
     mc=settings.main_contracts
-    p=FusionBacktestParams()  # V3.4 默认口径
+    # 2026-10-07（工单 add_max_lots 语义裁定）：加仓口径**显式可传**。
+    # 默认 add_on_times=2 —— 与 WB `run_param_scan_v3` 的 `add_max_lots=2`
+    # 同义（那边语义 = ADD 事件数上限，总手 = 1 + N）。用 add_on_times 而非
+    # add_max_lots，避免「总手数上限」与「加仓次数」两种语义再次混用。
+    p = FusionBacktestParams(
+        add_max_lots=1,
+        add_on_times=(ARGS.add_on_times if ARGS.add_on_times is not None else 2),
+    )
+    logger.info(
+        f"[accept_v34] 加仓口径: add_on_times={p.add_on_times} "
+        f"(= 加仓次数；总手数上限 = 1 + {p.add_on_times})")
     # 乘数真源 = dim_variety（库内字典）；config 仅作回退。
     # 2026-10-03：旧代码只读 config.main_contracts（YAML 硬编码），是代码内字典。
     from app.data.barstore import variety_spec, VarietySpecNotFoundError
@@ -312,15 +349,40 @@ def main():
           abs(res["executed"]-ANCHOR["executed"])<=tol_events and
           abs(res["win_rate"]-ANCHOR["win_rate"])<=0.01)
     print("-"*56)
-    print("等价性判定（信号层）：", "✅ 通过（引擎信号层与研发逐位一致）" if ok else "❌ 偏差超容差，需排查")
+    # ★ 2026-10-07：锚点来自已退役数据源、且未记录品种/窗口 → 判定不成立。
+    #   继续输出「❌ 需排查」会把「数据集不同」误导成「引擎回归」，必须明示。
+    if not ANCHOR_META["reproducible"]:
+        print("等价性判定：**不适用**（锚点不可复现，非引擎回归）")
+        print(f"  原因：{ANCHOR_META['note']}")
+        print(f"  锚点源：{ANCHOR_META['source']}")
+        print("  处置：以「同一脚本 + 同一数据源」自洽重跑为准 —— "
+              "加 --save-baseline 落盘为新基线，后续回归比对新基线。")
+        ok = None      # tri-state：None = 不适用，避免下游把 None 当 False
+    else:
+        print("等价性判定（信号层）：", "✅ 通过（引擎信号层与研发逐位一致）" if ok else "❌ 偏差超容差，需排查")
     print(f"金额基准（{COST_MODE} 口径）：净 {res['net']/1e4:.1f} 万 / 回撤 {res['mdd']/1e4:.1f} 万 / MAR {res['mar']:.2f}")
     print("  ⚠ 旧锚点 +69.6 万系 legacy 成本口径，已作废，不得再作为验收基准。")
+    print(f"  （加仓口径：add_on_times={p.add_on_times} → 总手数上限 "
+          f"{1 + (p.add_on_times or 0)} 手）")
     # 落盘
-    out=dict(cb=res, anchor=ANCHOR, passed=ok, n_sym=n_sym, skipped=skipped,
+    out=dict(cb=res, anchor=ANCHOR, anchor_meta=ANCHOR_META, passed=ok,
+             add_on_times=p.add_on_times, n_sym=n_sym, skipped=skipped,
              per_sym_events=per_sym_events)
     with open("/app/runtime/accept_v34_result.json","w",encoding="utf-8") as f:
         json.dump(out,f,ensure_ascii=False,default=str)
     print("结果已写 /app/runtime/accept_v34_result.json")
+    if SAVE_BASELINE:
+        # 自洽基线：同一脚本 + 同一数据源 + 同一加仓口径，可复现 → 可作回归锚点
+        base=dict(events=res["events"], executed=res["executed"],
+                  win_rate=res["win_rate"], addons=res["total_addon_lots"],
+                  net=res["net"], mdd=res["mdd"], mar=res["mar"])
+        with open("/app/runtime/accept_v34_baseline.json","w",encoding="utf-8") as f:
+            json.dump(dict(source="hourly_bar 888 主力连续",
+                           add_on_times=p.add_on_times, n_sym=n_sym,
+                           reproducible=True, baseline=base),
+                      f, ensure_ascii=False, default=str)
+        print(f"新基线已写 /app/runtime/accept_v34_baseline.json"
+              f"（add_on_times={p.add_on_times}，n_sym={n_sym}）——后续回归比对此基线")
 
 if __name__=="__main__":
     import argparse
@@ -332,8 +394,18 @@ if __name__=="__main__":
     _ap.add_argument("--cost-mode", default="dict", choices=["dict","legacy"],
                      help="dict=库内真实费率 dim_trading_cost(默认,用户2026-10-03拍板) / "
                           "legacy=旧 SPEC 硬编码(把百分比费率当固定元/手,仅作对照)")
+    _ap.add_argument("--add-on-times", type=int, default=None,
+                     help="加仓次数(默认 2)。与 WB run_param_scan_v3 的 "
+                          "add_max_lots 同义(那边=ADD 事件数上限，总手=1+N)。"
+                          "注意 CB 的 add_max_lots 是「总手数上限」，语义不同，勿混用。")
+    _ap.add_argument("--save-baseline", action="store_true",
+                     help="把本次实测落盘为新基线(accept_v34_baseline.json)。"
+                          "旧锚点来自已退役的 fut_kline continuous、不可复现，"
+                          "故自洽基线才是后续回归的正确锚点。")
     _a=_ap.parse_args()
     LEGACY_ALIGN=_a.legacy_align
     PNL_MODE=_a.pnl_mode
     COST_MODE=_a.cost_mode
+    ARGS=_a
+    SAVE_BASELINE=_a.save_baseline
     main()
