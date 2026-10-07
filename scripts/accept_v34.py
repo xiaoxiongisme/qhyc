@@ -68,25 +68,31 @@ ANCHOR = dict(events=16400, executed=3226, win_rate=0.2349659,
               net=695715.0, mdd=167865.2, mar=4.1445, addons=1583)
 
 def _resolve_fut_symbol(session, product, exchange):
-    """fut_kline 品种代码大小写不统一（CZCE/CFFEX/INE 大写，DCE/SHFE/GFEX 小写）。
+    """解析 hourly_bar 里的 888 主力连续码。
 
-    历史 bug：统一用大写构造 KQ.m@{exch}.{PROD} 时，50 个主力品种只有 14 个命中。
+    ★ 2026-10-07 数据源切换（G9 退役 continuous）：
+      原实现返回天勤码 ``KQ.m@{exch}.{PROD}`` 并读 ``fut_kline(freq='hourly',
+      kind='continuous')``。但 **continuous 已随 G9 退役、该口径 0 行**（实测
+      ``kind='continuous'`` 无任何数据；fut_kline 现只有 ``kind='contract'``），
+      导致本脚本「品种覆盖 0/0」、全部指标为 0 —— 是静默失效而非报错。
+      现改用 ``hourly_bar`` 的 888 主力连续（50 品种 / 2020-02~2026-09 / 38.5 万行），
+      与 ``app/backtest/fusion_backtest.py:_read_hourly`` **同源同口径**，
+      保证本验收脚本与融合回测的数字可比。
     """
-    for cand in (product.upper(), product.lower()):
-        k = f"KQ.m@{exchange}.{cand}"
+    for cand in (f"{product.upper()}888", f"{product.lower()}888"):
         n = session.execute(text(
-            "SELECT count(*) FROM fut_kline WHERE freq='hourly' AND kind='continuous' "
-            "AND symbol=:s"), {"s": k}).scalar()
+            "SELECT count(*) FROM hourly_bar WHERE symbol=:s"), {"s": cand}).scalar()
         if n:
-            return k
+            return cand
     return None
 
 
 def load_fut_kline(session, symbol):
+    """读 888 主力连续小时线（``hourly_bar``），返回 [dt,open,high,low,close]。"""
     q = text(
-        "SELECT trade_datetime, open, high, low, close FROM fut_kline "
-        "WHERE freq=:f AND kind=:k AND symbol=:s ORDER BY trade_datetime ASC")
-    rows = session.execute(q, {"f":"hourly","k":"continuous","s":symbol}).all()
+        "SELECT trade_datetime, open, high, low, close FROM hourly_bar "
+        "WHERE symbol=:s ORDER BY trade_datetime ASC")
+    rows = session.execute(q, {"s": symbol}).all()
     if not rows:
         return None
     df = pd.DataFrame(rows, columns=["dt","open","high","low","close"])
