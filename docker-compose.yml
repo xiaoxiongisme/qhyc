@@ -30,7 +30,14 @@ services:
       - ./pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # 安全：仅绑宿主环回，不要改回 0.0.0.0。
+      # 与 api 的 8000（见下）保持同一策略，也与 docker-compose.cloud.yml 一致。
+      # 库内含费率字典 dim_trading_cost、行情与信号数据，且容器内 postgres
+      # 监听 0.0.0.0（-clisten_addresses，见 command 段）；宿主这一层若绑全网卡，
+      # 等于把整个数据库直接暴露到局域网/公网。外部访问走 ssh -L 隧道：
+      #     ssh -L 15432:127.0.0.1:5432 <host>
+      # 容器间互访走 compose 网络（服务名 timescaledb），不受此绑定影响。
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
