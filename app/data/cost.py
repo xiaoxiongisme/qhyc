@@ -32,7 +32,7 @@ from typing import Optional
 
 from sqlalchemy import text
 
-from app.core.db import session_scope
+from app.core.db import get_engine, session_scope
 
 #: PCT 费率值的单位换算除数：万分之一（‱）。
 #: ⚠ 改动此值会全局改变所有按成交额计费的回测/实盘成本，务必同步迁移 019。
@@ -65,6 +65,99 @@ _FEE_CACHE_MAX = 8192
 def clear_fee_cache() -> None:
     """清空费率查询缓存（费率字典重载 / 迁移后必须调用，否则读到旧费率）。"""
     _FEE_CACHE.clear()
+    _RATE_WINDOWS.clear()
+    _MAIN_CONTRACT.clear()
+
+
+# ---------------------------------------------------------------------------
+# 费率变动窗口（2026-10-07）
+# ---------------------------------------------------------------------------
+#: 为什么要「按窗口归约日期」：
+#:   历史回测逐笔取费率时，若直接把**成交日**当 ``on_date``，则同一费率变动区间内的
+#:   所有日期会变成成千上万个不同的缓存键 → ``_FEE_CACHE`` 全部 miss → 每笔都真查库，
+#:   逐笔回测必然把连接池当查询接口（与本轮修掉的连接泄漏同源的性能问题）。
+#:   费率是**低频变更**的参照数据（dim_trading_cost 全表最早 effective_from=2026-03-11，
+#:   至今仅数次调整），故把日期**归约到其所属窗口的起始日**，同一窗口共用一个键。
+_RATE_WINDOWS: dict = {}
+
+
+def rate_window_starts(variety_code: str, kind: str = "FUTURE") -> list:
+    """该品种所有费率变动区间的**起始日**（升序、去重），带进程内缓存。
+
+    数据源 ``dim_trading_cost.effective_from`` 的 distinct 值 —— 即该品种费率
+    发生变更的所有时点。``effective_to`` 与 ``effective_from`` 边界对齐，故只取
+    起始日即可划分区间。
+    """
+    key = (str(variety_code).upper(), kind)
+    got = _RATE_WINDOWS.get(key)
+    if got is not None:
+        return got
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT DISTINCT effective_from FROM dim_trading_cost "
+                "WHERE upper(variety_code) = :v AND instrument_kind = :k "
+                "AND effective_from IS NOT NULL ORDER BY 1"
+            ),
+            {"v": key[0], "k": kind},
+        ).fetchall()
+    starts = sorted({r[0] for r in rows if r[0] is not None})
+    _RATE_WINDOWS[key] = starts
+    return starts
+
+
+# ---------------------------------------------------------------------------
+# 主力合约反查（2026-10-07）
+# ---------------------------------------------------------------------------
+#: 为什么需要：交易所对**特定合约**给不同费率（螺纹钢 1/5/10 月主力 1‱、
+#: 其余 0.2‱；碳酸锂 2601~2702 为 3.2‱ 而其余 0.8‱）。取费率时若不传合约码，
+#: ``fee_per_lot`` 只能命中 ALL 档 → **主力合约成本被低估 5 倍**（RB 实测）。
+#: 而回测读的是 888 主力连续线（无真实合约码），故需按交易日从
+#: ``main_contract_map``（trade_date → underlying）反查当时的主力合约。
+#:
+#: 缓存：``(品种, 交易日) -> 合约码``。变动频率低（换月才变），逐笔回测全程
+#: 只会命中「换月次数」级别的条目数。
+_MAIN_CONTRACT: dict = {}
+
+
+def main_contract_at(variety_code: str, d: date) -> str | None:
+    """返回 ``d`` 当日该品种的主力合约码（如 ``RB2701``）；无数据返回 None。
+
+    取 ``main_contract_map`` 中 ``trade_date <= d`` 的最近一行（与
+    ``scripts/build_roll_segments.py:contract_at`` 同一口径：``COALESCE(underlying,
+    main_symbol)``，即优先用 underlying，因为它才是真实可交易合约）。
+    """
+    key = (str(variety_code).upper(), d)
+    if key in _MAIN_CONTRACT:
+        return _MAIN_CONTRACT[key]
+    with get_engine().connect() as conn:
+        r = conn.execute(
+            text(
+                "SELECT COALESCE(underlying, main_symbol) FROM main_contract_map "
+                "WHERE upper(product) = :v AND trade_date <= :d "
+                "ORDER BY trade_date DESC LIMIT 1"
+            ),
+            {"v": key[0], "d": d},
+        ).fetchone()
+    out = r[0] if r else None
+    _MAIN_CONTRACT[key] = out
+    return out
+
+
+def resolve_rate_date(variety_code: str, d: date, kind: str = "FUTURE") -> date:
+    """把日期 ``d`` 归约到其所属费率变动区间的**起始日**（无窗口则原样返回）。
+
+    - ``d`` 落在某区间内 → 返回该区间起始日（与 ``d`` 的费率**完全相同**）。
+    - ``d`` 早于最早区间 → 返回**当期**区间起始日，等价于 :func:`fee_per_lot` 的
+      fallback 语义（``effective_to IS NULL`` 的当期行），不改变成本数值。
+    """
+    starts = rate_window_starts(variety_code, kind)
+    if not starts:
+        return d
+    prior = [s for s in starts if s <= d]
+    if prior:
+        return prior[-1]
+    return starts[-1]
 
 
 class CostNotFoundError(LookupError):
@@ -265,10 +358,20 @@ def cost_coefficients(symbol, *, contract=None, on_date=None, kind="FUTURE",
                         + slip_yuan
 
     滑点为**每边** ``slip_ticks x tick_size x multiplier``，开平两次故乘 2。
+
+    :param on_date: **费率生效日**。回测历史**必须**显式传入，否则会用今天的费率
+        算历史（滚动费率表的意义就在这里）。传入的日期会先经
+        :func:`resolve_rate_date` **归约到所属费率变动区间的起始日** ——
+        数值完全等价，但让同一区间内的所有日期共享同一个缓存键，
+        逐笔回测才不会把连接池当查询接口。
     """
     from app.data.barstore import variety_spec
     sp = variety_spec(symbol)
     tick, mult = sp.get("tick_size"), sp["multiplier"]
+
+    # ★ 2026-10-07：把日期归约到费率变动区间起点（数值等价、缓存友好）
+    if on_date is not None:
+        on_date = resolve_rate_date(_variety(symbol), on_date, kind)
 
     o = fee_per_lot(symbol, "OPEN", contract=contract, on_date=on_date, kind=kind)
     if not close_action_available(symbol, close_action, contract=contract,

@@ -198,11 +198,48 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         atr_mean = float(_m) if np.isfinite(_m) else 0.0
     cost_frac = p.cost_bp / 10000.0  # 旧：固定基点假设（仅当无 symbol 时兜底）
     # —— 真乘数 + 真成本（dict）——
-    cost_coef = None
+    # ★ 2026-10-07 改为**按建仓日的历史费率**逐笔计价。
+    #   原实现 `cost_coefficients(symbol, close_action="CLOSE_YEST")` 每品种只算一次
+    #   且**未传 on_date** → 回测整段历史（可覆盖 2015~2026）都用「今天」的费率，
+    #   与 fee_per_lot 文档「回测历史务必显式传 on_date」相悖，属静默用当前值。
+    #   现按每笔的**建仓日**取费率（开仓费在建仓时收取；跨费率变动的交易按建仓日
+    #   口径，简化且可复现）。
+    #
+    # 性能：先 resolve_rate_date 把建仓日**归约到费率变动区间起点**再查，
+    #   于是「同一费率区间」共用一个 memo 键 + cost._FEE_CACHE 键，
+    #   整段历史只有「费率变动次数」次真实查库（费率是低频变更数据），
+    #   而不是逐笔查库（否则连接池会被当查询接口用）。
+    _coef_memo: dict = {}
     if symbol:
-        from app.data.cost import cost_coefficients, cost_points_at
-        cost_coef = cost_coefficients(symbol, close_action="CLOSE_YEST")
-        mult = float(cost_coef["multiplier"])
+        from app.data.cost import (cost_coefficients, cost_points_at,
+                                   main_contract_at, resolve_rate_date,
+                                   _variety as _vc)
+
+        _vc_code = _vc(symbol)
+
+        def _coef_for(d) -> dict:
+            """按建仓日取该品种的开平成本系数。
+
+            memo 键 = (费率区间起点, 当时主力合约码) —— 两个维度都归约：
+              · 时间维度：同一费率变动区间共用一个键；
+              · 合约维度：同一主力合约共用一个键（换月才变）。
+            ★必须传 contract：交易所对特定合约给不同费率（RB 1/5/10 月主力
+              1‱、其余 0.2‱），不传则只能命中 ALL 档 → **主力成本低估 5 倍**。
+            """
+            d0 = d.date() if hasattr(d, "date") else d
+            ctr = main_contract_at(_vc_code, d0)
+            key = (resolve_rate_date(_vc_code, d0), ctr)
+            hit = _coef_memo.get(key)
+            if hit is None:
+                hit = cost_coefficients(symbol, contract=ctr,
+                                        close_action="CLOSE_YEST", on_date=d0)
+                _coef_memo[key] = hit
+            return hit
+
+        # 预热：取一次以获得乘数（逐笔仍按各自建仓日所在区间取费率）
+        _first = _coef_for(dts[0]) if len(dts) else cost_coefficients(
+            symbol, close_action="CLOSE_YEST")
+        mult = float(_first["multiplier"])
     else:
         mult = float(getattr(p, "mult", 1.0) or 1.0)
     trades: list[dict] = []
@@ -220,9 +257,10 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         ep = float(lt["entry_px"])
         xp = float(closes[i])
         gross = dirn * (xp - ep)
-        # 成本：优先用库内真实费率（交易所+券商1分+滑点1跳/边），折成点数扣减
-        if cost_coef is not None:
-            cost_pts = cost_points_at(cost_coef, ep)
+        # 成本：按**建仓日**的历史费率（交易所+券商1分+滑点1跳/边），折成点数扣减
+        if symbol:
+            _c = _coef_for(dts[lt["entry_i"]])
+            cost_pts = cost_points_at(_c, ep)
         else:
             cost_pts = cost_frac * ep
         cost_yuan = cost_pts * mult
