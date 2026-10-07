@@ -273,7 +273,15 @@ fusion:
   fib_confl: true
   fib_ratios: [0.382, 0.5, 0.618]
   fib_tol_atr: 0.5
+  # ★ add_max_lots 是**总手数上限**（= 加仓次数 + 1），不是「加仓次数」！
+  #   1=不加码 / 2=加一次 / 3=加两次。**加仓次数 = add_max_lots - 1**。
+  #   要表达「加 N 次」请用下面的 add_on_times（无 off-by-one 歧义）。
   add_max_lots: 2
+  # ★ add_on_times = 语义明确的「加仓次数」（0/1/2…）。设置后引擎按
+  #   总手数上限 = 1 + round(add_on_times x scalar) 计算，与 add_max_lots 互斥
+  #   （同时给则以 add_on_times 为准并告警）。留空(null)则沿用 add_max_lots。
+  #   例：要「加两次」= add_on_times: 2（等价于 add_max_lots: 3）。
+  add_on_times: null
   add_thr_atr: 1.0          # V3.4 新增：加码浮盈门槛（×ATR）
   add_guard_atr: 0.0        # V3.2 结构保本放宽量；V3.4 停用（保留字段兼容）
   min_bars: 160
