@@ -204,26 +204,47 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
     # entry_gate 门控新开仓。无 ctx / 无 symbol·trade_date / 无启用 B 因子时
     # get_bias_multipliers 直接返回中性乘子（=今天 ctx=None 的逐位等价行为），跳过全部查找。
     _b = get_bias_multipliers(_get_factor_ctx(), symbol, trade_date, p)
-    # ★ 2026-10-07 修正钳位 bug：原式 `max(1, int(round(add_max_lots × scalar)))`
-    #   有两个致命问题，使「加仓」这一占净收益约 64% 的机制几乎无法生效：
-    #   ① `max(1, …)` 把 0 钳成 1 → **无法表达「禁加仓」**。乘子被 clip 到
-    #      [cap_floor=0.5, 1.0]（见 app/factor/asof.py:200），本不该出 0，
-    #      但 round(1×0.5)=0 会被钳成 1，恰好把「压制到最小」又抬回 1。
-    #   ② 上限语义错位：开仓已恒占 1 手（lots 自 1.0 起），而加仓门禁是
-    #      `_eff_cap >= 2`（见下方 L355）。故 add_max_lots=1 时**任何 scalar 都
-    #      不可能加仓**（1 不 ≥ 2），P0 对照口径与「加仓」彻底无缘；
-    #      默认 add_max_lots=2 时，scalar≤0.5 也会 round 到 1 而被误禁。
-    #   实测症状：AD0 == AD1、组合层 ρ=1.000（加仓腿从未产生任何差异）。
-    #   修法：上限允许为 0（0 = 禁加仓），并对 add_max_lots<=1 显式短路，
-    #   避免「上限 1」这种既不加仓又非禁加仓的中间态。
-    _raw_cap = p.add_max_lots * _b["position_cap_scalar"]
-    if add_max_lots <= 1:
-        # 配置层已声明「不加码」（P0 口径）：上限 1 = 只能是首仓，直接短路。
-        # 仍走乘法以保留乘子对 future 改动的可追溯性（值为 1 时等价）。
-        _eff_cap = 1
+
+    # =========================================================================
+    # ★★ 加仓上限：两个必须同时讲清的历史包袱（2026-10-07 一次性锁定）
+    # =========================================================================
+    # 【坑 1 · 语义错位 / off-by-one】**add_max_lots 是「总手数上限」，不是「加仓次数」**
+    #   引擎开仓恒为 1 手（lots 自 1.0 起），加仓门禁是 `_eff_cap >= 2`（见下方加仓段），
+    #   故：  **加仓次数上限 = add_max_lots − 1**
+    #   实测（本地库 hourly_bar 全 50 品种，统计「加仓手数」）：
+    #       add_max_lots=0 → 0        add_max_lots=2 → 6496
+    #       add_max_lots=1 → 0        add_max_lots=3 → 10429 / 4 → 13072
+    #   ⚠ 参数名 `add_max_lots`（加仓最大手数）容易被读成「加 N 次」，
+    #     于是设 1 想表达「加一次」却得到 0 次 —— 这是历史上 AD0==AD1、ρ=1.000 的直接原因。
+    #   **本参数语义为历史既有，数值一律不改**（大量已产出基准基于它）。
+    #   要表达「加 N 次」请用新参数 ``add_on_times``（见下），不要改本参数含义。
+    #
+    # 【坑 2 · 钳位】原式 `max(1, int(round(add_max_lots × scalar)))` 把 0 钳成 1：
+    #   既无法表达「显式禁加仓」，又让 0 与 1 变得**不可区分**（都落在「0 次加仓」）。
+    #   现改为 `max(0, …)`，保留 0（=显式禁加仓）与 1（=仅首仓）的数值区分。
+    #   注：因开仓不受 _eff_cap 门禁，0 与 1 在引擎行为上仍等价（都不加仓），
+    #   但配置值本身可区分、可观测，便于定位「我到底配了几」。
+    #
+    # 【无歧义写法 · add_on_times】新参数，语义 = **加仓次数**（0/1/2…）：
+    #   设了它就直接换算成总手数上限 `_eff_cap = 1 + round(add_on_times × scalar)`，
+    #   与 add_max_lots 互斥（同时给则 add_on_times 优先并告警）。
+    _scalar = _b["position_cap_scalar"]
+    _add_on_times = getattr(p, "add_on_times", None)
+    if _add_on_times is not None:
+        if add_max_lots != 1 and int(add_max_lots) != 1:
+            logger.warning(
+                f"[fusion] {symbol}: add_on_times={_add_on_times} 与 "
+                f"add_max_lots={add_max_lots} 同时给出，按 add_on_times 生效"
+                f"（add_on_times=加仓次数，add_max_lots=总手数上限）")
+        # 加仓次数 → 总手数上限：开仓 1 手 + N 次加仓
+        _eff_cap = max(0, 1 + int(round(float(_add_on_times) * _scalar)))
     else:
-        # 0 手 = 禁加仓（不再被 max(1,·) 抬回 1）；上限 1 = 只能是首仓，同样不加。
-        _eff_cap = max(0, int(round(_raw_cap)))
+        if int(add_max_lots) == 1:
+            logger.warning(
+                f"[fusion] {symbol}: add_max_lots=1 表示「总手数上限 1」= 0 次加仓"
+                f"（加仓次数 = add_max_lots − 1）。若想要 1 次加仓请设 add_max_lots=2 "
+                f"或改用 add_on_times=1。")
+        _eff_cap = max(0, int(round(add_max_lots * _scalar)))
     _entry_gate = _b["entry_gate"]
     # gate_threshold 来自 factor_bias 配置（get_settings 为缓存单例，调用成本可忽略）；
     # 默认无因子路径下仍保持原 L175 的同等成本，不影响「近乎零成本」目标。

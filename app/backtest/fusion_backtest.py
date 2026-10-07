@@ -59,7 +59,15 @@ class FusionBacktestParams:
     fib_confl: bool = True           # V3.2 斐波汇流（仅回踩支路）
     fib_ratios: tuple = (0.382, 0.5, 0.618)
     fib_tol_atr: float = 0.5         # 斐波容差 = 该值 × ATR
-    add_max_lots: int = 2            # V3.2 P1 加码最大手数（1=不加码）
+    add_max_lots: int = 2            # ★「总手数上限」= 加仓次数 + 1（历史语义，勿改）
+                                     #   1=不加码 / 2=允许加一次 / 3=加两次 …
+                                     #   ⚠ 名字易被误读为「加仓次数」，实为总手数：
+                                     #     **加仓次数 = add_max_lots − 1**（开仓恒占 1 手）。
+                                     #     要表达「加 N 次」用 add_on_times。
+    add_on_times: int | None = None   # ★无歧义写法（2026-10-07 新增）= **加仓次数**
+                                     #   None（默认）→ 沿用 add_max_lots 的历史语义；
+                                     #   设了它则 _eff_cap = 1 + round(该值 × scalar)，
+                                     #   即「开仓 1 手 + N 次加仓」，无 off-by-one 歧义。
     add_thr_atr: float = 1.0         # V3.4 加码浮盈门槛（lots × 该值 × ATR）
     add_guard_atr: float = 0.0       # V3.2 结构保本；V3.4 停用（保留兼容）
     # —— 回测专用 ——
