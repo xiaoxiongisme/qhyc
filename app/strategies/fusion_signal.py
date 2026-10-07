@@ -179,7 +179,10 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
     # P1 利弗莫尔·阶梯加码：允许多手；V3.4 起由「浮盈门槛」门控——
     #   门槛 = lots × add_thr_atr × ATR（金字塔式随手数线性抬升）。
     #   V3.2 的「吊灯已推进到加码后均价之上」结构保本约束（add_guard_atr）自 V3.4 停用。
-    add_max_lots = int(getattr(p, "add_max_lots", 1) or 1)
+    # ★ 2026-10-07：`or 1` 会把显式的 0 变成 1，使「配置层禁加仓」无法表达。
+    #   仅在「属性缺失/为 None」时用默认 1；显式 0 按 0 处理（= 不加码）。
+    _add_lots_raw = getattr(p, "add_max_lots", 1)
+    add_max_lots = 1 if _add_lots_raw is None else int(_add_lots_raw)
     add_guard_atr = float(getattr(p, "add_guard_atr", 0.0) or 0.0)  # V3.4 停用（保留字段兼容旧配置）
     add_thr_atr = float(getattr(p, "add_thr_atr", 1.0) or 1.0)
 
@@ -201,7 +204,26 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
     # entry_gate 门控新开仓。无 ctx / 无 symbol·trade_date / 无启用 B 因子时
     # get_bias_multipliers 直接返回中性乘子（=今天 ctx=None 的逐位等价行为），跳过全部查找。
     _b = get_bias_multipliers(_get_factor_ctx(), symbol, trade_date, p)
-    _eff_cap = max(1, int(round(p.add_max_lots * _b["position_cap_scalar"])))
+    # ★ 2026-10-07 修正钳位 bug：原式 `max(1, int(round(add_max_lots × scalar)))`
+    #   有两个致命问题，使「加仓」这一占净收益约 64% 的机制几乎无法生效：
+    #   ① `max(1, …)` 把 0 钳成 1 → **无法表达「禁加仓」**。乘子被 clip 到
+    #      [cap_floor=0.5, 1.0]（见 app/factor/asof.py:200），本不该出 0，
+    #      但 round(1×0.5)=0 会被钳成 1，恰好把「压制到最小」又抬回 1。
+    #   ② 上限语义错位：开仓已恒占 1 手（lots 自 1.0 起），而加仓门禁是
+    #      `_eff_cap >= 2`（见下方 L355）。故 add_max_lots=1 时**任何 scalar 都
+    #      不可能加仓**（1 不 ≥ 2），P0 对照口径与「加仓」彻底无缘；
+    #      默认 add_max_lots=2 时，scalar≤0.5 也会 round 到 1 而被误禁。
+    #   实测症状：AD0 == AD1、组合层 ρ=1.000（加仓腿从未产生任何差异）。
+    #   修法：上限允许为 0（0 = 禁加仓），并对 add_max_lots<=1 显式短路，
+    #   避免「上限 1」这种既不加仓又非禁加仓的中间态。
+    _raw_cap = p.add_max_lots * _b["position_cap_scalar"]
+    if add_max_lots <= 1:
+        # 配置层已声明「不加码」（P0 口径）：上限 1 = 只能是首仓，直接短路。
+        # 仍走乘法以保留乘子对 future 改动的可追溯性（值为 1 时等价）。
+        _eff_cap = 1
+    else:
+        # 0 手 = 禁加仓（不再被 max(1,·) 抬回 1）；上限 1 = 只能是首仓，同样不加。
+        _eff_cap = max(0, int(round(_raw_cap)))
     _entry_gate = _b["entry_gate"]
     # gate_threshold 来自 factor_bias 配置（get_settings 为缓存单例，调用成本可忽略）；
     # 默认无因子路径下仍保持原 L175 的同等成本，不影响「近乎零成本」目标。
