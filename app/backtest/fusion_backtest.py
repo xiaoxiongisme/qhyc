@@ -94,6 +94,10 @@ def fusion_params_from_config(overrides: dict | None = None) -> FusionBacktestPa
         fib_tol_atr=cfg.fib_tol_atr,
         add_max_lots=cfg.add_max_lots, add_thr_atr=cfg.add_thr_atr,
         add_guard_atr=cfg.add_guard_atr,
+        # 2026-10-07 接线（CB清单 #5）：add_on_times 此前是死参数——dataclass 里有、
+        # 信号层也认，但配置里没有任何入口，线上无法调节「加仓次数」。
+        # 传 None 时行为与接线前**完全一致**（沿用 add_max_lots 历史语义），零回归风险。
+        add_on_times=cfg.add_on_times,
     )
     p = FusionBacktestParams(**base)
     if overrides:

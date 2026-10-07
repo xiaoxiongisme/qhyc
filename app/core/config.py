@@ -276,6 +276,15 @@ class FusionConfig(BaseModel):
     #   加码条件 = 收盘创入场以来新高/新低 且 浮盈 >= lots × add_thr_atr × ATR（金字塔）。
     #   V3.2 的「吊灯已推进到加码后均价之上」结构保本约束自 V3.4 停用（实测损失 19.6% 收益）。
     add_max_lots: int = 2           # 最大手数（1 = 不加码，回到 P0 固定1手）
+                                     #   ⚠ 语义 = **总手数上限**（= 加仓次数 + 1），
+                                     #     **加仓次数 = add_max_lots - 1**。名字易被误读。
+    add_on_times: int | None = None  # ★无歧义写法（2026-10-07 接线）= **加仓次数**
+                                     #   None（默认）→ 沿用 add_max_lots 的历史语义（不改变现状）；
+                                     #   设了它则 _eff_cap = 1 + round(该值 × scalar)，
+                                     #   与 add_max_lots 互斥（同时给以本项为准并告警）。
+                                     #   例：要「加两次」= add_on_times: 2（等价 add_max_lots: 3）。
+                                     #   接线原因：WB《海龟叠加回测报告》CB清单 #5 —— 参数早已存在
+                                     #   于 FusionBacktestParams，但线上无法配置，属死参数。
     add_thr_atr: float = 1.0        # V3.4 新增：加码浮盈门槛（×ATR，随手数线性抬升）
     add_guard_atr: float = 0.0      # V3.2 结构保本放宽量；V3.4 停用（保留字段兼容旧配置）
     min_bars: int = 160             # 最少历史根数（需 >= ema_k + 缓冲）
