@@ -25,6 +25,7 @@ from decimal import Decimal
 
 from app.core.config import MainContractSpec, get_settings
 from app.core.logging import logger
+from app.data.quality import is_bad_row
 from app.repositories._base import upsert_hourly_bars
 
 
@@ -227,23 +228,44 @@ class HourlyCollector:
         raw = len(df)
         rows: list[dict] = []
         dropped = 0
+        dropped_ohlc = 0
         for _, r in df.iterrows():
             dt = _parse_ak_dt(r.get("datetime"))
             if dt is None or not _valid_hourly_ts(dt):
                 dropped += 1
                 continue
+            # ★ 2026-10-08 补OHLC 校验（此前完全没有，是 bar_5m 里 9 行 low=0 的来源）
+            #   为什么要：`_to_dec` 对无法解析的值返回 Decimal(0)，
+            #   于是"上游缺 low"会变成 low=0 且**静默入库** —— 实测 l1_mkt.bar_5m
+            #   就有 9 行 low=0（2022 年、6 个品种），一路传到 bar_60m，
+            #   会污染 ATR / 吊灯止损 / 回撤，且**不报错**。
+            #   姊妹模块 minute_collector._valid_minute_row 早有同类校验，
+            #   此处是对齐（此前 hourly 侧是唯一缺口）。
+            #   判据与 l0_raw.data_quality_flag 的 SQL 口径一致（见 app/data/quality.py）。
+            o_, h_, l_, c_ = _to_dec(r.get("open")), _to_dec(r.get("high")), \
+                _to_dec(r.get("low")), _to_dec(r.get("close"))
+            if is_bad_row(o_, h_, l_, c_):
+                dropped_ohlc += 1
+                continue
             rows.append(
                 {
                     "symbol": spec.symbol,
                     "trade_datetime": dt,
-                    "open": _to_dec(r.get("open")),
-                    "high": _to_dec(r.get("high")),
-                    "low": _to_dec(r.get("low")),
-                    "close": _to_dec(r.get("close")),
+                    "open": o_,
+                    "high": h_,
+                    "low": l_,
+                    "close": c_,
                     "volume": _to_int(r.get("volume")),
                     "oi": _to_int(r.get("hold")),
                     "src": "akshare",
                 }
+            )
+        if dropped_ohlc:
+            # fail-loud：脏 OHLC 是上游问题，需人工复核口径，故 error 而非 warning
+            logger.error(
+                f"[hourly] {spec.symbol} 丢弃 {dropped_ohlc} 根 OHLC 不自洽的棒"
+                f"（high<max(o,c) / low>min(o,c) / 价格<=0 / 解析失败）—— "
+                f"上游数据口径可能已变，请复核 akshare 返回；已拒入库（不入脏数据）"
             )
         # 丢弃率异常偏高 → **先怀疑白名单过时（合法标签被误杀），再怀疑源侧时区偏移**。
         # ⚠ 2026-10-08 更正：原注释与文案只写「疑似 sina 标签时区偏移回归」，而本次

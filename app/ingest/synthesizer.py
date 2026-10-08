@@ -45,6 +45,24 @@ _INSERT_HEAD = (
     "FROM minute_bar\n"
 )
 
+#: 冲突时的覆盖子句（2026-10-08 新增，配合「纯 upsert」改造）。
+#:
+#: 为什么必须是``DO UPDATE`` 而不是 ``DO NOTHING``：
+#:   增量合成要修的是「**在途桶**」——同一根 bar 会在采集过程中被多次重算
+#:   （分钟线陆续到齐 → 桶的 OHLC/volume 变化）。``DO NOTHING`` 会让**首次写入
+#:   那个不完整版本被永久固化**（���后的重算全部冲突跳过），这正是原实现必须靠
+#:   「先 DELETE 再 INSERT」才能修正的原因。改成 ``DO UPDATE`` 后：
+#:     · 在途桶每次重算都被刷新 → 不再需要 DELETE；
+#:     · 源数据被修正时重跑即自愈；
+#:     · 没有任何"桶消失"窗口。
+#: 代价：并发下最后写入者胜（与原先 DELETE+INSERT 的最终态一致）。
+_UPSERT_TAIL = (
+    "ON CONFLICT (symbol, bucket) DO UPDATE SET\n"
+    "    open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,\n"
+    "    close=EXCLUDED.close, volume=EXCLUDED.volume,\n"
+    "    amount=EXCLUDED.amount, open_interest=EXCLUDED.open_interest\n"
+)
+
 
 def _run(session: Session, sql: str, params: dict | None = None) -> int:
     res = session.execute(text(sql), params or {})
@@ -116,15 +134,17 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
     since = datetime.now(_SH_TZ) - timedelta(days=days_back)
     stats: dict[str, int] = {}
     for t, iv in _BARS:
-        session.execute(
-            text(
-                f"DELETE FROM {t} WHERE bucket >= time_bucket(INTERVAL '{iv}', :since, 'Asia/Shanghai')"
-            ),
-            {"since": since},
-        )
+        # ★ 2026-10-08 改为纯 upsert（原先 DELETE + INSERT DO NOTHING）。
+        # 为什么：DELETE 与 INSERT 之间存在**数据消失窗口**——读者在此期间查询
+        # 该表会看到"桶已删、尚未重算"的中间态。实测 2026-08-08 22:09 就撞到过
+        # （`bar_*` 今日 0 行，22:11:11 才恢复）。虽然 DELETE/INSERT 同属一个事务、
+        # 进程被杀会回滚，但把"可见的空窗"消掉更稳，且顺带获得两个性质：
+        #   · **幂等**：重跑直接覆盖，不会因残留旧桶而重复；
+        #   · **自愈**：源数据修正后重跑即修复脏桶（DELETE 方案下旧桶会一直留着）。
+        # 代价：无法删除"源里已消失"的桶。对分钟线这种只增不减的源，
+        # 该情形只可能来自人工清理 minute_bar，可接受（且有 131 行质量标记兜底）。
         sql = _INSERT_HEAD.format(t=t, iv=iv) + \
-              "WHERE ts >= :since\nGROUP BY symbol, bucket\n" \
-              "ON CONFLICT (symbol, bucket) DO NOTHING"
+              "WHERE ts >= :since\nGROUP BY symbol, bucket\n" + _UPSERT_TAIL
         stats[t] = _run(session, sql, {"since": since})
     session.commit()
 
@@ -145,6 +165,10 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
             if exp is not None and (got is None or got < exp):
                 pending[t] = (exp, got)
         if not pending:
+            # ★ 2026-10-08 修（PR review I5）：重试成功时 break，但 `lags` 仍留着
+            #   第 1 轮的失败值→ 末尾 `if lags:` 会打一条 ERROR 级「重试后仍未追平」，
+            #   而数据其实已正确。这类假告警会稀释真告警的信噪比。
+            lags = {}
             break
         lags = {t: f"期望≥{e} 实际{g}" for t, (e, g) in pending.items()}
         logger.warning(
@@ -152,18 +176,11 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
             f"疑似 minute_bar 正在被 MinuteCollector 并发写入")
         if attempt == max_retries:
             break
-        # 重跑：扩大窗口重算，覆盖刚被并发写入的分钟线
+        # 重跑：扩大窗口重算，覆盖刚被并发写入的分钟线（纯 upsert，无需先 DELETE）
         since = datetime.now(_SH_TZ) - timedelta(days=days_back)
         for t, iv in _BARS:
-            session.execute(
-                text(
-                    f"DELETE FROM {t} WHERE bucket >= time_bucket(INTERVAL '{iv}', :since, 'Asia/Shanghai')"
-                ),
-                {"since": since},
-            )
             sql = _INSERT_HEAD.format(t=t, iv=iv) + \
-                  "WHERE ts >= :since\nGROUP BY symbol, bucket\n" \
-                  "ON CONFLICT (symbol, bucket) DO NOTHING"
+                  "WHERE ts >= :since\nGROUP BY symbol, bucket\n" + _UPSERT_TAIL
             stats[t] = _run(session, sql, {"since": since})
         session.commit()
 

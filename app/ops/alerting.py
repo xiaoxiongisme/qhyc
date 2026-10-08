@@ -43,12 +43,33 @@ class AlertConfig:
     db_restart_alert_min: int = 10     # DB uptime < 该分钟数 → 疑似崩溃重启
     cooldown_sec: int = 1800
     notify: bool = True                # False = 只记日志不推送
+    # 新鲜度巡检表（2026-10-08 大幅扩充）。
+    #
+    # ★ 移除 ``fut_kline``：其唯一生产者 `scripts/adjust_bars.py` 已随 fdf 退役停用，
+    #   该表数据永久停在停用日 → `_check_freshness` 必然判 lag 超阈值 →
+    #   **每 30 分钟推一条假告警**（cooldown 1800s）。这类噪音会让运维在几天内
+    #   关闭通知，进而**淹没真告警**（备份失败 / DB 重启 / 采集断供）——
+    #   比单点漏报更危险，故优先移除。
+    #
+    # ★ 扩充理由：原先只有 5 张表，**恰好漏掉了最容易静默失活的那些**——
+    #   ``warehouse_receipt`` 2026-09-30→10-07 曾静默全失 7 天（当时无任何巡检）；
+    #   ``spot_basis`` 是 pipeline readiness 的依赖；``contract_daily`` 是 carry 因子基础。
+    #   原则：**凡是"停了会静默产出错误结果"的表，都要进巡检**。
     freshness_tables: dict = field(default_factory=lambda: {
+        # L0 采集层
         "daily_bar": "trade_date",
         "hourly_bar": "trade_datetime",
-        "fut_kline": "trade_datetime",
-        "factor_value": "trade_date",
+        "minute_bar": "ts",
+        "contract_daily": "trade_date",
         "member_position_rank": "trade_date",
+        "warehouse_receipt": "report_date",
+        "spot_basis": "report_date",
+        "inventory": "report_date",
+        # L1 行情层（fusion 与回测的实际数据源）
+        "bar_60m": "bucket",
+        # L2 因子/参考层
+        "factor_value": "trade_date",
+        "main_contract_map": "trade_date",
     })
 
 

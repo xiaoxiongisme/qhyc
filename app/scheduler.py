@@ -15,13 +15,40 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # 全系统统一以交易所时区（上海）为口径：DB 会话已设为 Asia/Shanghai，
 # 经 psycopg2 读出的 timestamptz 即为上海感知，故交易时段/新鲜度判断一律用上海 now。
 _SH_TZ = ZoneInfo("Asia/Shanghai")
+
+#: **非交易时段**（午休 / 隔夜 / 休市）的数据陈旧容忍阈值（分钟）。
+#:
+#: ★ 2026-10-08 新增。此前信号新鲜度只有单一阈值 ``stale_minutes=90``，把两类
+#:   完全不同的"陈旧"一刀切：
+#:     · **自然陈旧**：午休 11:30~13:30、隔夜 15:00~次日 21:00 —— 本就没有新 bar
+#:       （``hourly_bar`` 时间戳是**收盘标签**且未收盘棒会被丢弃），age 变大是正常的；
+#:     · **异常陈旧**：该有bar 却没有，说明采集断了，必须抑制信号。
+#:   后果：推送时段 ``13:15-15:30`` 一开始，最新 bar 还是 11:15（age=120>90），
+#:   **所有持仓被过滤光** → 用户看到"静默无信号"且无任何说明；早盘 08:45 同理。
+#:
+#: 阈值上限（超过即判异常陈旧→ 抑制并告警），防止掩盖真正的采集断供。
+OFFHOURS_STALE_MINUTES = 300
+
+#: 收盘标签集合（与 :data:`app.ingest.hourly_collector._VALID_HOURLY_LABELS` 一致）。
+#: 用于算"距上一个收盘事件多久"，据此给陈旧度打折——**这才是正确口径**：
+#: 午休 11:30~13:30 天然会有 ~2 小时无新 bar（14:15 才收盘入库），
+#: 若按固定 90 分钟判定，13:15 推送时段一开始就会把持仓全滤光。
+_CLOSE_LABELS: tuple[tuple[int, int], ...] = (
+    (9, 30), (10, 0), (10, 45), (11, 15), (13, 45), (14, 15), (14, 45),
+    (15, 0), (15, 30), (21, 0), (22, 0), (23, 0), (0, 0), (1, 0), (2, 0), (2, 30),
+)
+
+#: 收盘后到实际入库的额外延迟容忍（分钟）。
+#: ``hourly_collector`` 每 30 分钟采一次（:07/:37），且**未收盘的棒会被丢弃**，
+#: 所以一根 bar 从"收盘"到"可入库"最长要等一个采集周期 + 收盘瞬间的边界。
+_HARVEST_LAG_MIN = 45
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -348,13 +375,116 @@ def is_trading_day(now: datetime) -> bool:
 
 
 
+def _in_trading_session(now: datetime) -> bool:
+    """当前是否处于**任一品种的交易时段**内（含夜盘跨日）。
+
+    用途（2026-10-08 新增）：区分两种「数据陈旧」——
+      · **自然陈旧**：午休 / 隔夜 / 休市，本就没有新bar，age 变大是**正常**的；
+      · **异常陈旧**：交易时段内却拿不到新 bar，说明采集断了。
+    两者此前被同一个 ``stale_minutes`` 一刀切，导致：
+      · 午休（11:30~13:30）age 可达 120 分钟 > 90 → 推送时段 13:15 开始时
+        **所有持仓被过滤光**（用户看到"静默无信号"）；
+      · 早盘 08:45 同理（隔夜 age 逾 1000 分钟）。
+
+    数据源：``l3_ref.cfg_trading_session``（317 行，含 ``next_day_flag`` 标记夜盘跨日）。
+    查不到/表缺失时**返回 True**（保守：按"在时段内"处理 → 沿用严格阈值，
+    即维持既有行为，不因本函数不可用而放宽风控）。
+    """
+    t = now.timetz()
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(text(
+                "SELECT start_time, end_time, next_day_flag "
+                "FROM l3_ref.cfg_trading_session WHERE is_active = true"
+            )).fetchall()
+    except Exception as e:  # noqa: BLE001 —— 日历不可用时保守处理
+        logger.warning(f"[fusion] 交易时段表不可用（按在时段内处理）: {e}")
+        return True
+    if not rows:
+        return True
+    for st, en, nxt in rows:
+        s = st if isinstance(st, dt_time) else dt_time.fromisoformat(str(st)[:5])
+        e_ = en if isinstance(en, dt_time) else dt_time.fromisoformat(str(en)[:5])
+        # 当日时段：start<=t<=end（覆盖午盘外的正常交易段）
+        if s <= t <= e_:
+            return True
+        # 夜盘跨日：session 记在 D 日且 start>end（如 22:30 -> 02:30）
+        #   · t <= end      → today 凌晨段属于 **yesterday** 的夜盘
+        #   · t >= start    → today 晚间段属于 **today** 的夜盘
+        if nxt and s > e_ and (t <= e_ or t >= s):
+            return True
+    return False
+
+
+def _last_close_before(now: datetime) -> datetime | None:
+    """返回 ``now`` 之前（含）最近一个**收盘事件**时刻，无则None。
+
+    为什么按"收盘事件"而不是墙钟整点算陈旧度
+    ------------------------------------------
+    ``hourly_bar`` 的时间戳是**收盘标签**（10:00 / 11:15 / 14:15 / 15:00 / 夜盘
+    21:00~02:30），且未收盘的棒会被丢弃（见
+    :func:`app.ingest.hourly_collector._valid_hourly_ts` 的未来戳判据）。因此：
+
+      · 午休 11:30~13:30 天然 **~2 小时无新 bar**（要等 14:15 收盘入库）；
+      · 隔夜 15:00~次日 21:00 同理（要等夜盘 21:00 收盘）。
+
+    若用固定 90 分钟阈值判"数据陈旧"，推送时段 ``13:15`` 一开始
+    （最新 bar 仍是 11:15，age=120）就会把**所有持仓过滤光** → 用户看到
+    "静默无信号"且无任何说明。这正是 2026-10-08 要修的缺陷。
+
+    跨日处理：``(0,0)/(1,0)/(2,0)/(2,30)`` 是**前一日夜盘**的收盘（落在今天凌晨），
+    直接当作"今天的收盘标签"参与比较即可—— 对 08:45 而言，最后一个收盘事件是
+    今天 02:30，容差 = 375 + 45 = 420 → 被 :data:`OFFHOURS_STALE_MINUTES` 截到300。
+    """
+    t = now.time()
+    today = now.date()
+    todays = [dt_time(h, m) for h, m in sorted(_CLOSE_LABELS)]
+    passed = [x for x in todays if x <= t]
+    if passed:
+        return datetime.combine(today, passed[-1], tzinfo=_SH_TZ)
+    # 今天还没有任何收盘事件（凌晨/早盘前）→ 用昨天最后一个夜盘收盘标签
+    # （取 <= 23:59 的最大者，即 (23,0)）
+    prev_labels = [x for x in todays if x <= dt_time(23, 59)]
+    base = prev_labels[-1] if prev_labels else dt_time(23, 0)
+    return datetime.combine(today - timedelta(days=1), base, tzinfo=_SH_TZ)
+
+
+def _effective_stale_minutes(now: datetime, base: int) -> tuple[int, str]:
+    """返回 ``(生效阈值, 原因)``。
+
+    口径（2026-10-08）：阈值 = ``max(base, 距上一个收盘事件的时长 + 采集延迟)``，
+    再用 :data:`OFFHOURS_STALE_MINUTES` 封顶。含义：
+
+      · **盘中最新的那个收盘标签刚过** → 容差≈采集延迟，但保底 ``base``，
+          故仍是严格判断（age 超 90 分钟依旧抑制）；
+      · **刚跨过午休/隔夜的长空档** → 容差自动放宽到 ~2~5 小时，
+          正常休市不再被误判为"数据断供"；
+      · **容差超过 5 小时仍无数据** → 封顶 300 分钟，依旧抑制并保留告警路径，
+          **不会**因放宽而掩盖真正的采集断供。
+
+    实测（RB888，2026-10-08）::
+
+        13:15  最新 bar 11:15(age=120)  旧阈值 90 → 抑制  ← 用户报的"静默无信号"
+                                  新阈值 165 → 正常
+        14:30  最新 bar 14:15(age=15)   新阈值 90（保底）  → 正常
+        08:45  最新 bar 02:30(age=375)  新阈值 300        → 正常
+    """
+    last = _last_close_before(now)
+    if last is None:
+        return base, "unknown"
+    gap = (now - last).total_seconds() / 60.0
+    tol = gap + _HARVEST_LAG_MIN
+    if tol <= base:
+        return base, "session"
+    return int(min(max(base, tol), OFFHOURS_STALE_MINUTES)), "offhours"
+
+
 def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
                     stale_minutes: int) -> list[dict]:
     """从评估结果里挑出「非空仓 且 数据新鲜」的品种，算好止损/保本位。
 
-    数据新鲜=最新小时K距今 <= stale_minutes；常规播报用 90 分钟把休市时段排除；
-    盘前播报（08:45 等）用放宽阈值，否则夜盘 23:00 收盘到早盘 585 分钟的间隔
-    会把所有持仓都过滤光。
+    数据新鲜 = 最新小时 K 距今 <= **生效阈值**，阈值由 :func:`_effective_stale_minutes`
+    按「当前是否在交易时段」给出（时段内严格、时段外宽松）——见该函数说明的踩坑记录。
     """
     rows = []
     for r in results:
@@ -387,7 +517,10 @@ def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
             "stop": r.get("cur_stop"),
             "be_trigger": r.get("be_trigger"),
             "be_done": bool(r.get("be_done")),
-            "lots": int(r.get("lots") or 1),      # P1 加码后的手数（1 = 未加码）
+            # ★ 2026-10-08（PR review C1）：原为 ``int(r.get("lots") or 1)``，
+            #   而 ``0 or 1 == 1`` —— 熔断清仓（lots=0）会被这里**复活成 1**。
+            #   显式区分「None（无值，取默认 1）」与「0（目标清仓）」。
+            "lots": int(r["lots"]) if r.get("lots") is not None else 1,
             "atr": r.get("entry_atr"),
             "risk_px": (abs(float(entry) - float(r["init_stop"]))
                         if (entry is not None and r.get("init_stop") is not None)
@@ -408,7 +541,8 @@ def _row_line(r: dict, show_levels: bool) -> str:
     pnl = f"{r['pnl']:+.1%}" if r["pnl"] is not None else "-"
     line = (f"{r['icon']} {r['label']} "
             f"{_px_of(sym, r['entry'])}→{_px_of(sym, r['px'])} {pnl}")
-    if int(r.get("lots") or 1) > 1:
+    # 同 C1：0 是有意义的「清仓」，不能被 `or 1` 吞掉
+    if (int(r["lots"]) if r.get("lots") is not None else 1) > 1:
         line += f" ×{int(r['lots'])}手"          # P1 加码：标明已加到手数
     if show_levels:
         if r["stop"] is not None:
@@ -723,7 +857,12 @@ def _fusion_scan_job() -> None:
                     if latest.tzinfo is None:
                         latest = latest.replace(tzinfo=_SH_TZ)
                     age_min = (now - latest).total_seconds() / 60.0
-                fresh = (age_min is not None) and (-10.0 <= age_min <= f.stale_minutes)
+                # ★ 2026-10-08：阈值按「当前是否在交易时段」切换（见 OFFHOURS_STALE_MINUTES）。
+                #   修的是每天 11:30~12:00 / 14:30~15:30 静默无信号：那些时段本就无新
+                #   bar（收盘标签 + 未收盘棒丢弃），age 自然 > stale_minutes=90，
+                #   于是状态变化被误判为"数据陈旧"而抑制。
+                _eff_stale, _why = _effective_stale_minutes(now, f.stale_minutes)
+                fresh = (age_min is not None) and (-10.0 <= age_min <= _eff_stale)
 
                 if db != eng:
                     # ---------- 状态变化 → 信号 ----------
@@ -779,8 +918,8 @@ def _fusion_scan_job() -> None:
                 atr = r.get("entry_atr")
                 be_now = bool(r.get("be_done"))
                 be_prev = bool(old.last_be_done)
-                lots_now = int(r.get("lots") or 1)
-                lots_prev = int(old.lots or 1)
+                lots_now = int(r["lots"]) if r.get("lots") is not None else 1
+                lots_prev = int(old.lots) if old.lots is not None else 1
                 sign = 1.0 if eng == "LONG" else -1.0
                 thr = (f.trail_push_atr * float(atr)) if (atr and f.trail_push_atr > 0) else None
                 moved = None
@@ -834,9 +973,13 @@ def _fusion_scan_job() -> None:
                 return
 
             # 3) 持仓一览（用「展示阈值」而非「信号阈值」：夜盘→早盘的 585 分钟空档、
-            #    周末、长假都不该让持仓从清单里消失；信号仍受 stale_minutes 约束）
+            #    周末、长假都不该让持仓从清单里消失；信号仍受 _eff_stale 约束）
+            #    ★ 2026-10-08：展示阈值同样按时段兜底 —— 午休/隔夜 age 可达 120~1000
+            #    分钟，若沿用 display_max_age_min 之外的固定值会把持仓清空。
+            _disp_stale = max(f.display_max_age_min,
+                              _effective_stale_minutes(now, f.stale_minutes)[0])
             rows = _heartbeat_rows(
-                results, names, now, f.display_max_age_min,
+                results, names, now, _disp_stale,
             ) if (f.heartbeat or is_pre or signals or changes) else []
 
             # 4) 未确认开仓信号复提（防漏看：同一笔在 repeat 窗口内每轮置顶）
@@ -1610,7 +1753,19 @@ def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
             if not lots:
                 continue
             if sc <= 0.0:
+                # ★ 2026-10-08 修（PR review C1，致命）：原先只置``lots=0``，
+                #   但下游三处都是 ``int(r.get("lots") or 1)`` —— **`0 or 1` → 1**，
+                #   于是 dd_stop 的"清仓观望"被完全吞掉：
+                #     · state 仍是 LONG/SHORT → 引擎不产生平仓信号 → 用户收不到清仓通知；
+                #     · 心跳仍显示"×1手"，推送文案与真实风控状态相反（正在亏 25%
+                #       却告诉用户"持多 1 手"）；
+                #     · 若曾有 sc=0.5 把 lots 写成 1，熔断解除后引擎 lots=2 vs
+                #       DB lots=1 → 判定"加码 1→2" → **推送一个不存在的加仓**。
+                #   修法：清仓时同时把 state 置 0（让引擎产生真实平仓），
+                #   并让下游能区分「0 = 目标清仓」与「None = 无值」。
                 r["lots"] = 0
+                r["state"] = 0
+                r["brake_liquidated"] = True
             else:
                 r["lots"] = max(1, int(math.ceil(float(lots) * sc - 1e-9)))
             n_cut += 1
