@@ -88,65 +88,11 @@ services:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     command: ["python", "-m", "app.main"]
 
-  scheduler:
-    image: ${QHYC_IMAGE:-qhyc:latest}
-    build: .
-    container_name: qhyc-scheduler
-    restart: unless-stopped
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-      api:
-        condition: service_started
-    env_file:
-      - .env
-    environment:
-      POSTGRES_HOST: timescaledb
-      ROLE: scheduler
-      RUN_ON_BOOT: "0"
-    volumes:
-      - logs:/app/logs
-      - runtime:/app/runtime
-    healthcheck:
-      disable: true
-    command: ["python", "-m", "app.scheduler"]
-
-  pipeline:
-    image: ${QHYC_IMAGE:-qhyc:latest}
-    build: .
-    container_name: qhyc-pipeline
-    restart: unless-stopped
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      POSTGRES_HOST: timescaledb
-      ROLE: pipeline
-      TZ: Asia/Shanghai
-      # 源码来自镜像内 /app/pipeline_src（由 scripts/vendor_pipeline_src.py 内化）
-      # —— 不再依赖 ${WB_PIPELINE_PATH}
-      PIPELINE_SRC: /app/pipeline_src
-      PIPELINE_SNAPSHOT: /app/runtime/pipeline_snapshot
-      QH_BRIEF_BASE: /app/qh
-      QH_PG_HOST: timescaledb
-      QH_PG_PORT: 5432
-      QH_PG_DB: ${POSTGRES_DB:-futures}
-      QH_PG_USER: ${POSTGRES_USER:-futures}
-      QH_PG_PWD: ${POSTGRES_PASSWORD}
-    volumes:
-      - logs:/app/logs
-      - runtime:/app/runtime
-      - qh_brief:/app/qh
-    mem_limit: ${PIPELINE_MEM_LIMIT:-2g}
-    healthcheck:
-      test: ["CMD-SHELL", "python -m app.pipeline.healthcheck"]
-      interval: 5m
-      timeout: 30s
-      retries: 3
-      start_period: 90s
-    command: ["python", "-m", "app.pipeline.worker"]
+  # ★2026-10-08 全云化 P3：scheduler / pipeline 已迁出 Docker，改由 systemd 托管
+  #   qhyc-scheduler.service -> venv/bin/python -m app.scheduler
+  #   qhyc-pipeline.service   -> venv/bin/python -m app.pipeline.worker
+  # 原服务块整段移除，避免 docker compose up -d 把它拉起与 systemd 双跑（重复推送风险）。
+  # 需要回退到容器版时：git revert 本次改动 + docker compose up -d scheduler pipeline
 
 volumes:
   pgdata:
