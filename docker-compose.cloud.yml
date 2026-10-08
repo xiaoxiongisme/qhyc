@@ -72,20 +72,30 @@ services:
       POSTGRES_HOST: timescaledb
       ROLE: api
     volumes:
-      # 只挂**运行时产物**，源码全部来自镜像
-      - logs:/app/logs
-      - runtime:/app/runtime
-      # 远端没有 E:/QH：简报产出落在独立 named volume
-      - qh_brief:/app/qh
-      # config/local.yaml 的 imports.container_root=/app/imports。
-      # 云端没有本地历史数据可挂，但仍要挂一个（可空）卷，否则目录不存在会报错。
-      - imports:/app/imports
+      # ★2026-10-08 P3 后：scheduler/pipeline 已迁 systemd，二者需与本容器**共享数据**，
+      #   故一律改用宿主 bind mount（弃用 named volume）——named volume 的数据在
+      #   /var/lib/docker/volumes 内，systemd 侧无法安全共享，会造成
+      #   「pipeline 写 A 处、api 读 B 处」的**分叉**（api 读到过期简报）。
+      - /home/ubuntu/qhyc_work/share/logs:/app/logs
+      - /home/ubuntu/qhyc_work/share/runtime:/app/runtime
+      - /home/ubuntu/qhyc_work/share/qh:/app/qh
+      # config/local.yaml 的 imports.container_root=/app/imports（空目录占位）
+      - /home/ubuntu/qhyc_work/share/imports:/app/imports
       # ⚠ 不要挂 ./config 覆盖镜像内配置：云端若目录为空会把配置盖没。
       #   需要改配置走 env 覆盖，或在服务器上放好 config 再挂。
     ports:
       # 安全：仅绑宿主环回（与本地 compose 同策略）。API 在 key 为占位符时不鉴权，
       # 绑 0.0.0.0 等于把 13 个 POST 写端点暴露到公网。外部访问走 ssh -L 或反向代理。
       - "127.0.0.1:${API_PORT:-8000}:8000"
+    # ★2026-10-08：原 healthcheck 用 `curl`，但**镜像内根本没有 curl**
+    #   （`command -v curl` 无输出），导致容器恒为 unhealthy——**既有缺陷**，
+    #   非本次改动引入。改用镜像自带的 python3 探测。
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 8s
+      start_period: 25s
+      retries: 3
     command: ["python", "-m", "app.main"]
 
   # ★2026-10-08 全云化 P3：scheduler / pipeline 已迁出 Docker，改由 systemd 托管
