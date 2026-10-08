@@ -75,3 +75,45 @@ def test_zscore_winsorize():
     assert z.std(ddof=0) > 0
     # 极端值(100)被 winsorize 到上分位，不应主导
     assert z.iloc[-1] < 3.0
+
+
+def test_asof_join_is_datetime_unit_agnostic():
+    """asof_join 对时基单位不敏感（2026-10-08 回归）。
+
+    根因回顾：两侧 merge key 单位各自推断 —— `to_datetime(date 对象)` 给
+    `[s]`，而 `[s] + Timedelta(days=n)` 被 Timedelta 单位（新版 pandas 为 `us`）
+    升精度成 `[us]`；`merge_asof` 强制两侧 dtype 一致 → pandas>=2 直接抛
+    `MergeError: incompatible merge keys [0] dtype('<M8[s]') and dtype('<M8[us]')`。
+
+    旧 pandas 统一 `datetime64[ns]` 时恰好同型，故这是**升级后才暴露**的潜伏缺陷。
+    本测试用三种输入形态（date 对象 / 字符串 / 已是 Timestamp 且单位为 ns/us/s）
+    交叉验证，确保修法（派生列跟随日历列单位）真的与单位无关，
+    而不是「碰巧在当前 pandas 版本上好了」。
+    """
+    import datetime as _dt
+
+    days = [1, 2, 3, 4, 5]
+    vals = {"a": 0.1, "b": 0.5}
+    # 三种日历/因子形态，单位各异
+    variants = [
+        ([_dt.date(2026, 1, d) for d in days], [vals["a"], vals["b"]], "date 对象"),
+        ([f"2026-01-{d:02d}" for d in days], [vals["a"], vals["b"]], "字符串"),
+        ([pd.Timestamp(f"2026-01-{d:02d}").as_unit("ns") for d in days],
+         [vals["a"], vals["b"]], "Timestamp[ns]"),
+        ([pd.Timestamp(f"2026-01-{d:02d}").as_unit("us") for d in days],
+         [vals["a"], vals["b"]], "Timestamp[us]"),
+        ([pd.Timestamp(f"2026-01-{d:02d}").as_unit("s") for d in days],
+         [vals["a"], vals["b"]], "Timestamp[s]"),
+    ]
+    for cal_dates, fvals, label in variants:
+        factor = pd.DataFrame({
+            "trade_date": cal_dates[::2][:2],   # 1日、3日
+            "symbol": ["RB888", "RB888"],
+            "z": fvals,
+        })
+        cal = pd.DataFrame({"trade_date": cal_dates})
+        out = asof_join(factor, cal, lag_days=1, value_cols=["z"])
+        row3 = out[out["trade_date"] == pd.Timestamp("2026-01-03")].iloc[0]
+        row4 = out[out["trade_date"] == pd.Timestamp("2026-01-04")].iloc[0]
+        assert row3["z"] == vals["a"], f"[{label}] 第3日不应自动生效到自身发布的值"
+        assert row4["z"] == vals["b"], f"[{label}] 第4日应取到第3日发布的值"

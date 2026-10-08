@@ -69,6 +69,22 @@ def asof_join(
     cal["trade_date"] = pd.to_datetime(cal["trade_date"])
 
     f["_avail"] = f["trade_date"] + pd.Timedelta(days=lag_days)
+    # ★ 统一两侧 merge key 的时基单位（2026-10-08 修复）
+    #   症状：pandas>=2 报 `MergeError: incompatible merge keys [0]
+    #   dtype('<M8[s]') and dtype('<M8[us]')`。
+    #   根因：两侧单位**各自推断、互不相干**——
+    #     · `pd.to_datetime` 对 `datetime.date` 对象推断为 `datetime64[s]`；
+    #     · 但 `datetime64[s] + pd.Timedelta(days=n)` 会被 Timedelta 的单位
+    #       （新版 pandas 为 `us`）**升精度**成 `datetime64[us]`；
+    #     · 于是 left(`cal._dt`) 是 [s]、right(`f._avail`) 是 [us]，
+    #       而 `merge_asof` 强制要求两侧 dtype 完全一致 → 直接抛错。
+    #   为什么以前没炸：旧 pandas 统一用 `datetime64[ns]`，两侧恰好同型；
+    #   pandas 2 起支持非纳秒分辨率后，这个「恰好」就没了。
+    #   修法：**不写死单位**（写死 ns 会在 pandas 3 被弃用），而是让派生列
+    #   跟随日历列的单位——日频数据本就只用到日精度，截断子秒无副作用。
+    _key_dtype = cal["trade_date"].dtype
+    if f["_avail"].dtype != _key_dtype:
+        f["_avail"] = f["_avail"].astype(_key_dtype)
     cal = cal.sort_values("trade_date").reset_index(drop=True)
     f = f.sort_values("_avail").reset_index(drop=True)
 
