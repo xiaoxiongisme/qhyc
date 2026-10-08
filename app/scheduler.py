@@ -1470,6 +1470,79 @@ def _data_selfcheck_job() -> None:
         logger.exception(f"[scheduler] data_selfcheck failed: {e}")
 
 
+#: ``_alert_portfolio_brake_idle`` 的节流状态：同一自然日只告警一次。
+#: 理由：``_apply_portfolio_brake`` 每轮 fusion_scan 都会调用（约每 30 分钟一次），
+#: 不节流会把用户微信刷爆，反而导致真告警被无视。
+_BRAKE_IDLE_ALERT_DAY: str | None = None
+
+
+def _alert_portfolio_brake_idle(status: dict) -> None:
+    """风控空转告警：**按自然日 + 按原因**节流，走 pushplus 推给用户。
+
+    ★ 2026-10-08 新增。此前该问题只 ``logger.warning``，而 warning 淹没在
+    每 30 分钟一次的调度日志里，实际从未被人看见 —— 于是「开关显示开启、
+    风控实际空转」持续运行而无人知晓。现在升级为真告警。
+
+    刻意**不**阻断决策链：回测/研究需要能跑通，熔断缺失以「告警 + 状态可查」
+    暴露，而不是让整条信号链路挂掉。
+
+    ★★ 2026-10-08 二修（代码审查发现）：``send_alert`` 的契约是**永不抛异常**，
+    失败一律以返回值 ``(ok, note)`` 表达（内部 try/except 兜住 pushplus）。
+    若忽略返回值就写节流标记，则「推送 token 过期 / 网络中断 / 通道未启用」
+    这些最需要告警的场景会**被记成「今天已告警」**，接下来 24 小时不再重试
+    —— 恰好退化成修复前「只有日志、无推送」的状态。故：
+      · 只有 ``ok=True`` 才写节流标记；失败 → 记 error 且**下轮继续重试**。
+      · 通道本身未启用（``enabled``/``notify`` 为假）也**不**写标记，
+        否则通道修好后当天仍不会补发。
+      · 节流键含 ``reason``：故障性质变了（表为空 → query_error）应重新提示，
+        否则运维会照旧方向排查错。
+    """
+    global _BRAKE_IDLE_ALERT_DAY
+    day = datetime.now(_SH_TZ).strftime("%Y-%m-%d")
+    reason = str(status.get("reason"))
+    key = (day, reason)
+    if key == _BRAKE_IDLE_ALERT_DAY:
+        return
+    try:
+        from app.ops.alerting import alert_config_from_env, send_alert
+
+        cfg_alert = alert_config_from_env()
+        if not (cfg_alert.enabled and cfg_alert.notify):
+            # 通道关着 → 记 error 但**不写标记**（通道修好后立刻能补发）
+            logger.error(
+                "[portfolio_brake] 风控空转告警**无法送达**：ALERT_ENABLED=%s "
+                "ALERT_NOTIFY=%s。熔断开关开着但告警通道关闭，此风险目前只有日志可查。"
+                "请修好告警通道，或关闭 cfg_feature_switch.portfolio_brake_enabled "
+                "让状态与实际一致。", cfg_alert.enabled, cfg_alert.notify)
+            return
+        ok, note = send_alert(
+            "⚠️ 风控空转：组合回撤熔断实际未生效",
+            "**熔断开关是开的，但没有任何仓位级风控在起作用。**\n\n"
+            "- `cfg_feature_switch.portfolio_brake_enabled = true`\n"
+            "- 但权益曲线不可用 → 恒等放行（scalar ≡ 1.0）\n"
+            "- 后果：回撤超 15%/25% 时**不会**降仓/清仓，等于没有熔断保护\n\n"
+            f"诊断：reason=`{reason}` "
+            f"样本={status.get('n_days')}/{status.get('need_days')} 交易日\n\n"
+            "处置二选一：\n"
+            "1. 补 `portfolio_equity` 权益曲线（需 ≥{need} 个交易日；"
+            "注意 `fusion_signal_log.pnl` 是**收益率**不是金额，且样本极少，"
+            "不能直接累加）\n"
+            "2. 把 `portfolio_brake_enabled` 置 false，让状态与实际一致".format(
+                need=status.get("need_days")),
+            cfg_alert,
+        )
+        if not ok:
+            # ★ 不写节流标记 → 下轮 fusion_scan 会重试（这是本函数存在的意义）
+            logger.error(
+                "[portfolio_brake] 风控空转告警**未送达**（note=%s）；未写入节流标记，"
+                "下轮 fusion_scan 将重试。请检查 PUSHPLUS_TOKEN / 网络 / "
+                "ALERT_ENABLED / ALERT_NOTIFY。", note)
+            return
+        _BRAKE_IDLE_ALERT_DAY = key
+    except Exception as e:  # noqa: BLE001 —— 告警失败绝不阻断信号链路
+        logger.error(f"[portfolio_brake] 空转告警发送异常（已忽略，不阻断信号链）: {e}")
+
+
 def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
     """V5 组合回撤熔断：按当前回撤缩放「期望手数」（Phase 5）。
 
@@ -1498,11 +1571,22 @@ def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
         if not equity:
             # ⚠ fail-loud：熔断已开启但**无权益曲线** → 恒等放行等于熔断失效。
             #   这不是"正常降级"，是"风控空转"——必须告警而非 info 静默。
-            #   权益曲线来自 portfolio_equity（当前 0 行，无已实现盈亏可派生）。
-            logger.warning(
-                "[portfolio_brake] 熔断已开启但 portfolio_equity 无数据 → 恒等放行，"
-                "**风控实际未生效**（非降级，是空转）。请先补权益曲线或关闭开关。"
+            #
+            # ★ 2026-10-08：原来只 ``logger.warning``，结果运行期一直打 warning
+            #   而**无人察觉**（开关显示开启、风控实际空转）。现升级为
+            #   **真告警（推微信）+ 按天节流**，让"虚假安全感"不可能再隐身。
+            #   注意**不**改为阻断决策链：回测/研究场景仍需能跑通，
+            #   熔断失效以"告警 + 状态可查"的方式暴露，而非让整条链路挂掉。
+            from app.risk.portfolio_brake import equity_curve_status
+
+            st = equity_curve_status()
+            logger.error(
+                "[portfolio_brake] 熔断已开启但无可用权益曲线 → 恒等放行，"
+                "**风控实际未生效**（非降级，是空转）。原因={} 样本={}/{}(交易日)。"
+                "请补 portfolio_equity 或关闭 cfg_feature_switch.portfolio_brake_enabled。".format(
+                    st.get("reason"), st.get("n_days"), st.get("need_days"))
             )
+            _alert_portfolio_brake_idle(st)
             return results
         sc = brake_scalar(equity, cfg)
         if sc >= 1.0:
@@ -1519,7 +1603,20 @@ def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
             n_cut += 1
         logger.warning(f"[portfolio_brake] 回撤熔断生效 scalar={sc} → 缩放 {n_cut} 个品种手数")
     except Exception as e:  # noqa: BLE001
+        # ★ 2026-10-08 二修（代码审查 C4）：原实现只 logger.exception，**完全不告警**。
+        #   但这个 try 覆盖了 load_equity_curve / equity_curve_status /
+        #   _alert_portfolio_brake_idle —— 也就是说 **DB 层异常时（最需要告警的
+        #   场景）告警代码根本不会被执行**，熔断空转 + 零推送。与被修的缺陷 A 同构。
+        #   现在兜底路径同样告警，并标明是「异常」而非「无数据」。
         logger.exception(f"[portfolio_brake] 熔断异常，恒等放行：{e}")
+        try:
+            _alert_portfolio_brake_idle({
+                "reason": f"brake_exception:{type(e).__name__}",
+                "n_days": 0,
+                "need_days": 0,
+            })
+        except Exception:  # noqa: BLE001 —— 告警再失败也不能掩盖原始异常
+            logger.exception("[portfolio_brake] 熔断异常的告警亦失败")
     return results
 
 
