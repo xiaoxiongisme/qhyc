@@ -302,12 +302,48 @@ def _load_trade_calendar(max_age_days: int = 7) -> set[str]:
 
 
 def is_trading_day(now: datetime) -> bool:
-    """是否交易日。周末直接否；有日历则查日历，无日历则视为交易日（仅周末过滤）。"""
+    """是否期货交易日（G4 官方源 ``futures_rule``），**带覆盖边界保护**。
+
+    ★ 2026-10-08 修复（生产缺陷：信号推送静默中断）
+    ----------------------------------------------------
+    原实现是「日历集合成员判断」：``return now.strftime("%Y-%m-%d") in cal``。
+
+    问题在于 ``futures_rule`` **只记交易日**，于是「某日无行」有二义：
+    「确定休市（周末/长假）」或「未来尚未播种」。原实现**把两者一律当成休市**，
+    且**不报错、不告警**，日志只写「非交易日，跳过」——与真实休市语气完全相同。
+
+    真实事故（2026-10-08）：``futures_rule`` 播种止于 09-30，而 ``seeded_through``
+    元数据记到 10-05（10-05 播种时 10-01~10-07 国庆休市无数据）。于是 10-08
+    （周三，节后首个交易日）被判「非交易日」，``fusion_scan`` 全天跳过 →
+    **信号推送静默中断**，日志无任何告警。而同日 L0/L2/L3 各表都已到 10-08
+    （contract_daily / factor_value / main_contract_map / minute_bar 均有当日数据），
+    唯一滞后的就是它——典型的单点静默失效。
+
+    现改走 :func:`app.data.trade_calendar.is_futures_trading_day`，它按
+    ``seeded_through`` 做**三分判定**（文档见该函数）：
+      ① 表内有该日                      → True
+      ② 表内无该日 且 <= seeded_through → False（确定休市，无兜底）
+      ③ 表内无该日 且 >  seeded_through → **告警** + 退化为「周一~周五」
+    故播种滞后时会**告警并按工作日兜底**，而非静默误判为休市。
+
+    降级链（三级，每级都留痕，**绝不静默**）：
+        is_futures_trading_day → _load_trade_calendar 集合判断 → 仅周末过滤
+    """
     if now.weekday() >= 5:
         return False
+    d = now.date()
+    # 首选：官方 API（三分判定 + 超边界告警）
+    try:
+        from app.data import trade_calendar
+
+        return trade_calendar.is_futures_trading_day(d)
+    except Exception as e:  # noqa: BLE001 —— 日历模块整体不可用才降级
+        logger.warning(f"[fusion] 官方日历不可用（{type(e).__name__}: {e}），降级查缓存日历")
+    # 次选：本地缓存日历（仍是集合判断，但至少能容忍官方源临时故障）
     cal = _load_trade_calendar()
     if cal:
-        return now.strftime("%Y-%m-%d") in cal
+        return d.isoformat() in cal
+    # 末选：仅按周末过滤
     return True
 
 

@@ -188,16 +188,37 @@ def main():
     # G4：回写「已播种截止日」。futures_rule 只记交易日 → 「无行」二义（休市 or 未来未播种）。
     # 显式记录截止日，app/data/trade_calendar.py 才能把「<= 截止日的缺失行」判为确定的非交易日，
     # 而非退化为「周一~周五」把法定节假日误判成交易日（静默错）。
+    #
+    # ★ 2026-10-08 修正：原实现回写 `end`（= --end 参数），这是**错的**。
+    #   `seeded_through` 的语义是「我已确认到这个日期为止的日历」，故必须是
+    #   **实际播种到的最后交易日**，而非「我尝试过的最后一天」。
+    #   事故实例（2026-10-08）：`--end 2026-12-31` 播种后，回写 seeded_through=12-31，
+    #   但 akshare 对未来日期无数据，实际只拿到 10-08 一天。于是
+    #   `is_futures_trading_day()` 三分判定走 ② 分支，把 **10-09~12-31 全部
+    #   判为「确定休市」**——比原缺陷更危险（无告警、无兜底）。
+    #   正确做法：取库内实际最大交易日作为边界；其后的日期走 ③ 分支（有告警 + 按
+    #   工作日兜底），既不误判休市也不静默。
     try:
         cur.execute("CREATE TABLE IF NOT EXISTS cfg_calendar_seed_meta ("
                     "key TEXT PRIMARY KEY, value TEXT, "
                     "updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+        cur.execute("SELECT max(trade_date) FROM futures_rule")
+        actual_max = cur.fetchone()[0]
+        # 库内已有历史播种时，边界取「实际最大交易日」与「本次尝试终点」的较小者：
+        # 前者是真正被确认过的边界，后者避免把范围外的老数据误当成已确认。
+        seeded_through = min(x for x in (actual_max, end) if x is not None) if actual_max else end
         cur.execute(
             "INSERT INTO cfg_calendar_seed_meta(key, value) VALUES ('seeded_through', %s) "
             "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()",
-            (end.isoformat(),))
+            (seeded_through.isoformat(),))
         c.commit()
-        print(f"[seed] 已登记 seeded_through={end}（供 G4 判定休市 vs 未来未播种）", flush=True)
+        if actual_max and actual_max < end:
+            print(f"[seed] ⚠️ 请求范围到 {end}，但 akshare 实际只提供到 {actual_max}；"
+                  f"seeded_through 回写 {actual_max}（不把未获取到的日期伪装成『已确认休市』）。\n"
+                  f"       该日之后的日期将走 ③ 分支：有告警 + 按周一~周五兜底，不会误判为休市。",
+                  flush=True)
+        print(f"[seed] 已登记 seeded_through={seeded_through}"
+              f"（= 库内实际最后交易日，供 G4 判定休市 vs 未来未播种）", flush=True)
     except Exception as e:  # noqa: BLE001 —— 元数据回写失败不阻断播种，但必须留痕
         print(f"[seed] ⚠️ seeded_through 回写失败（不影响已播数据，但 G4 将退化为二义判定）: {e}",
               flush=True)
