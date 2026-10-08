@@ -69,39 +69,175 @@ def _run(session: Session, sql: str, params: dict | None = None) -> int:
     return int(getattr(res, "rowcount", -1))
 
 
+def advisory_lock_holder() -> int | None:
+    """返回当前持有分钟管线锁的 backend pid；无人持有则 ``None``。
+
+    诊断用（2026-10-08 新增）。用于两件事：
+
+    1. 作业失败时区分「锁被别人正常持有」与「锁已**泄漏**」——后者会让
+       ``minute_and_bars`` 永久 600s 超时、``bar_*`` 静默停更。
+    2. 事后排查：泄漏的锁表现为「持锁 session 处于 ``idle`` 且``state_change``
+       很久以前」，即它对应的作业早已结束。
+
+    ⚠ 判据要留意：PostgreSQL 的会话级 advisory lock 随**物理连接**存活，
+      而 SQLAlchemy 的连接池会**复用**连接，所以「持有锁的 pid」未必等于
+      「正在跑作业的进程」——池里被复用的连接仍可能带着上一轮残留的锁。
+    """
+    from sqlalchemy import text
+
+    from app.core.db import get_engine
+
+    try:
+        with get_engine().connect() as conn:
+            return conn.execute(text(
+                "SELECT pid FROM pg_locks WHERE locktype='advisory' AND granted "
+                "AND objid = hashtext(:k) LIMIT 1"), {"k": LOCK_MINUTE_PIPELINE}
+            ).scalar()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[synth] 查询 advisory 锁持有者失败: {e}")
+        return None
+
+
+def release_stale_pipeline_lock(*, idle_seconds: int = 900) -> int | None:
+    """回收**泄漏**的分钟管线锁：持锁 session 已``idle`` 超过阈值则终止它。
+
+    ★ 为什么需要（2026-10-09 实测事故）
+    --------------------------------------
+    会话级 advisory lock 只在「显式 unlock」或「物理连接关闭」时释放，而连接池
+    会**复用**连接。一旦某轮``minute_and_bars`` 没能走到 unlock（进程被 kill、
+    unlock 语句异常、或异常路径绕过），锁就永久挂起 → 后续每轮都 600s 超时 →
+    ``bar_*`` **静默停止更新**，而日志只有一行「等待分钟管线锁超时」。
+
+    判据：持锁者 ``state='idle'`` 且 ``state_change`` 早于 ``idle_seconds``
+    ——即它对应的作业早已结束，锁纯属残留。
+    正常作业执行期间连接是 ``active``，不会被误杀。
+
+    Returns
+    -------
+    被终止的 pid；无泄漏则 ``None``。
+    """
+    from sqlalchemy import text
+
+    from app.core.db import get_engine
+
+    try:
+        with get_engine().connect().execution_options(
+                isolation_level="AUTOCOMMIT") as conn:
+            row = conn.execute(text(
+                "SELECT a.pid FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid "
+                "WHERE l.locktype='advisory' AND l.granted "
+                "  AND l.objid = hashtext(:k) "
+                "  AND a.state = 'idle' "
+                "  AND now() - a.state_change > make_interval(secs => :s) "
+                "LIMIT 1"), {"k": LOCK_MINUTE_PIPELINE, "s": idle_seconds}
+            ).fetchone()
+            if not row:
+                return None
+            pid = row[0]
+            ok = conn.execute(
+                text("SELECT pg_terminate_backend(:p)"), {"p": pid}).scalar()
+            if ok:
+                logger.error(
+                    f"[synth] 回收泄漏的分钟管线锁：终止 backend pid={pid} "
+                    f"（已 idle 超 {idle_seconds}s，判定为残留锁）。"
+                    f"若近期无 manual 重启，此举可避免 bar_* 静默停更。")
+            return pid if ok else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[synth] 回收泄漏锁失败: {e}")
+        return None
+
+
 @contextmanager
-def minute_pipeline_lock(session: Session, timeout_sec: int = 600):
-    """分钟写入 ↔ 桶合成的互斥锁（PG 会话级 advisory lock）。
+def minute_pipeline_lock(timeout_sec: int = 600):
+    """分钟写入 ↔ 桶合成的互斥锁（PG **会话级** advisory lock）。
 
     用法::
 
-        with minute_pipeline_lock(s):
+        with minute_pipeline_lock():
             ...  # 采集 minute_bar 或合成 bar_* 二者之一
 
     拿不到锁时**等待**（``timeout_sec``）而非静默跳过——宁可串行也不产出残缺桶。
+
+    ★ 2026-10-08 修（PR review I1，致命）：锁的**持有连接**必须与业务 session
+      分离。此前在业务 ``session`` 上取锁，而``yield`` 体内
+      :func:`collect_all` 与 :func:`synthesize_bars_incremental` 都会
+      ``session.commit()`` —— 提交会把**物理连接归还连接池**，后续
+      ``execute`` 从池里重新 checkout。因此：
+
+        · 取锁在连接 A、``pg_advisory_unlock`` 极可能落在连接 B/C
+          → 在未持锁的连接上解锁**返回 false 且不报错**（返回值被丢弃）；
+        · 连接 A 带着锁回到池中→ 后续作业 checkout 到它时
+          ``pg_try_advisory_lock`` **立即返回 true**（同会话重复加锁）；
+        · 结论：**跨进程互斥彻底失效**，而该锁的唯一职责正是防
+          「DELETE 已删最近桶 → INSERT 读到未提交快照 → 最新交易日整段漏桶」
+          —— 即失效＝静默数据丢失的防护失效。
+
+      修法：用**独立连接**持锁（``engine.connect()``），不参与业务事务；
+      退出时在同一连接解锁；即便异常路径漏了解锁，连接关闭时 PG 会自动释放
+      会话级锁（不会泄漏）。
     """
+    from app.core.db import get_engine
+
     key = LOCK_MINUTE_PIPELINE
     deadline = time.time() + timeout_sec
     got = False
-    while True:
-        got = bool(session.execute(
-            text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": key}
-        ).scalar())
-        if got or time.time() >= deadline:
-            break
-        logger.warning("[synth] 分钟管线锁被占用，等待中…")
-        time.sleep(2.0)
-    if not got:
-        # fail-loud：绝不「拿不到锁就照跑」制造残缺数据
-        raise TimeoutError(f"[synth] 等待分钟管线锁超时({timeout_sec}s)，拒绝并发合成")
-    try:
-        yield
-    finally:
+    # ★ 独立连接：与业务 session 完全解耦，commit/归还连接池不影响锁的归属
+    with get_engine().connect() as lock_conn:
+        while True:
+            got = bool(lock_conn.execute(
+                text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": key}
+            ).scalar())
+            if got or time.time() >= deadline:
+                break
+            logger.warning("[synth] 分钟管线锁被占用，等待中…")
+            time.sleep(2.0)
+        if not got:
+            # fail-loud：绝不「拿不到锁就照跑」制造残缺数据
+            #★ 先尝试回收「泄漏」的锁（持锁 session 已 idle 很久 = 上一轮残留）。
+            #   2026-10-09 实测事故：残留锁让每轮都 600s 超时 → bar_* 静默停更，
+            #   而日志只有一行「等待超时」。回收后重试一次，避免人工介入。
+            stale = release_stale_pipeline_lock()
+            if stale:
+                logger.warning("[synth] 已回收泄漏锁(pid=%s)，重试一次…", stale)
+                got = bool(lock_conn.execute(
+                    text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": key}
+                ).scalar())
+            if not got:
+                raise TimeoutError(
+                    f"[synth] 等待分钟管线锁超时({timeout_sec}s)，拒绝并发合成"
+                    f"（持锁 pid={advisory_lock_holder()}）。"
+                    f"若该 pid 长期 idle，说明锁已泄漏。")
+            yield_entered = True
         try:
-            session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": key})
-            session.commit()
-        except Exception:  # noqa: BLE001
-            session.rollback()
+            yield
+        finally:
+            # ★ 2026-10-08（PR review I1 实测踩到）：会话级 advisory lock 只在
+            #   「显式 unlock」或「**物理连接关闭**」时释放；而 ``with engine.connect()``
+            #   退出只是把连接**归还连接池** —— 物理连接仍存活，**锁不会自动释放**。
+            #   于是只要 unlock 失败/未执行，锁就会**永久挂起**，后续每轮
+            #   ``minute_and_bars`` 都会 600s 超时 → bar_* 数据从此停止更新（静默）。
+            #   2026-10-09凌晨实测到此故障：pid93093 idle 持锁 20 分钟，
+            #   最后一轮01:05 已结束（:07/:37 触发），确属泄漏。
+            #
+            # 因此这里必须：① 检查 unlock 的**返回值**（在未持锁的连接上返回 false
+            # 且不抛异常，旧代码把返回值丢弃了）；② 失败即 error 并**主动清干净**。
+            try:
+                ok = lock_conn.execute(
+                    text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": key}
+                ).scalar()
+                if not ok:
+                    # 该连接未持有锁：可能前一次 unlock 已成功、或是被复用到的连接
+                    logger.info("[synth] 显式解锁返回 false（该连接未持锁，按已释放处理）")
+            except Exception as e:  # noqa: BLE001
+                # fail-loud：吞掉异常会导致锁永久泄漏 → bar_* 静默停更
+                logger.error(f"[synth] 显式解锁异常（{type(e).__name__}: {e}）；"
+                             f"尝试 pg_advisory_unlock_all() 兜底")
+                try:
+                    lock_conn.execute(text("SELECT pg_advisory_unlock_all()"))
+                except Exception as e2:  # noqa: BLE001
+                    # 连兜底都失败 → 只能是连接已断，物理关闭时 PG 会自动释放
+                    logger.error(f"[synth] unlock_all 亦失败（{e2}）；"
+                                 f"该连接关闭后 PG 将自动释放会话级锁")
 
 
 def _max_bucket(session: Session, table: str) -> datetime | None:
@@ -209,4 +345,5 @@ def synthesize_bars_full(session: Session, work_mem: str = "2GB") -> dict:
 
 
 __all__ = ["synthesize_bars_incremental", "synthesize_bars_full",
-           "minute_pipeline_lock", "LOCK_MINUTE_PIPELINE"]
+           "minute_pipeline_lock", "LOCK_MINUTE_PIPELINE",
+    "advisory_lock_holder", "release_stale_pipeline_lock"]

@@ -119,6 +119,15 @@ def upsert_hourly_bars(session: Session, rows: Sequence[dict]) -> int:
     而 `INSERT ... ON CONFLICT DO UPDATE` 不允许同一命令里重复命中同一行
     （psycopg `CardinalityViolation: cannot affect row a second time`）——
     故先按主键去重（后出现的覆盖先出现的），并剔除 1970/NaN 脏行。
+
+    ★ 2026-10-08（PR review C2）：``index_elements`` **必须与线上实际主键一致**。
+      `db/init/01_schema.sql` 原文写的是 3 列 ``(symbol, trade_datetime, src)``，
+      但 ``CREATE TABLE IF NOT EXISTS`` 对已存在的表静默跳过 —— 实测线上主键是
+      **2 列**，schema 定义从未生效（src 未参与唯一性，G5「多src 隔离」在库层面
+      并未落地，当前因 src 单一而无实际危害）。schema 文件已与之对齐。
+      若将来真要改成 3 列，**必须同步改这里**，否则 PostgreSQL 会直接报
+      「there is no unique or exclusion constraint matching the ON CONFLICT
+      specification」。故加一条启动自检，把漂移变成显式告警而非运行时崩溃。
     """
     if not rows:
         return 0

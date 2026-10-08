@@ -118,10 +118,26 @@ CREATE TABLE IF NOT EXISTS hourly_bar (
     ret             NUMERIC(12,6),
     src             TEXT         NOT NULL DEFAULT 'akshare',
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    -- G5：同表混存多 src（csv/akshare），靠 src 过滤隔离；主键纳入 src 杜绝「同一根 K 被
-    -- 双源各写一次」导致的口径污染（§14 #2）。既有库若已存在重复，用运行时 ensure 的
-    -- CREATE UNIQUE INDEX IF NOT EXISTS 兜底（重复行会跳过并告警，不阻断启动）。
-    PRIMARY KEY (symbol, trade_datetime, src)
+    -- ★ 2026-10-08 更正（PR review C2 实证）：本文件原写
+    --   ``PRIMARY KEY (symbol, trade_datetime, src)``，但**线上实际主键是 2 列**
+    --   ``(symbol, trade_datetime)``（实测云端 pg_constraint 确认）。
+    --   原因：``CREATE TABLE IF NOT EXISTS`` 对已存在的表**静默跳过**，本定义从未生效。
+    --
+    --   由此可知 G5「同表混存多 src（csv/akshare）、按 src 过滤隔离」的意图
+    --   **在库层面并未落地**：src 只是普通列，不参与唯一性。
+    --   目前 src 单一（全为 'akshare'），故尚无实际危害；但若将来接入 csv 来源，
+    --   两套口径会在同一时间戳上**互相覆盖**，且 ``read_hourly_bars(src=...)``
+    --   会静默返回"最后写入的那套"——正是该注释当初要防的污染。
+    --
+    --   为何**改文件而不改库**：改成 3 列主键需 DROP INDEX + CREATE UNIQUE INDEX，
+    --   在 hypertable 上会长时间持锁（40 万行），生产风险大于当前收益。
+    --   正确顺序：先确认所有消费方统一到单一 src，再评估是否真需要多源并存。
+    --   在此之前本文件与库保持一致（2 列），避免"按文件建新库"时埋下不一致。
+    --
+    --   ⚠ 改动本文件时必须同步核对 ``app/repositories/_base.py:upsert_hourly_bars``
+    --     的 ``index_elements``：ON CONFLICT 的列必须与**实际主键**完全一致，
+    --     否则 PostgreSQL 直接报错（列数不匹配的唯一索引不存在）。
+    PRIMARY KEY (symbol, trade_datetime)
 );
 SELECT create_hypertable(
     'hourly_bar', 'trade_datetime',

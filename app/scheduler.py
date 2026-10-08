@@ -1984,7 +1984,7 @@ def _minute_and_bars_job() -> None:
             from app.ingest.minute_collector import MinuteCollector
             from app.ingest.synthesizer import minute_pipeline_lock, synthesize_bars_incremental
 
-            with minute_pipeline_lock(s):
+            with minute_pipeline_lock():   # 2026-10-08 起锁走独立连接（PR review I1）
                 mc = MinuteCollector(s)
                 m_stats = mc.collect_all()
                 m_ok = sum(1 for r in m_stats if "error" not in r)
