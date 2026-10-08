@@ -7,9 +7,15 @@ akshare 主源采集器（M1）
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Sequence
+from typing import Any, Sequence
 
 import pandas as pd
+
+#: 每个品种保留的「上一成功批次」行数（2026-10-08）。
+#:
+#: 一致性校验只需比对**边界价**（上批末行 vs 本批首行），故留少量尾部行即可；
+#: 留太多会让 50 个品种各持一份 DataFrame 常驻内存（AkShareSource 是类属性共享）。
+_LAST_GOOD_ROWS = 5
 
 from app.core.exceptions import IngestError
 from app.core.logging import logger
@@ -26,7 +32,17 @@ class AkShareSource:
         self.exchange = exchange.upper()
 
     #: 上一成功批次（按 symbol），供跨批次一致性校验 —— 替代被删的 天勤 双源比对
-    _last_good: dict[str, list] = {}
+    #:
+    #: ★ 2026-10-08（PR review P0-1）：本属性此前**声明后从未被赋值**，导致
+    #:   ``bars_consistency_check(previous=self._last_good.get(symbol))`` 恒得
+    #:   ``None`` → 「跨批次跳变 >15% 拒绝入库」这道防线**从未生效**且不告警。
+    #:   现于 :meth:`fetch_daily` 返回前写入 ``df.tail(_LAST_GOOD_ROWS)``。
+    #:
+    #: 它是**类属性**（所有实例共享），这是有意的：一致性校验需跨调用记住
+    #: "上一次成功值"，而 AkShareSource 是按交易所短生命周期创建的，
+    #: 若放实例属性则每个新实例都要重新积累参照物，防线同样形同虚设。
+    #: 按 ``symbol`` 分键故不会串品种。
+    _last_good: dict[str, Any] = {}
     #: 降级标记（本次结果非实时），调用方应据此告警
     degraded: DegradedResult | None = None
 
@@ -169,6 +185,18 @@ class AkShareSource:
             df = df[(df["date"] >= start) & (df["date"] <= end)]
 
         df = df.reset_index(drop=True)
+        # ★ 2026-10-08（PR review P0-1）：在此**记录上一成功批次**，否则
+        #   ``self._last_good`` 永远是空 dict → ``bars_consistency_check`` 的
+        #   ``previous`` 恒为 None → 「跨批次跳变 >15% 拒绝入库」这道防线
+        #   **从未生效过**，且不报错不告警（脏数据可静默入库污染 daily_bar）。
+        #   记在**日期过滤之后**：这样比对的是"本次实际取到的区间"与"上次取到的
+        #   区间"的边界价，语义才是"跨批次跳变"（过滤前的全量尾部并非可比边界）。
+        #   只留末尾若干行，避免 50 个品种各持一份DataFrame 常驻内存。
+        if not df.empty:
+            try:
+                self._last_good[symbol] = df.tail(_LAST_GOOD_ROWS).copy()
+            except Exception as e:  # noqa: BLE001 —— 记参照物失败不应影响主流程
+                logger.debug(f"[akshare] {symbol} 记录上一批次失败（不影响本次采集）: {e}")
         return df
 
     # ---------- 工具：识别交易所对应代码 ----------

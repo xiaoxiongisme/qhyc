@@ -267,3 +267,65 @@ def test_inf_drawdown_never_reaches_liquidation_branch():
     """
     cfg = BrakeConfig(enabled=True, dd_warn=0.15, dd_stop=0.25)
     assert brake_scalar([-1.0, -2.0, -3.0], cfg) == 1.0
+
+# ---------------------------------------------------------------------------
+# F. 跨批次脏数据拦截（PR review P0-1：此前是死代码，三重失效）
+# ---------------------------------------------------------------------------
+def test_consistency_check_catches_unit_error():
+    """sina 列名是「收盘价」，脏数据单位错位必须被拦。
+
+    ★ 这条测试对应一个**从未生效过**的防线：原实现三重失效
+    （① ``_last_good`` 从未赋值 → previous 恒None；
+      ② ``isinstance(df, list)`` 恒 False；
+      ③ ``_close`` 只认close/收盘，而 sina 实际列名是**「收盘价」** → 恒返回 0.0），
+    三者叠加使「跨批次跳变 >15% 拒绝入库」形同虚设，且不报错不告警。
+    """
+    from app.ingest.resilience import bars_consistency_check
+
+    prev = [{"日期": "2026-10-08", "收盘价": 3100.0}]
+    new = [{"日期": "2026-10-09", "收盘价": 3.1}]      # 单位错位（元→角）
+    msg = bars_consistency_check(new, prev)
+    assert msg is not None, "单位错位（3100 → 3.1）必须被拦下"
+    assert "跨批次跳变" in msg
+
+
+def test_consistency_check_catches_jump():
+    """价格跳变 28% > 15% 阈值必须被拦；10% 在阈值内放行。"""
+    from app.ingest.resilience import bars_consistency_check
+
+    prev = [{"收盘价": 3120.0}]
+    assert bars_consistency_check([{"收盘价": 4000.0}], prev) is not None, "28% 跳变应拦"
+    assert bars_consistency_check([{"收盘价": 3432.0}], prev) is None, "10% 跳变应放行"
+
+
+def test_consistency_check_accepts_dataframe():
+    """必须支持 DataFrame（akshare 实际返回的就是 DataFrame，不是 list）。"""
+    import pandas as pd
+
+    from app.ingest.resilience import bars_consistency_check
+
+    prev = pd.DataFrame([{"close": 3100.0}, {"close": 3120.0}])
+    new = pd.DataFrame([{"close": 4000.0}])
+    assert bars_consistency_check(new, prev) is not None, "DataFrame 形态也应被校验"
+
+
+def test_consistency_check_warns_when_no_reference():
+    """无参照物时必须**打 warning**——「跳过校验」与「校验通过」要能区分。"""
+    from app.ingest.resilience import bars_consistency_check
+
+    with _LogCapture(level="WARNING") as cap:
+        assert bars_consistency_check([{"收盘价": 3100.0}], None) is None
+    assert cap.has("跳过"), "无参照物时须 warning（否则=校验失效但看不出来）"
+
+
+def test_last_good_is_populated():
+    """``_last_good`` 必须真被填充（否则 previous 恒 None → 防线永不生效）。"""
+    import inspect
+
+    from app.ingest.akshare_source import AkShareSource
+
+    # 取数函数在 ``_call_akshare``（不是 fetch_daily —— 后者只做归一化）
+    src = inspect.getsource(AkShareSource._call_akshare)
+    assert "_last_good[symbol]" in src, (
+        "_last_good 从未被赋值 → bars_consistency_check 的 previous 恒 None，"
+        "跨批次脏数据拦截从未生效")

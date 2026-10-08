@@ -229,21 +229,72 @@ def bars_consistency_check(new: Any, previous: Any, *, max_jump: float = 0.15) -
     没有第二数据源时，这是唯一可自动化的拦截手段（评审 G1 建议）。
 
     :param max_jump: 相邻批次重叠部分允许的最大相对跳变（默认 15%）。
-    """
-    if not isinstance(new, list) or not isinstance(previous, list) or not new or not previous:
-        return None  # 无参照物，不判脏
-    try:
-        def _close(row):
-            return float(row.get("close") or row.get("收盘") or 0)
 
-        prev_last = _close(previous[-1])
-        new_first = _close(new[0])
+    ★ 2026-10-08 修复（本函数此前是**死代码**，PR review P0-1实证）：
+      原实现 ``if not isinstance(new, list) or not isinstance(previous, list)``
+      有**两重失效**：
+        1. 唯一调用方 :meth:`AkshareSource.fetch_daily` 传的 ``previous`` 取自
+           ``self._last_good.get(symbol)``，而 ``_last_good`` **全仓从未被赋值**
+           → 恒为 ``None`` → 第一行就 return；
+        2. 第二个实参是 ``ak.futures_main_sina()`` 的返回值（**DataFrame**），
+           ``isinstance(df, list)`` 为 False → 即使有 previous 也过不了。
+      即「跨批次跳变 >15% 拒绝入库」这道防线**从未生效过**，而它不报错、不告警。
+
+      现支持 DataFrame / list[dict] 两种形态；无参照物时**明确 warning**
+      （否则「跳过校验」与「校验通过」在日志上无法区分，等于静默失效）。
+    """
+    def _rows(obj):
+        if obj is None:
+            return []
+        if hasattr(obj, "iloc"):# DataFrame
+            return obj.to_dict("records")
+        if isinstance(obj, list):
+            return obj
+        return []
+
+    def _close(row):
+        """取收盘价。⚠ 列名必须覆盖 **sina 的真实口径**。
+
+        ★ 2026-10-08 实测：``ak.futures_main_sina`` 返回的列是
+          ``['日期','开盘价','最高价','最低价','收盘价','成交量','持仓量','动态结算价']``
+          —— 是**「收盘价」**，既不是 ``close`` 也不是 ``收盘``。
+          原实现只认后两者→ ``_close`` 恒返回 0.0 → ``prev_last <= 0`` 恒成立
+          → **校验永远 return None**。这是本函数的**第三重失效**
+          （前两重：``_last_good`` 从未赋值、``isinstance(df, list)`` 恒 False）。
+          三者叠加 ⇒ 「跨批次跳变拦截」**从未真正工作过**。
+        """
+        if not hasattr(row, "get"):
+            return 0.0
+        for key in ("close", "收盘价", "收盘", "Close", "CLOSE"):
+            v = row.get(key)
+            if v is not None:
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if fv > 0:            # 0 视为缺失，继续试下一个别名
+                    return fv
+        return 0.0
+
+    new_rows = _rows(new)
+    prev_rows = _rows(previous)
+    if not new_rows or not prev_rows:
+        # fail-loud：无参照物 = 校验**未执行**，必须与「校验通过」区分开
+        logger.warning(
+            "[resilience] 跨批次一致性校验**跳过**（无参照批次：new=%s previous=%s）"
+            "—— 脏数据拦截此刻**未生效**", "空" if not new_rows else "有",
+            "空" if not prev_rows else "有")
+        return None
+    try:
+        prev_last = _close(prev_rows[-1])
+        new_first = _close(new_rows[0])
         if prev_last <= 0 or new_first <= 0:
             return None
         jump = abs(new_first - prev_last) / prev_last
         if jump > max_jump:
             return f"跨批次跳变 {jump:.1%} > {max_jump:.1%} ({prev_last} → {new_first})"
     except Exception as e:  # noqa: BLE001
+        logger.warning("[resilience] 一致性校验异常（本轮不判脏）: %s", e)
         return None
     return None
 
