@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -243,6 +243,49 @@ class DbYAML(BaseModel):
     pool_size: int = 5
     max_overflow: int = 10
     echo: bool = False
+
+    @classmethod
+    def _env_override(cls, data: dict) -> dict:
+        """允许用环境变量覆盖池参数（2026-10-08 工单 P1-3）。
+
+        为什么需要：回测批处理与 API 服务共用同一份 YAML 默认值，但回测经
+        SSH 隧道查库时需要更大的池（WB 实测建议 pool_size=8 / max_overflow=16）。
+        改 YAML 会波及线上服务，而重跑容器只为调池参数又太笨重 —— 故留 env 入口。
+
+        约定（未设置则沿用 YAML，故对现有部署**零影响**）：
+          QH_PG_POOL_SIZE      → pool_size
+          QH_PG_MAX_OVERFLOW   → max_overflow
+          QH_PG_ECHO           → echo（1/true/yes/on 视为真）
+        """
+        import os
+
+        def _raw(name: str) -> str | None:
+            v = os.environ.get(name)
+            return v.strip() if v is not None and v.strip() else None
+
+        def _as_int(val: str | None) -> int | None:
+            try:
+                return int(val) if val is not None else None
+            except ValueError:
+                return None
+
+        pool = _as_int(_raw("QH_PG_POOL_SIZE"))
+        if pool is not None:
+            data["pool_size"] = pool
+        over = _as_int(_raw("QH_PG_MAX_OVERFLOW"))
+        if over is not None:
+            data["max_overflow"] = over
+        echo = _raw("QH_PG_ECHO")
+        if echo is not None:
+            data["echo"] = echo.lower() in ("1", "true", "yes", "on")
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _apply_env(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return cls._env_override(data)
+        return data
 
 
 class FusionConfig(BaseModel):

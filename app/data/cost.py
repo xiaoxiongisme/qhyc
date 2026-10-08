@@ -40,7 +40,7 @@ PCT_DIVISOR = 10000.0
 
 __all__ = ["TradingCost", "CostNotFoundError", "fee_per_lot",
            "fee_yuan_per_lot", "round_trip_cost", "PCT_DIVISOR",
-           "clear_fee_cache"]
+           "clear_fee_cache", "fee_cache_stats", "reset_fee_cache_stats"]
 
 _SCOPE_RANK = {"CONTRACTS": 3, "MONTHS": 2, "ALL": 1}
 
@@ -60,6 +60,36 @@ _SCOPE_RANK = {"CONTRACTS": 3, "MONTHS": 2, "ALL": 1}
 #:   异常不进缓存，避免一次误判被永久固化。
 _FEE_CACHE: dict = {}
 _FEE_CACHE_MAX = 8192
+
+#: 费率查询可观测性计数（2026-10-08 工单 P2-1）。
+#:
+#: 为什么加：这次「回测异常慢」定位极耗时——工单实测 NullPool 下单次费率查询
+#: 0.303s、单品种 simulate 18.6s，最后是从 profile 里抠出来的。**光看耗时无法区分
+#: 是连接层（冷连接）还是查询层（缓存 miss / fallback 慢）**。有了这组计数，
+#: 下次 5 分钟可定性：
+#:   * ``miss`` 高、`hit`` 低 → 键设计有问题（如按成交日而非费率窗口归约）→ 查键
+#:   * ``miss`` 低但仍慢        → 纯连接层问题（NullPool / 隧道）→ 查池配置
+#:   * ``fallback`` 占比高      → 费率表覆盖不足，查询退化为当期行扫描
+_FEE_STATS = {"hit": 0, "miss": 0, "fallback": 0, "evict": 0, "error": 0}
+
+
+def fee_cache_stats() -> dict:
+    """返回费率查询缓存计数（诊断用，不影响业务）。
+
+    键：``hit`` 命中 / ``miss`` 未命中 / ``fallback`` 走了「无匹配→取当期行」分支 /
+    ``evict`` 因超上限清空 / ``error`` 查询抛错。``size`` 为当前缓存条目数。
+    """
+    total = _FEE_STATS["hit"] + _FEE_STATS["miss"]
+    out = dict(_FEE_STATS)
+    out["size"] = len(_FEE_CACHE)
+    out["hit_rate"] = (out["hit"] / total) if total else 0.0
+    return out
+
+
+def reset_fee_cache_stats() -> None:
+    """清零计数（压测/基准脚本前后调用，避免上一轮污染读数）。"""
+    for k in _FEE_STATS:
+        _FEE_STATS[k] = 0
 
 
 def clear_fee_cache() -> None:
@@ -236,7 +266,9 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
     ck = (vc, action, cdigits, cmonth, d, kind)
     hit = _FEE_CACHE.get(ck)
     if hit is not None:
+        _FEE_STATS["hit"] += 1
         return hit
+    _FEE_STATS["miss"] += 1
 
     # ★两条查询必须在**同一个 session 作用域内**（2026-10-06 修连接泄漏）
     #   原实现在 `with session_scope()` 块**外**继续执行 fallback 查询
@@ -258,6 +290,7 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
 
         fell_back = False
         if not rows:
+            _FEE_STATS["fallback"] += 1
             # ── 用户 2026-10-03 裁定：「没有历史费率就按当前费率计算」────────────
             # 费率表最早 effective_from = 2026-03-11（交易所通知日），更早的回测无历史行。
             # 口径选择：退到**当期有效行**，而不是报错。
@@ -324,6 +357,7 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
         # 简单的容量上限：费率键空间有限（品种×动作×日期），正常不会触顶；
         # 触顶时整体清空重来，宁可多查也不让内存无界增长。
         _FEE_CACHE.clear()
+        _FEE_STATS["evict"] += 1
     _FEE_CACHE[ck] = out
     return out
 
