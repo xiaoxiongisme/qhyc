@@ -26,6 +26,7 @@ from app.risk.portfolio_brake import (
     brake_scalar,
     current_drawdown,
     equity_curve_status,
+    load_equity_curve,
 )
 
 
@@ -162,3 +163,107 @@ def test_equity_status_shape():
     st = equity_curve_status()
     for k in ("ok", "reason", "n_days", "need_days"):
         assert k in st, f"缺少诊断键 {k}"
+
+# ---------------------------------------------------------------------------
+# D. load_equity_curve：样本门槛 + reason 分类（修复 A 的核心机制，此前零覆盖）
+# ---------------------------------------------------------------------------
+def _fake_session(rows):
+    """构造一个只提供 portfolio_equity 查询结果的假 session。
+
+    rows 为 ``[(trade_date, equity|None, realized_pnl|None), ...]``，
+    按真实实现的 ``ORDER BY trade_date DESC`` 返回（即倒序），函数内部会 ``[::-1]``。
+    """
+    class _Res:
+        def fetchall(self_inner):
+            return list(rows)
+    class _Sess:
+        rolled = 0
+        def execute(self_inner, *a, **k):
+            return _Res()
+        def rollback(self_inner):
+            type(self_inner).rolled += 1
+    return _Sess()
+
+
+@pytest.mark.parametrize("n_days,expect_ok", [(21, True), (20, True), (19, False), (3, False)])
+def test_min_days_boundary_on_equity_path(n_days, expect_ok):
+    """样本门槛边界：恰好 ``min_days`` 应可用，少一天即不可用。
+
+    若被改成 ``<=``，恰好 20 天会被判不可用 → **生产上熔断永久空转**（原缺陷复现）。
+    """
+    rows = [(dt.date(2026, 1, i + 1), 1000.0 - i, None) for i in range(n_days)]
+    eq = load_equity_curve(session=_fake_session(rows), min_days=20)
+    st = equity_curve_status()
+    assert bool(eq) is expect_ok, f"{n_days} 天：期望可用={expect_ok}，实际 {len(eq)} 条"
+    if not expect_ok:
+        assert st["reason"] == "insufficient_days_equity"
+        assert st["n_days"] == n_days, "诊断必须报告真实样本数，否则告警文案会误导"
+
+
+def test_realized_pnl_path_reason_and_cumulative_order():
+    """realized_pnl 回退路径：equity 全None 时应走该路，且**按时间正序累加**。
+
+    顺序若被弄反（``rows[::-1]`` 被删），权益曲线会时间倒序 → 回撤方向算错
+    → 可能误触发 25% 清仓。
+    """
+    pnl = [10.0, -3.0, 5.0] * 10          # 30 个交易日，混合正负
+    rows = [(dt.date(2026, 1, i + 1), None, pnl[i]) for i in range(30)]
+    # 真实实现按 DESC 取，故这里给倒序
+    rows_desc = list(reversed(rows))
+    eq = load_equity_curve(session=_fake_session(rows_desc), min_days=20)
+    assert eq, "30 个交易日应可用"
+    assert eq[0] == pytest.approx(pnl[0]), "累加曲线首项应等于最早一日的 pnl"
+    assert eq[-1] == pytest.approx(sum(pnl)), "末项应等于全期 pnl 之和（验证正序累加）"
+    assert equity_curve_status()["reason"] == "realized_pnl"
+
+
+def test_table_empty_reason():
+    """表为空（0 行）→ reason 指向数据缺失，便于与 query_error 区分。"""
+    eq = load_equity_curve(session=_fake_session([]), min_days=20)
+    assert eq == []
+    assert equity_curve_status()["reason"] == "portfolio_equity_empty_or_unavailable"
+
+
+def test_query_error_reason_not_overwritten():
+    """★ DB 异常时 reason 必须是 ``query_error:*``，不能被"表为空"覆盖。
+
+    这是一条**真实缺陷**的回归：修复前 except 块里 ``_mark(query_error:*)`` 没有
+    ``return``，会继续落到下面 ``_mark(portfolio_equity_empty_or_unavailable)``
+    把 reason 覆盖掉。后果是 DB 挂掉时告警正文变成「请补 portfolio_equity」，
+    让运维去**填数据表** —— 填完告警照旧响。
+    """
+    class _Boom:
+        def execute(self, *a, **k):
+            raise RuntimeError("connection refused")
+        def rollback(self):
+            pass
+    eq = load_equity_curve(session=_Boom(), min_days=20)
+    assert eq == []
+    assert equity_curve_status()["reason"] == "query_error:RuntimeError", (
+        "query_error 未被保留 —— 告警会把 DB 故障误导成『请补数据表』")
+
+
+# ---------------------------------------------------------------------------
+# E. inf / NaN 不得触发清仓（放行方向的静默失效）
+# ---------------------------------------------------------------------------
+def test_nan_equity_does_not_trigger_liquidation():
+    """equity 含 NaN → dd 为 NaN；NaN 与任何阈值比较恒为 False。
+
+    若守卫是 ``dd == float("inf")``（精确等值），NaN 会**静默穿过**并落到
+    ``return 1.0``，且一条日志都不记 —— 防线失效。故必须用 ``isfinite``。
+    """
+    cfg = BrakeConfig(enabled=True, dd_warn=0.15, dd_stop=0.25)
+    with _LogCapture() as cap:
+        sc = brake_scalar([1000.0, 900.0, float("nan")], cfg)
+    assert sc == 1.0, "NaN 绝不能被当成巨量回撤而清仓"
+    assert cap.has("不可计算"), "NaN 必须留 error 痕迹（否则静默失效）"
+
+
+def test_inf_drawdown_never_reaches_liquidation_branch():
+    """``inf > dd_stop`` 在 Python 中为 True —— 必须确认inf 被守卫拦下。
+
+    删除 brake_scalar 里的 isfinite 分支会让本测试失败（直接返回 0.0 清仓），
+    那正是修复反复强调要避免的「胡乱保护」。
+    """
+    cfg = BrakeConfig(enabled=True, dd_warn=0.15, dd_stop=0.25)
+    assert brake_scalar([-1.0, -2.0, -3.0], cfg) == 1.0

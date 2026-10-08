@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 # ★ 2026-10-08：原为 `logging.getLogger(__name__)`（标准库），**日志进不了项目日志文件**。
@@ -34,8 +35,19 @@ from app.core.logging import logger
 #: 为什么要门槛：回撤 = 峰值到谷底。样本只有 2~3 天时，"峰值"很可能只是某一天
 #: 的运气，DD 会剧烈抖动 → 一根假回撤就可能触发 dd_stop(25%) 把仓位清零。
 #: 那比"熔断空转"更糟：空转只是没保护，误触发是**胡乱保护**（在无回撤时清仓）。
-#: 20 个交易日约合一个自然月，足以让 DD 有统计意义又不至于太滞后；
-#: 需要更严可调 ``load_equity_curve(min_days=...)``。
+#:
+#: ⚠ **20 是经验值，未经净值回放校准**（与本文件顶部对 dd_warn/dd_stop 的
+#:   "D2 初设，可由历史净值回放反推微调"规格不一致——那两个明确标了待校准，
+#:   这个却像既成结论）。待办：用真实净值做「样本量-误报率」回放，定出触发
+#:   dd_stop 误报的最小样本量。
+#:
+#: ⚠ **本门槛只管天数，不管曲线起点符号**：realized_pnl 回退路径构造的是
+#:   **从 0 起累加**的曲线（``cum[0] == pnl[0]``），故即使满 20 天也可能全程为负
+#:   → ``peak <= 0`` → :func:`current_drawdown` 返回 ``inf`` → 恒等放行 1.0。
+#:   即**调大 min_days 会提高该分支的命中率**，不是纯粹的"更安全"。
+#:
+#: ⚠ 生产调用方 ``scheduler._apply_portfolio_brake`` **未传 min_days**，
+#:   当前恒为 20，无调节入口（需改 scheduler 才可调）。
 EQUITY_MIN_DAYS = 20
 
 
@@ -50,9 +62,16 @@ class BrakeConfig:
 def load_brake_config() -> BrakeConfig:
     """从 cfg_feature_switch（迁移 008）读取熔断配置；表缺失/异常时退回默认（关闭）。
 
-    调用方（scheduler._apply_portfolio_brake）改用本函数即可由数据库控制启停，
-    无需改 env / 改代码。enabled 与阈值 dd_warn/dd_stop/lookback 均可经库内
-    UPDATE cfg_feature_switch 调整（value 列存 JSON，形如 {"dd_warn":0.15,...}）。
+    ⚠ 当前**无生产调用方**（2026-10-08 核查）：`scheduler._apply_portfolio_brake`
+      并**不**调用本函数，而是
+        · 开关走 `_switch_on("portfolio_brake_enabled", "PORTFOLIO_BRAKE_ENABLED")`
+          （优先读 DB，表缺失才回退 env）；
+        · 阈值一律 `os.getenv(PORTFOLIO_BRAKE_DD_WARN / _DD_STOP / _LOOKBACK)`。
+
+      故本函数解析的 ``cfg_feature_switch.portfolio_brake_enabled`` 里那个 JSON
+      （``{"dd_warn":0.15,...}``）**不会生效**。原 docstring 声称"改库内 JSON 即可调阈值"
+      是错的——照做会得到"配置显示可调、实际不生效"，与本次事故同构
+      （开关显示开启、实际空转）。若要真正做到库内可调，需先改 scheduler 改用本函数。
     """
     from app.core.feature_switch import is_enabled, get_value
 
@@ -102,6 +121,11 @@ def current_drawdown(equity: list[float], lookback: int = 250) -> float:
     降级为"不可用"处理（记 error + 不做减仓动作）。之所以**不**直接清仓：
     权益口径本身不可信时，任何回撤数字都不可信，据此清仓同样是错的 ——
     宁可"没保护"（并让原因可见），也不要"胡乱保护"。
+
+    ⚠ ``brake_scalar`` 的守卫是 ``not math.isfinite(dd)``（2026-10-08 由
+      ``dd == float("inf")`` 修正）。若 equity 含 **NaN**，``max(win)`` 会传播 NaN
+      → dd 为 NaN，而 ``nan > 阈值`` 恒为 False —— **精确等值比较会直接漏过**，
+      防线静默失效。故必须用 ``isfinite`` 把 NaN 一并纳入"不可计算"分支。
     """
     if not equity:
         return 0.0
@@ -138,11 +162,17 @@ def brake_scalar(equity: list[float], cfg: BrakeConfig) -> float:
         )
         return 1.0
     dd = current_drawdown(equity, cfg.lookback)
-    if dd == float("inf"):
-        # 权益口径异常（峰值 ≤ 0）：回撤不可计算。刻意**不**据此减仓/清仓，
-        # 因为口径不可信时任何动作都是错的；已在 current_drawdown 记 error。
-        logger.error("[portfolio_brake] 回撤不可计算（权益口径异常）→ 恒等放行，"
-                     "**本次未做任何减仓**")
+    # ★ 2026-10-08 修正（代码审查 P0-6）：原守卫是 `dd == float("inf")` —— **精确等值比较**。
+    #   若 equity 含 NaN，`max(win)` 会传播 NaN → dd 为 NaN，而
+    #     `nan == inf` → False、`nan > dd_stop` → False
+    #   ⇒ 直接落到末尾 `return 1.0`，**连一条日志都不记**，防线静默失效。
+    #   equity 来自 DB 的 float(r[1])，列里出现 NaN 完全可能，故改为 `isfinite` 判据，
+    #   把 NaN 一并纳入「回撤不可计算」分支（与 inf 同等处置：不做减仓、但留痕）。
+    if not math.isfinite(dd):
+        # 权益口径异常（峰值 ≤ 0）或数据含 NaN：回撤不可计算。刻意**不**据此减仓/清仓，
+        # 因为口径不可信时任何动作都是错的；已在 current_drawdown / 此处记 error。
+        logger.error("[portfolio_brake] 回撤不可计算（dd={}，权益口径异常或含 NaN）"
+                     "→ 恒等放行，**本次未做任何减仓**".format(dd))
         return 1.0
     if dd > cfg.dd_stop:
         logger.warning(f"[portfolio_brake] 回撤 {dd:.2%} > {cfg.dd_stop:.0%} → 清仓观望")
@@ -154,9 +184,13 @@ def brake_scalar(equity: list[float], cfg: BrakeConfig) -> float:
 
 
 def apply(expected_lots: float, equity: list[float], cfg: BrakeConfig) -> float:
-    """把刹车标量应用到期望手数（执行层唯一入口）。
+    """把刹车标量应用到期望手数。
 
-    enabled=False 时返回原值（恒等变换，双向等价性由 T9 回归保证）。
+    ⚠ 当前**无生产调用方**（2026-10-08 核查）：`scheduler._apply_portfolio_brake`
+      直接用 `brake_scalar()` 再**自行 ceil 取整**（``max(1, ceil(lots*sc - 1e-9))``），
+      并在 ``sc <= 0`` 时直接把 lots 置 0。本函数**不取整**，两条路径口径不同，
+      切勿混用或"照着改"——改了不会有任何效果（scheduler 根本不调它）。
+      原 docstring 称此处为"执行层唯一入口"是失真的。
     """
     s = brake_scalar(equity, cfg)
     if s >= 1.0:
@@ -242,8 +276,25 @@ def load_equity_curve(session, symbol: str | None = None,
             _mark(True, "realized_pnl", len(pnl))
             return cum
     except Exception as e:  # noqa: BLE001  表不存在或字段缺失 → 走回退
+        # ★ 2026-10-08 修正（代码审查 pr-test-analyzer 抓到）：原实现 `_mark(query_error:*)`
+        #   **没有 return**，会继续落到下面 `_mark(portfolio_equity_empty_or_unavailable)`
+        #   把 reason **覆盖掉** ⇒ `query_error:*` 是死代码，调用方永远看不到。
+        #   后果很实际：DB 挂掉时推给用户的告警正文是「请补 portfolio_equity」，
+        #   让运维去**填数据表**；填完告警照旧响 —— 正是本次修复要防的"照旧方向
+        #   排查错"。且节流键含 reason 的设计也因此失去意义。
+        # 修法：query 异常时**立即返回**，并让告警文案明确指向"数据库/查询故障"。
         _mark(False, f"query_error:{type(e).__name__}")
-        session.rollback()
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001 —— rollback 自身失败也别掩盖上面的诊断
+            pass
+        logger.error(
+            "[portfolio_brake] 权益曲线查询失败（{}），无法计算回撤。"
+            "**熔断实际未生效**（恒等放行）。这是**数据库/查询故障**，"
+            "不是数据缺失 —— 请先查连接与表结构，勿盲目补 portfolio_equity 造数据。".format(
+                type(e).__name__)
+        )
+        return []
 
     _mark(False, "portfolio_equity_empty_or_unavailable")
     logger.error(

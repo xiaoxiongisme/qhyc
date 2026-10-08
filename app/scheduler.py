@@ -1470,10 +1470,16 @@ def _data_selfcheck_job() -> None:
         logger.exception(f"[scheduler] data_selfcheck failed: {e}")
 
 
-#: ``_alert_portfolio_brake_idle`` 的节流状态：同一自然日只告警一次。
-#: 理由：``_apply_portfolio_brake`` 每轮 fusion_scan 都会调用（约每 30 分钟一次），
+#: ``_alert_portfolio_brake_idle`` 的节流状态：同一 **(自然日, reason)** 只告警一次。
+#: 理由：``_apply_portfolio_brake`` 每轮fusion_scan 都会调用（约每 30 分钟一次），
 #: 不节流会把用户微信刷爆，反而导致真告警被无视。
-_BRAKE_IDLE_ALERT_DAY: str | None = None
+#: ⚠ 两点注意（2026-10-08 修正）：
+#:   1. 键是 **tuple**（日 + reason）而非"日"——reason 变化（表为空 → DB 故障）
+#:      需重新提示，否则运维会照旧方向排查错。故变量名不再叫 ``..._DAY``。
+#:   2. 节流是**按自然日**，跨零点即重试，**不是滚动 24 小时**。
+#:   3. 通道关闭（ALERT_ENABLED/ALERT_NOTIFY 为假）时**不写**此标记 → 通道关闭期间
+#:      会每轮打一条 logger.error（刷日志而非刷微信），这是有意的。
+_BRAKE_IDLE_ALERT_KEY: tuple[str, str] | None = None
 
 
 def _alert_portfolio_brake_idle(status: dict) -> None:
@@ -1489,7 +1495,7 @@ def _alert_portfolio_brake_idle(status: dict) -> None:
     ★★ 2026-10-08 二修（代码审查发现）：``send_alert`` 的契约是**永不抛异常**，
     失败一律以返回值 ``(ok, note)`` 表达（内部 try/except 兜住 pushplus）。
     若忽略返回值就写节流标记，则「推送 token 过期 / 网络中断 / 通道未启用」
-    这些最需要告警的场景会**被记成「今天已告警」**，接下来 24 小时不再重试
+    这些最需要告警的场景会**被记成「今天已告警」**，当天剩余时间不再重试
     —— 恰好退化成修复前「只有日志、无推送」的状态。故：
       · 只有 ``ok=True`` 才写节流标记；失败 → 记 error 且**下轮继续重试**。
       · 通道本身未启用（``enabled``/``notify`` 为假）也**不**写标记，
@@ -1497,11 +1503,11 @@ def _alert_portfolio_brake_idle(status: dict) -> None:
       · 节流键含 ``reason``：故障性质变了（表为空 → query_error）应重新提示，
         否则运维会照旧方向排查错。
     """
-    global _BRAKE_IDLE_ALERT_DAY
+    global _BRAKE_IDLE_ALERT_KEY
     day = datetime.now(_SH_TZ).strftime("%Y-%m-%d")
     reason = str(status.get("reason"))
     key = (day, reason)
-    if key == _BRAKE_IDLE_ALERT_DAY:
+    if key == _BRAKE_IDLE_ALERT_KEY:
         return
     try:
         from app.ops.alerting import alert_config_from_env, send_alert
@@ -1538,7 +1544,7 @@ def _alert_portfolio_brake_idle(status: dict) -> None:
                 "下轮 fusion_scan 将重试。请检查 PUSHPLUS_TOKEN / 网络 / "
                 "ALERT_ENABLED / ALERT_NOTIFY。", note)
             return
-        _BRAKE_IDLE_ALERT_DAY = key
+        _BRAKE_IDLE_ALERT_KEY = key
     except Exception as e:  # noqa: BLE001 —— 告警失败绝不阻断信号链路
         logger.error(f"[portfolio_brake] 空转告警发送异常（已忽略，不阻断信号链）: {e}")
 
@@ -1574,9 +1580,16 @@ def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
             #
             # ★ 2026-10-08：原来只 ``logger.warning``，结果运行期一直打 warning
             #   而**无人察觉**（开关显示开启、风控实际空转）。现升级为
-            #   **真告警（推微信）+ 按天节流**，让"虚假安全感"不可能再隐身。
+            #   **真告警（推微信）+ 按 (自然日, reason) 节流**。
             #   注意**不**改为阻断决策链：回测/研究场景仍需能跑通，
             #   熔断失效以"告警 + 状态可查"的方式暴露，而非让整条链路挂掉。
+            #
+            # ⚠ **已知未覆盖边界**（勿以为已全覆盖）：本告警只覆盖两种情形 ——
+            #   ① 权益曲线为空；② 调用抛异常（见下方兜底 except）。
+            #   「口径异常」这一条走的是 :func:`brake_scalar` 内部的
+            #   ``peak <= 0 → dd=inf`` 分支：**只记 logger.error，不推送、不置节流
+            #   标记、也不改 ``LAST_EQUITY_STATUS``**，故读数层面仍显示 ok=True/"正常"。
+            #   即"开着但在空转"仍有第二条通道，待补（需把该分支也接入本告警）。
             from app.risk.portfolio_brake import equity_curve_status
 
             st = equity_curve_status()
