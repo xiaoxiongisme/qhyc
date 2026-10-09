@@ -1980,13 +1980,21 @@ def _minute_and_bars_job() -> None:
     try:
         with session_scope() as s:
             from app.ingest.minute_collector import MinuteCollector
-            from app.ingest.synthesizer import minute_pipeline_lock, synthesize_bars_incremental
+            from app.ingest.synthesizer import minute_pipeline_lock
 
             with minute_pipeline_lock():   # 2026-10-08 起锁走独立连接（PR review I1）
                 mc = MinuteCollector(s)
                 m_stats = mc.collect_all()
                 m_ok = sum(1 for r in m_stats if "error" not in r)
-                synth_stats = synthesize_bars_incremental(s)
+                # 2026-10-09 起改用健壮的块化 procedure 兜底 L1 聚合：
+                # sp_build_l1_from_minute 增量起点 = target.max(bucket)+interval，
+                # 故任何缺口（含>3天）下次运行都会自动补齐；纯 upsert、1天/块，
+                # 无 synthesize_bars_incremental 的 DELETE 静默漏桶问题。
+                synth_stats = {}
+                for _f in ("min5", "min15", "min30", "min60"):
+                    s.execute(text("CALL public.sp_build_l1_from_minute(:f)"), {"f": _f})
+                    synth_stats[_f] = "ok"
+                s.flush()
             logger.info(
                 f"[scheduler] minute_and_bars done: minute_ok={m_ok}/{len(m_stats)} "
                 f"synth={synth_stats}"
