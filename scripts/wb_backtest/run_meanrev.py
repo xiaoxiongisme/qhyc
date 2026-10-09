@@ -28,7 +28,7 @@ from types import SimpleNamespace
 import run_param_scan_v3 as V
 from sqlalchemy import text as T
 
-from app.data.back_adjust import apply_back_adjust, load_segments
+from app.data.back_adjust import apply_back_adjust_from_materialized
 
 OUT = '/tmp/mr_out'
 CACHE = '/tmp/mr15_cache.pkl'
@@ -105,7 +105,6 @@ def load_symbol_15m(sym, engine):
             T("SELECT trade_date, open, high, low, close FROM l0_raw.daily_bar "
               "WHERE symbol=:s ORDER BY trade_date"),
             c, params={'s': sym})
-        segs = load_segments(c, sym, 'min15')
     if len(b15) < 200 or len(db) < 200:
         return None
     dt = pd.to_datetime(b15['bucket'])
@@ -115,7 +114,8 @@ def load_symbol_15m(sym, engine):
         dt = dt.dt.tz_convert('Asia/Shanghai')
     b15['dt'] = dt
     b15['d'] = dt.dt.date
-    sig = apply_back_adjust(b15, sym, 'min15', segs=segs)
+    with engine.connect() as _c:
+        sig = apply_back_adjust_from_materialized(b15, sym, 'min15', _c)
     o = sig['open'].to_numpy(float)
     h = sig['high'].to_numpy(float)
     l = sig['low'].to_numpy(float)

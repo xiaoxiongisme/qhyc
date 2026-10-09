@@ -142,3 +142,104 @@ def check_negative(session, freq: str = 'min15',
     d['negative'] = d['min_adj'] <= 0
     d['forbid_pct'] = d['min_adj'] < 0.05 * d['min_adj'].abs().clip(lower=1)
     return d
+
+
+# ---------------------------------------------------------------------------
+# #8 物化落地读取：直接读 l2_adj.bar_*m_ba（已后复权），省去 pull-raw + Python as-of
+# ---------------------------------------------------------------------------
+BA_TABLE = {'min5': 'bar_5m_ba', 'min15': 'bar_15m_ba',
+           'min30': 'bar_30m_ba', 'min60': 'bar_60m_ba'}
+
+
+def read_back_adjusted(session, symbol, freq, start=None, end=None, with_raw=True):
+    """读 #8 物化后复权表 l2_adj.bar_*m_ba。
+
+    返回 DataFrame（按 bucket 升序）：
+      bucket, open/high/low/close（后复权）, volume, amount, open_interest, adj_offset
+      with_raw=True 时额外带 raw_open/high/low/close（= adj - adj_offset，用于需原始合约价处）。
+
+    相比 apply_back_adjust（拉全量原始 + Python 逐根 as-of），本函数直接命中已物化结果，
+    回测/信号取数免去两步开销。与 apply_back_adjust 逐位一致（建表时已验收 max|diff|=0）。
+    """
+    tbl = BA_TABLE.get(freq)
+    if tbl is None:
+        raise ValueError(f"freq={freq!r} 无对应 ba 表，可选 {sorted(BA_TABLE)}")
+    sql = (f"SELECT bucket, open, high, low, close, volume, amount, "
+           f"open_interest, adj_offset FROM l2_adj.{tbl} WHERE symbol=:s")
+    p = {"s": symbol}
+    if start is not None:
+        sql += " AND bucket >= :start"; p["start"] = start
+    if end is not None:
+        sql += " AND bucket <= :end";   p["end"] = end
+    sql += " ORDER BY bucket"
+    rows = session.execute(text(sql), p).fetchall()
+    df = pd.DataFrame(rows, columns=['bucket', 'open', 'high', 'low', 'close',
+                                    'volume', 'amount', 'open_interest', 'adj_offset'])
+    if with_raw:
+        for c in ('open', 'high', 'low', 'close'):
+            df['raw_' + c] = df[c].astype(float) - df['adj_offset'].astype(float)
+    return df
+
+
+def apply_back_adjust_materialized(session, symbol, freq, start=None, end=None):
+    """apply_back_adjust 的物化等价版（drop-in）：直接返回后复权 OHLC DataFrame。
+
+    与 apply_back_adjust(df, symbol, freq, segs=...) 的返回列一致
+    （bucket, open/high/low/close 后复权, volume, amount, open_interest, adj_offset），
+    但数据源是已物化表，不再做 Python as-of。调用方只需把
+    `apply_back_adjust(b, sym, freq, segs=segs)` 换成
+    `apply_back_adjust_materialized(c, sym, freq)` 即可获得性能收益。
+    """
+    return read_back_adjusted(session, symbol, freq, start=start, end=end, with_raw=False)
+
+
+def apply_back_adjust_from_materialized(df, symbol, freq, session):
+    """apply_back_adjust 的物化等价 drop-in（**保留 df 原形状**，消除 Python 逐根 as-of）。
+
+    等价地改写 df 的 open/high/low/close 为后复权价并写入 adj_offset，但不再用 Python
+    逐根 as-of，而是按 bucket 从已物化表 l2_adj.bar_*m_ba 取算好的后复权值做 left merge。
+    输入 df 的索引与其余列（如 dt/d）原样保留 —— 可直接替换如下两行：
+
+        segs = load_segments(session, symbol, freq)
+        sig  = apply_back_adjust(df, symbol, freq, segs=segs)
+
+    为：
+
+        sig  = apply_back_adjust_from_materialized(df, symbol, freq, session)
+
+    前置：l2_adj.bar_*m_ba 已用 040 物化（含全部 888 主连历史）。
+    与 apply_back_adjust 逐位一致（建表时已验收 max|diff|=0；ba 是 bar_*m(888) 的超集）。
+    """
+    tbl = BA_TABLE.get(freq)
+    if tbl is None:
+        raise ValueError(f"freq={freq!r} 无对应 ba 表，可选 {sorted(BA_TABLE)}")
+    if 'bucket' not in df.columns:
+        raise ValueError("apply_back_adjust_from_materialized: df 需含 'bucket' 列")
+
+    ba = read_back_adjusted(session, symbol, freq, with_raw=False)
+    if ba.empty:
+        raise ValueError(f"{symbol}/{freq} 在 l2_adj.{tbl} 无数据，无法物化复权")
+
+    # 以 UTC 归一化做 merge key，规避 Asia/Shanghai vs UTC 表示差异
+    def _utc(s):
+        s = pd.to_datetime(s)
+        return s.dt.tz_convert('UTC') if s.dt.tz is not None else s.dt.tz_localize('UTC')
+    ba_k = _utc(ba['bucket'])
+    sub = ba.set_index(ba_k)[['open', 'high', 'low', 'close', 'adj_offset']]
+    bk = _utc(df['bucket']).rename('_bk')
+
+    out = df.copy()
+    out['_bk'] = bk  # 保持 tz-aware Series，避免 .values 丢失时区
+    merged = out.merge(sub, left_on='_bk', right_index=True, how='left',
+                      suffixes=('', '_ba'))
+
+    miss = int(merged['adj_offset'].isna().sum())
+    if miss:
+        raise ValueError(
+            f"{symbol}/{freq}: {miss} 根 bar 在 l2_adj.{tbl} 缺失 "
+            f"（ba 覆盖不完整，请先跑 040 build）")
+    for c in ('open', 'high', 'low', 'close'):
+        out[c] = merged[c + '_ba'].to_numpy()
+    out['adj_offset'] = merged['adj_offset'].to_numpy()
+    out.drop(columns=['_bk'], inplace=True)
+    return out

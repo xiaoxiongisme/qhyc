@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from sqlalchemy import text as T
 
 from app.core.db import get_engine
-from app.data.back_adjust import apply_back_adjust, load_segments
+from app.data.back_adjust import apply_back_adjust_from_materialized
 from app.data.cost import cost_coefficients, cost_yuan_at, CostNotFoundError
 # 2026-10-07 CB 收纳时修正：原先 import 扁平模块名 `fusion_signal_exp`
 # （该模块只存在于 WB 手工 docker cp 的 /tmp 桥接文件，镜像重建即断链——
@@ -174,7 +174,6 @@ def load_symbol(sym, engine):
         db = pd.read_sql(T("""SELECT trade_date, open, high, low, close
                               FROM l0_raw.daily_bar WHERE symbol=:s ORDER BY trade_date"""),
                          c, params={'s': sym})
-        segs = load_segments(c, sym, 'min60')
     if len(b60) < 200 or len(db) < 200:
         return None
     dt = pd.to_datetime(b60['bucket'])
@@ -185,7 +184,8 @@ def load_symbol(sym, engine):
     b60['dt'] = dt
     b60['d'] = dt.dt.date
 
-    sig = apply_back_adjust(b60, sym, 'min60', segs=segs)
+    with engine.connect() as _c:
+        sig = apply_back_adjust_from_materialized(b60, sym, 'min60', _c)
     o = sig['open'].to_numpy(float)
     h = sig['high'].to_numpy(float)
     l = sig['low'].to_numpy(float)
