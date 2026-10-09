@@ -261,7 +261,7 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
         if "month" in t:
             thr = 40
         elif any(k in t for k in ("week", "backtest", "lstm", "transmission",
-                                  "weights", "adjust", "retrain", "recalc")):
+                                  "weights", "retrain", "recalc")):
             thr = 12
         else:
             thr = days

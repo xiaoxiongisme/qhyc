@@ -1106,8 +1106,6 @@ def _sync_cloud_local_job() -> None:
 #: 启动时 fail-fast 校验，缺一个就大声报错，杜绝再次静默。
 SUBPROCESS_SCRIPTS = (
     "sync_cloud_local.py",
-    "adjust_bars.py",
-    "adjust_minute.py",
     # Phase 4（因子层）：缺任一都会在 16:20/16:45 静默失败，故一并纳入启动自检
     "compute_factor_v1v6.py",
     "factor_ic_monitor.py",
@@ -2061,105 +2059,6 @@ def _spot_basis_job() -> None:
                 logger.exception("[scheduler] spot_basis failed")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] spot_basis job error: {e}")
-
-
-def _adjust_job() -> None:
-    """每日（含夜盘）收盘后重算所有主品种复权主连（hourly + daily），幂等 upsert。
-
-    单品种异常隔离：任一品种失败仅记日志，不影响其余品种与外層调度。
-    耗时较长（50+ 品种 × 2 周期），故排在 02:30 空闲时段。
-    """
-    logger.info("[scheduler] adjust cont_adj start")
-    try:
-        settings = get_settings()
-        with session_scope() as s:
-            repo = TaskRepository(s)
-            run = repo.start("adjust", label="nightly")
-            try:
-                from app.ingest.fdf import adjust_fdf
-            except Exception as imp_e:  # noqa: BLE001
-                repo.finish(run, "failed", f"import failed: {imp_e}")
-                logger.exception("[scheduler] adjust import failed")
-                return
-            ok = fail = 0
-            for spec in settings.main_contracts:
-                key = f"{spec.exchange}.{spec.product.lower()}"
-                for freq in ("hourly", "daily"):
-                    try:
-                        adjust_fdf.run(key, freq)
-                        ok += 1
-                    except Exception as e:  # noqa: BLE001
-                        fail += 1
-                        logger.warning(f"[scheduler] adjust {key} {freq} failed: {e}")
-
-            # —— 扩展：15/30/60 分钟未复权主连(bar_*) → fut_kline cont_adj ——
-            # 加法平移前复权，仅平移换月断层(对比8888指数连)，不改任意两点价差/盈亏点数。
-            # subprocess 隔离（耗时较长，避免占满 APScheduler 线程池；同 _fut_kline_job 之因）。
-            try:
-                import subprocess as _sp
-                import sys as _sys
-                from pathlib import Path as _P
-                adj_script = (_P(__file__).resolve().parents[1]
-                              / "scripts" / "adjust_bars.py")
-                if adj_script.exists():
-                    for mf in ("min15", "min30", "min60"):
-                        mcmd = [_sys.executable, str(adj_script), "--freq", mf]
-                        logger.info(f"[scheduler] adjust bars {mf} start")
-                        try:
-                            mproc = _sp.run(mcmd, capture_output=True, text=True, timeout=3600)
-                            logger.info(f"[scheduler] adjust bars {mf} exit={mproc.returncode} "
-                                        f"tail={(mproc.stdout or '')[-400:]}")
-                            if mproc.returncode != 0:
-                                logger.warning(f"[scheduler] adjust bars {mf} stderr="
-                                               f"{(mproc.stderr or '')[-600:]}")
-                                fail += 1
-                        except _sp.TimeoutExpired:
-                            logger.warning(f"[scheduler] adjust bars {mf} timeout>3600s")
-                            fail += 1
-                        except Exception as me:  # noqa: BLE001
-                            logger.exception(f"[scheduler] adjust bars {mf} failed: {me}")
-                            fail += 1
-                else:
-                    logger.warning(f"[scheduler] 找不到复权脚本 {adj_script}")
-            except Exception as e:  # noqa: BLE001
-                logger.exception(f"[scheduler] adjust bars job error: {e}")
-
-            status = "success" if fail == 0 else "partial"
-            repo.finish(run, status, f"ok={ok} fail={fail}")
-            logger.info(f"[scheduler] adjust done ok={ok} fail={fail}")
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"[scheduler] adjust job error: {e}")
-
-
-def _adjust_minute_job() -> None:
-    """1 分钟原始数据复权 → minute_bar_adj（夜间增量，云端 15432）。
-
-    since=72h 前：期间 15m 检测出换月的品种须全量重算（前复权锚定最新段，
-    新换月会整体平移历史）；否则只追加新 bar（cum=0，复权价=原价）。
-    subprocess 隔离；脚本自带幂等（先 DELETE 后 COPY）。
-    """
-    import subprocess
-    import sys as _sys
-    from datetime import datetime, timedelta
-    from pathlib import Path
-
-    script = Path(__file__).resolve().parents[1] / "scripts" / "adjust_minute.py"
-    if not script.exists():
-        logger.error(f"[scheduler] 找不到 1 分钟复权脚本 {script}")
-        return
-    since = (datetime.now() - timedelta(hours=72)).isoformat(timespec="seconds")
-    cmd = [_sys.executable, str(script), "--since", since]
-    logger.info(f"[scheduler] adjust minute_bar_adj start since={since}")
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
-        logger.info(f"[scheduler] adjust minute exit={proc.returncode} "
-                    f"tail={(proc.stdout or '')[-400:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] adjust minute stderr={(proc.stderr or '')[-600:]}")
-    except subprocess.TimeoutExpired:
-        logger.warning("[scheduler] adjust minute timeout>7200s")
-    except Exception as e:  # noqa: BLE001
-        logger.exception(f"[scheduler] adjust minute failed: {e}")
 
 
 def _ensure_hourly_uniq_index() -> None:
