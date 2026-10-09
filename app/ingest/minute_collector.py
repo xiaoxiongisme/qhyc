@@ -8,7 +8,7 @@
 - akshare 1 分钟标签即该分钟棒的上海时间，直接按上海本地解析入库（不叠加任何 +1h）。
 - ⚠ 已知限制：akshare futures_zh_minute_sina(period="1") 每次仅返回约 1024 根、跨约 6 个
   交易日（2026-10-04 实测 RB 为 09-24~09-30）。故本采集器仅能刷新「最近 ~6 天」实时分钟；
-  minute_bar 的更长历史由 CSV 导入（fetch_contract_1min.py）维护，upsert 按 (symbol, ts)
+  minute_bar 的更长历史由历史 CSV 批量导入维护，upsert 按 (symbol, ts)
   DO NOTHING 不会覆盖旧历史。这是 C9 收敛到 akshare 单一源后的已知降韧性取舍——
   天勤 原可拉 ~9000 根（约 21 日），切换后实时回溯窗口缩短，须确保 CSV 导入定期补历史。
 - 不强行对齐交易时段整点（那会丢分钟），仅剔除 NaN 价 / 1970 脏戳 / 未来戳。
@@ -221,7 +221,7 @@ def _main() -> None:
 
     说明：
     - akshare futures_zh_minute_sina(period=1) 硬上限约 1024 根（约最近 6 个交易日）；
-      1 分钟更长历史由 CSV 导入（fetch_contract_1min.py）维护。
+      1 分钟更长历史由历史 CSV 批量导入维护。
     - upsert 用 ON CONFLICT (symbol, ts) DO NOTHING，已存在行跳过，可反复跑。
     - 本入口仅供临时/手动补采；常规实时采集仍由 scheduler._minute_and_bars_job 负责。
     """
