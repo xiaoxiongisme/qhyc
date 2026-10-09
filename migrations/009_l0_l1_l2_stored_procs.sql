@@ -52,54 +52,101 @@ $$;
 --   当未来 1 分钟数据补回时，本过程即可由此重建各周期 L1 棒。
 --   当前 minute_bar 为空 → 安全 no-op（不报错、不写）。
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE PROCEDURE sp_build_l1_from_minute(p_freq text DEFAULT 'min15')
+-- 2026-10-08 二次改造：procedure 自身按时间分块 + 增量聚合，从根上避开 TimescaleDB
+-- 解压上限（默认 100k）与 OOM。调度器日常只需 CALL sp_build_l1_from_minute('min5')
+-- （不传 p_from）→ 增量模式：只聚"目标表最大 bucket 之后"的新数据；历史回填传
+-- p_from/p_to 指定区间，procedure 内部按 1 天/块循环（每块 ≤~54k 行 < 100k 上限，
+-- 无需改 GUC、不会 OOM）。CREATE OR REPLACE 不能改参数量，先 DROP 旧签名再建新签名。
+DROP PROCEDURE IF EXISTS sp_build_l1_from_minute(text);
+DROP PROCEDURE IF EXISTS sp_build_l1_from_minute(text, timestamptz, timestamptz);
+
+CREATE OR REPLACE PROCEDURE sp_build_l1_from_minute(
+    p_freq text DEFAULT 'min15',
+    p_from timestamptz DEFAULT NULL,
+    p_to   timestamptz DEFAULT NULL)
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_table text := l1_table_of(p_freq);
-    v_src   text := 'minute_bar';
-    v_src_n bigint;
-    v_dst_n bigint;
-    v_interval text := CASE p_freq
-        WHEN 'min5'  THEN '5 minutes'
-        WHEN 'min15' THEN '15 minutes'
-        WHEN 'min30' THEN '30 minutes'
-        WHEN 'min60' THEN '60 minutes'
+    v_table     text := l1_table_of(p_freq);
+    v_src       text := 'minute_bar';
+    v_dst_n     bigint;
+    v_interval  interval := CASE p_freq
+        WHEN 'min5'  THEN interval '5 minutes'
+        WHEN 'min15' THEN interval '15 minutes'
+        WHEN 'min30' THEN interval '30 minutes'
+        WHEN 'min60' THEN interval '60 minutes'
         ELSE NULL END;
+    v_from      timestamptz;
+    v_to        timestamptz;
+    v_cur       timestamptz;
+    v_end       timestamptz;
+    v_wm        timestamptz;
+    v_chunk     interval := interval '1 day';   -- 每块 ≤~54k 行，远低于 100k 解压上限
+    v_n_chunk   int := 0;
 BEGIN
     IF v_table IS NULL OR v_interval IS NULL THEN
         RAISE EXCEPTION 'sp_build_l1_from_minute: 不支持的 freq=%（仅 min5/15/30/60）', p_freq;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=v_src) THEN
+    -- public.minute_bar 是视图（底层 l0_raw.minute_bar）；pg_tables 仅登记实表会漏掉它。
+    -- 改用 to_regclass 兼识表与视图，避免误判"源表不存在"而 safe no-op。
+    IF to_regclass('public.' || v_src) IS NULL THEN
         RAISE NOTICE '[L1] 源表 % 不存在，跳过', v_src; RETURN;
     END IF;
-    EXECUTE format('SELECT count(*) FROM %I', v_src) INTO v_src_n;
-    IF v_src_n = 0 THEN
-        RAISE NOTICE '[L1] 源表 % 为 0 行（1分钟数据缺失），跳过（安全 no-op）', v_src;
+
+    -- 范围确定
+    IF p_from IS NOT NULL THEN
+        -- 回填模式：处理显式 [p_from, p_to) 区间（p_to 缺省则到最新整桶）
+        v_from := p_from;
+        IF p_to IS NOT NULL THEN
+            v_to := p_to;
+        ELSE
+            SELECT time_bucket(v_interval, max(ts)) INTO v_to FROM minute_bar;
+        END IF;
+    ELSE
+        -- 增量模式：从目标表最大 bucket 的下一桶开始，到分钟表最新整桶为止（只聚新数据）
+        EXECUTE format('SELECT max(bucket) FROM %I', v_table) INTO v_wm;
+        IF v_wm IS NULL THEN
+            EXECUTE format('SELECT min(time_bucket($1, ts)) FROM %I WHERE symbol ~ ''^[A-Za-z]+8888?$''', v_src)
+                USING v_interval INTO v_from;
+        ELSE
+            v_from := v_wm + v_interval;
+        END IF;
+        SELECT time_bucket(v_interval, max(ts)) INTO v_to FROM minute_bar;
+    END IF;
+
+    IF v_from IS NULL OR v_to IS NULL OR v_from >= v_to THEN
+        RAISE NOTICE '[L1] % 无新数据可聚合（from=% / to=%），跳过', v_table, v_from, v_to;
         RETURN;
     END IF;
 
-    -- ⚠ 目标列名必须与 bar_* 真实 schema 一致：load_1min.py 定义的是 open_interest（非 oi）
-    EXECUTE format($q$
-        INSERT INTO %I (symbol, bucket, open, high, low, close, volume, open_interest)
-        SELECT symbol,
-               time_bucket($1, ts) AS bucket,
-               first(open, ts)  AS open,
-               max(high)        AS high,
-               min(low)         AS low,
-               last(close, ts)  AS close,
-               sum(volume)             AS volume,
-               max(open_interest)      AS open_interest
-        FROM minute_bar
-        WHERE symbol ~ '^[A-Za-z]+8888?$'          -- 仅主连/指数连
-        GROUP BY symbol, time_bucket($1, ts)
-        ON CONFLICT (symbol, bucket) DO UPDATE
-           SET open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
-               close=EXCLUDED.close, volume=EXCLUDED.volume, open_interest=EXCLUDED.open_interest
-        $q$, v_table)
-        USING (v_interval::interval);
+    -- 按 1 天/块循环聚合；每块独立 INSERT…SELECT，单次解压 ≤~54k 行，远低于 100k 上限，不 OOM
+    v_cur := v_from;
+    LOOP
+        EXIT WHEN v_cur >= v_to;
+        v_end := least(v_cur + v_chunk, v_to);
+        EXECUTE format($q$
+            INSERT INTO %I (symbol, bucket, open, high, low, close, volume, open_interest)
+            SELECT symbol,
+                   time_bucket($1, ts) AS bucket,
+                   first(open, ts)  AS open,
+                   max(high)        AS high,
+                   min(low)         AS low,
+                   last(close, ts)  AS close,
+                   sum(volume)             AS volume,
+                   max(open_interest)      AS open_interest
+            FROM minute_bar
+            WHERE symbol ~ '^[A-Za-z]+8888?$' AND ts >= $2 AND ts < $3
+            GROUP BY symbol, time_bucket($1, ts)
+            ON CONFLICT (symbol, bucket) DO UPDATE
+               SET open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low,
+                   close=EXCLUDED.close, volume=EXCLUDED.volume, open_interest=EXCLUDED.open_interest
+            $q$, v_table)
+            USING v_interval, v_cur, v_end;
+        v_n_chunk := v_n_chunk + 1;
+        v_cur := v_end;
+    END LOOP;
 
     EXECUTE format('SELECT count(*) FROM %I', v_table) INTO v_dst_n;
-    RAISE NOTICE '[L1] % ← minute_bar 聚合完成（目标表现有 % 行）', v_table, v_dst_n;
+    RAISE NOTICE '[L1] % 增量/分块聚合完成：% 天块，目标表现有 % 行', v_table, v_n_chunk, v_dst_n;
 END;
 $$;
 
@@ -114,7 +161,7 @@ DECLARE
     v_bad bigint;
 BEGIN
     FOR r IN SELECT unnest(ARRAY['bar_5m','bar_15m','bar_30m','bar_60m']) AS t LOOP
-        IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=r.t) THEN
+        IF to_regclass('public.' || r.t) IS NULL THEN
             CONTINUE;
         END IF;
         EXECUTE format($q$
@@ -139,7 +186,7 @@ $$;
 CREATE OR REPLACE PROCEDURE sp_refresh_dim_contract_dates()
 LANGUAGE plpgsql AS $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='contract_daily') THEN
+    IF to_regclass('public.contract_daily') IS NULL THEN
         RAISE NOTICE '[dim] contract_daily 不存在，跳过'; RETURN;
     END IF;
     UPDATE dim_contract dc
@@ -181,10 +228,10 @@ BEGIN
         RAISE EXCEPTION 'sp_build_l2_roll_segment: 不支持的 freq=%（仅 min5/15/30/60）', p_freq;
     END IF;
     -- 15m 锚点是硬依赖：缺失则无法锚定，拒绝执行（fail-loud）
-    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=v_anchor) THEN
+    IF to_regclass('public.' || v_anchor) IS NULL THEN
         RAISE EXCEPTION 'sp_build_l2_roll_segment: 锚点表 % 不存在，15m 锚定无法进行，拒绝执行', v_anchor;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename=v_table) THEN
+    IF to_regclass('public.' || v_table) IS NULL THEN
         RAISE EXCEPTION 'sp_build_l2_roll_segment: 目标表 % 不存在，拒绝执行', v_table;
     END IF;
 

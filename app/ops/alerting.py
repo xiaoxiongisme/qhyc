@@ -39,6 +39,7 @@ class AlertConfig:
     disk_crit_pct: float = 93.0        # 磁盘严重阈值（%）
     load_ratio: float = 1.5            # 负载/核心数 比值告警阈值
     data_lag_days: int = 3             # 数据滞后期告警阈值（自然日，含周末）
+    job_heartbeat_days: int = 4        # 作业心跳阈值：近30天内有过成功的作业，若距上次成功超此天数→告警（覆盖"作业停跑但数据未滞后"盲区）
     push_silence_hours: int = 36       # 预测/推送静默告警阈值（小时）
     db_restart_alert_min: int = 10     # DB uptime < 该分钟数 → 疑似崩溃重启
     cooldown_sec: int = 1800
@@ -225,6 +226,56 @@ def _check_freshness(session, cfg: AlertConfig) -> list[dict]:
     return out
 
 
+def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
+    """作业心跳巡检（2026-10-09 新增，对应 inventory 停摆 10 天无人察觉事件）。
+
+    数据新鲜度巡检（_check_freshness）只校验"表最新日期"——当作业刚停 1~2 天、数据滞后
+    还没越过 3 天阈值时它发现不了；本次 inventory 停摆 10 天靠数据滞后间接暴露，正是缺
+    "作业本身是否还在跑"的直监控。本函数查 task_run 成功历史：对近 30 天内有过成功的作业，
+    若距上次成功 > job_heartbeat_days 就告警，能在作业停跑当天即暴露。
+    """
+    days = getattr(cfg, "job_heartbeat_days", 4)
+    if days <= 0:
+        return []
+    now = datetime.now(CST)
+    out: list[dict] = []
+    try:
+        rows = session.execute(text(
+            "SELECT task_type, max(finished_at) FROM task_run "
+            "WHERE status='success' AND finished_at >= now() - interval '30 days' "
+            "GROUP BY task_type"
+        )).fetchall()
+    except Exception as e:
+        return [{"key": "jobhb", "level": "WARN",
+                 "msg": "作业心跳检查失败: {0}".format(str(e)[:120])}]
+    for task, last in rows:
+        if last is None:
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=CST)
+        # 按作业名推断期望间隔：周频/月频作业在非运行日距上次成功天然偏长，用统一短阈值
+        # 会产生大量假告警（如 backtest_weekly 隔 7 天，第 5 天就超 4 天阈值，且每 30 分钟
+        # 检查+cooldown 刚好每次都推，淹没真告警）。故周频给 12 天、月频给 40 天缓冲，
+        # 其余（日频/高频采集类）用默认 days。
+        t = str(task).lower()
+        if "month" in t:
+            thr = 40
+        elif any(k in t for k in ("week", "backtest", "lstm", "transmission",
+                                  "weights", "adjust", "retrain", "recalc")):
+            thr = 12
+        else:
+            thr = days
+        lag = (now - last).total_seconds() / 86400.0
+        if lag > thr:
+            out.append({
+                "key": "jobhb_" + str(task),
+                "level": "WARN",
+                "msg": "作业 {0} 已 {1:.1f} 天无成功运行（最近成功 {2}，阈值 {3} 天）—— 采集/调度链路可能停摆".format(
+                    task, lag, last.date(), thr),
+            })
+    return out
+
+
 def _check_db_uptime(session, cfg: AlertConfig) -> list[dict]:
     """DB 进程 uptime 过短 = 疑似崩溃/被 OOM kill 后重启（跨越容器边界的代理指标）。"""
     if cfg.db_restart_alert_min <= 0:
@@ -308,6 +359,7 @@ def check_all(session=None, cfg: AlertConfig | None = None) -> dict:
     try:
         findings += _check_db_uptime(session, cfg)
         findings += _check_freshness(session, cfg)
+        findings += _check_job_heartbeat(session, cfg)
         findings += _check_push_silence(session, cfg)
     finally:
         if owns:

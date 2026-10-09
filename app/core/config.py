@@ -197,7 +197,7 @@ class InventoryConfig(BaseModel):
     """
     enabled: bool = True
     freq: str = "weekly"           # weekly / daily
-    run_day: int = 5               # 周频：周几（0=周一 … 6=周日）
+    run_day: int | str = 5        # 周频：周几（0=周一…6=周日）或 APScheduler 表达式如 "mon-fri"（工作日盘后）
     run_hour: int = 17
     run_minute: int = 0
 
