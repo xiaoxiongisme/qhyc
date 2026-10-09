@@ -72,6 +72,22 @@ class AlertConfig:
         "factor_value": "trade_date",
         "main_contract_map": "trade_date",
     })
+    # 已退役作业的 task_type（_check_job_heartbeat 排除用）。
+    #
+    # ★ 2026-10-09 新增。事故：`adjust` 作业 2026-10-04 随 fdf 模块退役删除
+    #   （commit 380cff3），但 `task_run` 里它 9 条历史 run 还在 30 天窗口内
+    #   （最后成功 2026-09-27）→ `_check_job_heartbeat` 扫描「窗口内所有
+    #   task_type」时无法区分「退役」与「停摆」，连续推送假告警
+    #   「作业 adjust 已 11.7 天无成功运行」。这与 `fut_kline` 从
+    #   `freshness_tables` 移除是**同一类问题**：生产者退役后，巡检把
+    #   「不再产出」误读成「产出中断」。
+    #
+    # 维护约定：作业退役时（scheduler 里取消注册 + 删作业代码），必须：
+    #   1. 把它的 task_type 加进本集合；
+    #   2. 清理 `task_run` 里该 task_type 的历史行（运维动作，见任务台账）。
+    # 只做 1 的话 `_check_job_heartbeat` 不再报，但表里躺着死数据；只做 2 的话
+    # 若代码又意外跑了一次会重新进入窗口。两个都做才闭环。
+    retired_task_types: set = field(default_factory=lambda: {"adjust"})
 
 
 def alert_config_from_env() -> AlertConfig:
@@ -250,6 +266,10 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
                  "msg": "作业心跳检查失败: {0}".format(str(e)[:120])}]
     for task, last in rows:
         if last is None:
+            continue
+        # ★ 2026-10-09：退役作业（如 adjust）的 task_run 历史仍在窗口内，
+        #   不排除会把「已退役」误报成「停摆」——见 AlertConfig.retired_task_types。
+        if str(task) in cfg.retired_task_types:
             continue
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
