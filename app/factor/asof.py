@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -116,6 +117,32 @@ class FactorContext:
     registry: dict[str, dict] = field(default_factory=dict)
     _cache: dict = field(default_factory=dict)
 
+    #: ``_cache`` 的存活时长（秒）。2026-10-09 新增（PR review I3）。
+    #:
+    #: 原实现 ``lookup`` 首次查询后把该 (factor, symbol) 的**全量历史**永久缓存，
+    #: 而 :class:`FactorContext` 又被 :mod:`app.strategies.fusion_signal` 以模块级
+    #: 单例缓存（``_factor_ctx_cache``）持有 —— 两者叠加导致进程内**永不更新**：
+    #: ``factor_v1v6`` 每天 16:20 写入的新因子值当天永不可见，``factor_registry``
+    #: 的 enabled/weight 改动也不生效（"显示可调、实际不生效"）。
+    #:
+    #: TTL 与 :data:`app.strategies.fusion_signal._FACTOR_CTX_TTL_SEC` 同为 300s：
+    #: 因子是低频数据（每日一批），5 分钟足够新鲜。过期后按 (factor, symbol)
+    #: 重新查库——键空间是「因子数 × 品种数」，量级很小，重查成本可忽略。
+    _cache_ttl_sec: float = 300.0
+    _cache_ts: dict = field(default_factory=dict)
+
+    def _cache_expired(self, key: tuple) -> bool:
+        """该键的缓存是否已过期。
+
+        ⚠ **无时间戳 = 视为有效**（不过期）。这是刻意的：调用方（含单元测试）可能
+        直接预置 ``ctx._cache[...]`` 注入已知序列，此时没有 ``_cache_ts`` 记录。
+        若把"无时间戳"判为过期，会强制重查库并**覆盖手工注入的数据**——
+        2026-10-09 加TTL 时就踩到了这个（``test_lookup_available_at_red_line``）。
+        正常查询路径每次都会写 ``_cache_ts``，故不受此影响。
+        """
+        ts = self._cache_ts.get(key)
+        return ts is not None and (_time.time() - ts) >= self._cache_ttl_sec
+
     @classmethod
     def from_rows(cls, rows, enabled_only: bool = True) -> "FactorContext":
         """纯函数式构造：把注册表行 → registry dict（enabled_only 时跳过未启用项）。
@@ -149,9 +176,23 @@ class FactorContext:
         """返回该 symbol 在 trade_date 可用的最新 z 值；不可用时返回 None。
 
         硬性红线：``available_at > trade_date`` 的数据一律不可用（§6.1/§13 V-spec T3）。
+
+        ★ 2026-10-09：缓存加 TTL（见 :attr:`_cache_ttl_sec`）。原实现首次查询后
+          永久缓存全量历史，而调用方（``fusion_signal._factor_ctx_cache``）是模块级
+          单例 ⇒ 进程内**永不更新**：当天 16:20 新写入的因子值当天永不可见，
+          且因子缺失时会静默降级为地板（gate=-1.0 ⇒ 该品种永不开仓，只留一行
+          warning），故障表现易被误判为"策略自然失效"。
         """
         key = (factor_id, symbol)
-        if key not in self._cache:
+        if key not in self._cache or self._cache_expired(key):
+            eng = get_engine()
+            with eng.connect() as c:
+                rows = c.execute(text(
+                    "SELECT available_at, z_value FROM factor_value "
+                    "WHERE factor_id=:f AND symbol=:s ORDER BY available_at DESC"
+                ), {"f": factor_id, "s": symbol}).fetchall()
+            self._cache[key] = [(r[0], r[1]) for r in rows]
+            self._cache_ts[key] = _time.time()
             eng = get_engine()
             with eng.connect() as c:
                 rows = c.execute(text(

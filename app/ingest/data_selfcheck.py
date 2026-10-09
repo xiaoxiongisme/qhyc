@@ -77,20 +77,66 @@ def _log_ticket(session, symbol: str, trade_date: date, fld: str,
             logger.error(f"[data_selfcheck] 写工单再次失败：{e2}")
 
 
+#: 各候选表的时间列名（按优先级探测）。
+#:
+#: ★ 2026-10-09（PR review P1-2）：``check_missing`` 原硬编码 ``bucket::date``，
+#:   但 ``cfg.expected_bars`` 里的表时间列**并不统一**：
+#:     · ``l1_mkt.bar_5m/15m/30m/60m`` → ``bucket``
+#:     · ``l0_raw.daily_bar``             → ``trade_date``（**没有 bucket 列**）
+#:     · ``l0_raw.hourly_bar``            → ``trade_datetime``
+#:     · ``l0_raw.minute_bar``            → ``ts``
+#:   查 daily_bar 时 SQL 必然报 ``column "bucket" does not exist`` → 被
+#:   ``except`` 吞成 ``continue`` → **该表永远检查不到**。
+#:   而上层只看到「0 工单」，与「一切正常」无法区分——属典型静默失效
+#:   （上层实测发现 daily_bar 一项从未生效，真实数据缺失也无人告警）。
+_TIME_COL_CANDIDATES = ("bucket", "trade_date", "trade_datetime", "ts", "date")
+
+
+def _time_col(session, table: str) -> str | None:
+    """探测该表实际使用的时间列名；找不到返回 ``None``。"""
+    try:
+        rows = session.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = :t"
+        ), {"t": table.split(".")[-1]}).fetchall()
+    except Exception:  # noqa: BLE001
+        rows = []
+    cols = {r[0] for r in rows}
+    for c in _TIME_COL_CANDIDATES:
+        if c in cols:
+            return c
+    return None
+
+
 def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
-    """检查各周期表当日 bar 数缺失比例。返回写入工单数。"""
+    """检查各周期表当日 bar 数缺失比例。返回写入工单数。
+
+    ★ 2026-10-09：时间列改为**按表探测**（原先硬编码 ``bucket`` 导致 daily_bar
+      这类表**整项检查从未执行**，且失败被 ``except`` 吞成 ``continue``，
+      上层只看到"0 工单"）。现在探测不到列时记 ``error`` 并跳过，
+      使「检查未执行」与「检查通过」在日志上可区分。
+    """
     n = 0
+    skipped: list[str] = []
     for table, expect in cfg.expected_bars.items():
+        tc = _time_col(session, table)
+        if tc is None:
+            skipped.append(table)
+            logger.error(
+                f"[data_selfcheck] {table} **缺失检查未执行**：找不到可识别的时间列"
+                f"（候选 {_TIME_COL_CANDIDATES}）—— 该表的 bar 缺失无人巡检")
+            continue
         try:
             rows = session.execute(text(f"""
                 SELECT symbol, count(*) AS c
                 FROM {table}
-                WHERE bucket::date = :d
+                WHERE {tc}::date = :d
                 GROUP BY symbol
             """), {"d": trade_date}).fetchall()
         except Exception as e:  # noqa: BLE001
             session.rollback()
-            logger.warning(f"[data_selfcheck] {table} 缺失检查跳过：{e}")
+            skipped.append(table)
+            logger.error(f"[data_selfcheck] {table}（用列 {tc}）缺失检查**未执行**：{e}")
             continue
         for sym, c in rows:
             if c < expect * (1 - cfg.missing_pct_alarm):
@@ -99,6 +145,9 @@ def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
                             f"（缺失 {1 - c/expect:.1%}）",
                             diff=float(expect - c) / expect)
                 n += 1
+    if skipped:
+        # fail-loud：让「有表没被检查」在结果里显式可见
+        logger.error(f"[data_selfcheck] 本轮有 {len(skipped)} 张表**未被检查**：{skipped}")
     return n
 
 
@@ -116,7 +165,9 @@ def check_zero_volume(session, cfg: SelfCheckConfig, trade_date: date) -> int:
         """), {"s": since, "d": trade_date}).fetchall()
     except Exception as e:  # noqa: BLE001
         session.rollback()
-        logger.warning(f"[data_selfcheck] 零成交检查跳过：{e}")
+        # ★ 2026-10-09：升为error。原为 warning + return 0 —— 上层只看到
+        # 「0 工单」，与「零成交检查通过」完全一样，属静默失效。
+        logger.error(f"[data_selfcheck] 零成交检查**未执行**：{e}")
         return 0
     for sym, z, c in rows:
         _log_ticket(session, sym, trade_date, "daily_bar.zero_volume",
@@ -126,20 +177,26 @@ def check_zero_volume(session, cfg: SelfCheckConfig, trade_date: date) -> int:
 
 
 def check_tail_regression(session, cfg: SelfCheckConfig, trade_date: date) -> int:
-    """尾部回退：源表最新时间戳是否早于上一交易日（应对尾删重建竞态）。"""
+    """尾部回退：源表最新时间戳是否早于上一交易日（应对尾删重建竞态）。
+
+    ★ 2026-10-09：改用 :func:`_time_col` 探测列名，替代原先"先试 bucket 再试 ts"
+      的双层 try（后者对 ``bar_15m`` 能撞对，但表一多就容易漏；且失败仅
+      ``warning``，与「检查通过」无法区分）。
+    """
     n = 0
     for table in ("bar_15m", "bar_30m", "bar_60m", "minute_bar"):
+        tc = _time_col(session, table)
+        if tc is None:
+            logger.error(f"[data_selfcheck] {table} **尾部回退检查未执行**：无时间列")
+            continue
         try:
-            mx = session.execute(text(f"SELECT max(bucket) FROM {table}")).scalar()
-        except Exception:  # noqa: BLE001
+            mx = session.execute(text(f"SELECT max({tc}) FROM {table}")).scalar()
+        except Exception as e:  # noqa: BLE001
             session.rollback()
-            try:
-                mx = session.execute(text(f"SELECT max(ts) FROM {table}")).scalar()
-            except Exception as e:  # noqa: BLE001
-                session.rollback()
-                logger.warning(f"[data_selfcheck] {table} 尾部检查跳过：{e}")
-                continue
+            logger.error(f"[data_selfcheck] {table}（用列 {tc}）尾部检查**未执行**：{e}")
+            continue
         if mx is None:
+            logger.error(f"[data_selfcheck] {table} 全表为空，尾部回退检查无从判断")
             continue
         d = mx.date() if hasattr(mx, "date") else mx
         if d < trade_date - timedelta(days=3):

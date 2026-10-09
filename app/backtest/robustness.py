@@ -166,18 +166,45 @@ def cost_sensitivity(trades: Sequence[dict],
 
 def random_entry_mc(trades: Sequence[dict], n: int = 1000,
                     cost_bp: float = 5.0, seed: int = 42) -> dict:
-    """随机入场蒙特卡洛：真实净¥在随机分布中的分位（p 越小越显著）。"""
+    """随机入场蒙特卡洛：真实净¥在随机分布中的分位（p 越小越显著）。
+
+    零假设的语义：**"入场时机与方向是随机的"** —— 故保持每笔的 risk / mult /
+    成本不变，只把 ``R`` 的**符号随机化**（幅度沿用真实分布，因为策略的
+    止盈止损结构决定了幅度分布，不该被"随机入场"改变）。
+
+    ★ 2026-10-09 修复（PR review C3）——原实现是**双重错误**，使发布硬闸门
+      ``p <= 0.05``（robustness.py:run_six_checks 的pass 判据）几乎恒真：
+
+      ① ``rng.random()`` 当成收益率用。``U(0,1)`` **恒为正、均值 0.5、范围 [0,1)**，
+         而真实 ``R`` 可正可负、也可 >1。对照分布因此被**压窄并整体右移**，
+         ``p = P(对照 ≥ real)`` 被系统性低估 → 看起来总是"显著"。
+         另有一行``sum(...) * len(risks) * 0`` 是**死代码**（恒 0），说明这段
+         从未被真正验证过。
+      ② 对照侧**没扣成本**，而 ``real`` 是 :func:`trade_pnl` 的**净额**
+         （已减cost_yuan 或 bp 成本）→ 分子分母**不同量纲**，对比本身无意义。
+         这与 ``fusion_signal_log.pnl``「收益率当金额」是同构错误。
+
+      修法：``r_signed = |R| × 随机方向``，并对每笔按与 :func:`trade_pnl`
+      **完全相同**的口径扣成本。
+    """
     rng = random.Random(seed)
     real = sum(trade_pnl(t, cost_bp) for t in trades)
     if not trades:
         return dict(real=0.0, p=None)
-    risks = [t["R"] * t["risk"] * t.get("mult", 1.0) for t in trades]
+
     hits = 0
     for _ in range(n):
-        s = sum(rng.choice(risks) for _ in risks) / len(risks) * len(risks) * 0
-        # 用打乱的 R 序列构造对照：保持笔数与 risk 分布，方向随机
-        s = sum(r * rng.choice([-1, 1]) * t["risk"] * t.get("mult", 1.0)
-                for r, t in zip((rng.random() for _ in trades), trades))
+        s = 0.0
+        for t in trades:
+            mult = t.get("mult", 1.0) or 1.0
+            r_signed = abs(float(t["R"])) * rng.choice((-1.0, 1.0))
+            gross = r_signed * float(t["risk"]) * mult
+            # 成本与方向无关，必须同口径扣除（否则对照分布整体偏高）
+            if t.get("cost_yuan") is not None:
+                cost = float(t["cost_yuan"])
+            else:
+                cost = cost_bp / 2.0 / 1e4 * (float(t["ep"]) + float(t["xp"])) * mult
+            s += gross - cost
         if s >= real:
             hits += 1
     return dict(real=round(real, 2), p=round(hits / n, 4), n=n)

@@ -22,6 +22,8 @@ EMA / ATR 实现与 mtf_engine 相同（ewm adjust=False / Wilder RMA）。
 """
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
@@ -39,16 +41,45 @@ from app.models import HourlyBar
 
 # 因子偏置乘子上下文（因子接入 PRD §5）：模块级懒加载并缓存，避免每次评估都查库。
 _factor_ctx_cache = None
+_factor_ctx_loaded_at: float = 0.0
+
+#: 因子上下文缓存的存活时长（秒）。
+#:
+#: ★ 2026-10-09 修（PR review I3）：原实现是 ``_factor_ctx_cache = None`` 单例，
+#:   **永不刷新**。而 ``factor_v1v6`` 作业每天 16:20 才写入当天因子值——
+#:   于是进程当天**首次**扫描（09:05）加载的快照会一直用到进程结束：
+#:     · 当天 16:20 之后写入的新因子值**当天永不可见**（要等次日重启才生效）；
+#:     · ``factor_registry`` 的 enabled / default_weight 改动同样不生效——
+#:       运维改库后行为完全不变，属典型「显示可调、实际不生效」。
+#:   更隐蔽的是：因子**缺失**时 ``compute_bias_multipliers`` 会以
+#:   ``degrade_missing='floor'`` **静默降级为地板值**（cap 0.5 / gate -1.0），
+#:   而 gate=-1.0 会让该品种**永不开仓**，只在日志留一行 warning——
+#:   故障表现是「部分品种从此不再产生任何信号」，极易被误判为策略自然失效。
+#:
+#: 取值 300s（与 ``barstore._SPEC_TTL_SEC`` 对齐）：因子是低频数据（每日一批），
+#:   5 分钟足够新鲜，又不至于让每轮扫描都查库。
+_FACTOR_CTX_TTL_SEC = 300.0
 
 
 def _get_factor_ctx() -> FactorContext | None:
-    global _factor_ctx_cache
-    if _factor_ctx_cache is None:
-        try:
-            _factor_ctx_cache = FactorContext.load()
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[fusion] 因子上下文加载失败，偏置乘子置中性: {e}")
-            _factor_ctx_cache = False
+    """取因子上下文（**带 TTL 刷新**）。
+
+    ★ 2026-10-09：改为带过期时间的缓存（原因见 ``_FACTOR_CTX_TTL_SEC``）。
+      加载失败时缓存 ``False`` 的行为不变，但失败也只缓存到 TTL 到期，
+      不再是「一次失败、进程内永久失效」。
+    """
+    global _factor_ctx_cache, _factor_ctx_loaded_at
+    now = time.time()
+    if (_factor_ctx_cache is not None
+            and (now - _factor_ctx_loaded_at) < _FACTOR_CTX_TTL_SEC):
+        return _factor_ctx_cache or None
+    try:
+        _factor_ctx_cache = FactorContext.load()
+        _factor_ctx_loaded_at = now
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[fusion] 因子上下文加载失败，偏置乘子置中性: {e}")
+        _factor_ctx_cache = False
+        _factor_ctx_loaded_at = now
     return _factor_ctx_cache or None
 
 
