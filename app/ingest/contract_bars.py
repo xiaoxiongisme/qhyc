@@ -29,6 +29,7 @@ import pandas as pd
 
 from app.core import symbol_code as SC
 from app.core.logging import logger
+from app.ingest.blocked_varieties import is_blocked
 from app.models import ContractDaily
 
 
@@ -225,6 +226,8 @@ def collect_contract_bars(
 
     stats: dict[str, Any] = {"contracts": 0, "rows": 0, "by_source": {}, "errors": []}
     for product, near_c, dom_c in rows:
+        if is_blocked(product):
+            continue
         contracts = {c for c in (near_c, dom_c) if c}
         if not contracts:
             continue

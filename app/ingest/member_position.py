@@ -40,6 +40,7 @@ import pandas as pd
 
 from app.core import symbol_code as SC
 from app.core.logging import logger
+from app.ingest.blocked_varieties import is_blocked_symbol
 from app.models import MemberPositionRank
 
 
@@ -125,7 +126,7 @@ def _build_exchange_coverage() -> dict[str, dict]:
         },
         "INE": {  # K4: 持仓硬上限 68/73
             "active": False,
-            "symbols": ["SC", "BC", "EC", "LU", "NR"],
+            "symbols": ["SC", "EC", "LU"],
             "known_issue": "K4",
             "reason": "akshare 无 INE 持仓/库存接口（§18.13 K4）",
         },
@@ -427,9 +428,15 @@ def upsert_rank(session, rows: list[dict]) -> int:
 
     # 去重（同一 key 内取最后一条）
     seen = {}
+    dropped = 0
     for r in rows:
+        if is_blocked_symbol(r.get("symbol")):
+            dropped += 1
+            continue
         k = (r["trade_date"], r["exchange"], r["symbol"], r["member"], r["version"])
         seen[k] = r
+    if dropped:
+        logger.info(f"[member_position] 封禁品种拦截 {dropped} 行（不再采集）")
     rows = list(seen.values())
 
     stmt = pg_insert(MemberPositionRank).values(rows)

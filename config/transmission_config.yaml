@@ -22,25 +22,20 @@ sectors:
     roles: { I: upstream, JM: upstream, J: midstream, RB: downstream, HC: downstream, SF: midstream, SM: upstream, SS: downstream }
   energy_chem:
     name: 化工能源
-    products: [SC, FU, LU, BU, TA, PX, EG, MA, PP, L, V, EB, SA, FG, UR, RU, NR, SP, SH, PR]
-    roles: { SC: upstream, PX: midstream, TA: downstream, FU: downstream, LU: downstream, BU: downstream, SA: upstream, FG: downstream, MA: midstream, EG: midstream, PP: midstream, L: midstream, V: midstream, EB: midstream, UR: midstream, RU: midstream, NR: midstream, SP: midstream, SH: midstream, PR: downstream }
+    products: [SC, FU, LU, BU, TA, PX, EG, MA, PP, L, V, EB, SA, FG, UR, RU, SP, SH, PR]
+    roles: { SC: upstream, PX: midstream, TA: downstream, FU: downstream, LU: downstream, BU: downstream, SA: upstream, FG: downstream, MA: midstream, EG: midstream, PP: midstream, L: midstream, V: midstream, EB: midstream, UR: midstream, RU: midstream, SP: midstream, SH: midstream, PR: downstream }
   agri:
     name: 农产品
-    products: [A, B, M, Y, P, RM, OI, C, CS, SR, CF, CY, AP, CJ, PK, LH, JD]
-    roles: { A: upstream, B: upstream, C: upstream, M: midstream, Y: midstream, P: midstream, RM: midstream, OI: midstream, CS: downstream, SR: midstream, CF: upstream, CY: downstream, AP: midstream, CJ: midstream, PK: midstream, LH: downstream, JD: midstream }
+    products: [A, M, Y, P, RM, OI, C, SR, CF, AP, CJ, PK, LH, JD]
+    roles: { A: upstream, C: upstream, M: midstream, Y: midstream, P: midstream, RM: midstream, OI: midstream, SR: midstream, CF: upstream, AP: midstream, CJ: midstream, PK: midstream, LH: downstream, JD: midstream }
   nonferrous:
     name: 有色/新能源金属
-    products: [CU, AL, ZN, PB, NI, SN, AO, SI, PS, LC, BC]
-    roles: { CU: midstream, AL: midstream, ZN: midstream, PB: midstream, NI: midstream, SN: midstream, AO: upstream, SI: midstream, PS: downstream, LC: downstream, BC: midstream }
+    products: [CU, AL, ZN, PB, NI, SN, AO, SI, PS, LC]
+    roles: { CU: midstream, AL: midstream, ZN: midstream, PB: midstream, NI: midstream, SN: midstream, AO: upstream, SI: midstream, PS: downstream, LC: downstream }
   precious:
     name: 贵金属
     products: [AU, AG]
     roles: { AU: upstream, AG: midstream }
-  financial:
-    name: 金融期货
-    products: [IF, IH, IC, IM, T, TF, TS, TL]
-    roles: {}
-    predict_enabled: false     # §16.1 默认不纳入本轮预测范围（开关可开）
 
 # 产业链先验链路（§16.2 第 1 层）
 # 每条：src→dst, lag_days(0=当日/1/5), strength(0-1), cost_ratio(成本占比参考，可空)
@@ -54,7 +49,6 @@ chains:
   - { src: PX, dst: TA, lag_days: 1, strength: 0.70, cost_ratio: 0.70 }
   - { src: SC, dst: EG, lag_days: 1, strength: 0.40, cost_ratio: 0.40 }
   - { src: SC, dst: RU, lag_days: 1, strength: 0.35, cost_ratio: 0.30 }
-  - { src: RU, dst: NR, lag_days: 1, strength: 0.80, cost_ratio: 0.80 }
   # --- 成本链：煤焦钢 ---
   - { src: JM, dst: J, lag_days: 1, strength: 0.80, cost_ratio: 0.75 }
   - { src: J, dst: RB, lag_days: 1, strength: 0.45, cost_ratio: 0.30 }
@@ -66,10 +60,7 @@ chains:
   - { src: SA, dst: FG, lag_days: 1, strength: 0.70, cost_ratio: 0.30 }
   - { src: SA, dst: SH, lag_days: 1, strength: 0.40, cost_ratio: 0.30 }
   # --- 成本链：农产品压榨 ---
-  - { src: B, dst: M, lag_days: 1, strength: 0.60, cost_ratio: 0.80 }
   - { src: A, dst: M, lag_days: 1, strength: 0.30, cost_ratio: 0.30 }
-  - { src: B, dst: Y, lag_days: 1, strength: 0.45, cost_ratio: 0.60 }
-  - { src: C, dst: CS, lag_days: 1, strength: 0.80, cost_ratio: 0.90 }
   # --- 替代/互补 ---
   - { src: M, dst: RM, lag_days: 0, strength: 0.70, cost_ratio: null }
   - { src: Y, dst: P, lag_days: 0, strength: 0.70, cost_ratio: null }

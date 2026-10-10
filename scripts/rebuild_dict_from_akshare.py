@@ -24,6 +24,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from app.core.db import session_scope
+from app.ingest.blocked_varieties import is_blocked
 
 BROKER_MARKUP = 0.01
 NOTICE_CSV = os.path.join("db", "seed", "dim_trading_cost_seed.csv")
@@ -163,7 +164,17 @@ def apply_db(varieties):
     """
     up = 0
     with session_scope() as s:
+        # 预清：确保任何被剔除品种的历史行不会残留
+        from app.ingest.blocked_varieties import blocked_list
+        blk = blocked_list()
+        if blk:
+            s.execute(text(
+                "DELETE FROM dim_variety WHERE variety_code ~ :re"),
+                {"re": r"^(?:" + "|".join(blk) + r")(\d*)?$"})
+            s.flush()
         for vc, r in varieties.items():
+            if is_blocked(vc):
+                continue
             p = {"v": vc, "nm": r["official_name"], "ex": r["exchange"],
                  "mul": r.get("multiplier"), "tick": r.get("tick_size"),
                  "mrl": r.get("margin_base"), "mrs": r.get("margin_rate_short"),
@@ -195,6 +206,8 @@ def apply_db(varieties):
     ins = skip = 0
     with session_scope() as s:
         for vc, r in varieties.items():
+            if is_blocked(vc):
+                continue
             if r.get("ak_is_pct"):
                 continue
             for act, key in (("OPEN", "ak_open_fee"), ("CLOSE_YEST", "ak_close_fee"),

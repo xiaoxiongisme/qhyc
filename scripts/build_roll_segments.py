@@ -299,8 +299,11 @@ def apply_positivity(g, segs):
     return shift
 
 def ensure_table(cur):
+    # 注意：l2_adj.roll_segment 才是真实表；public.roll_segment 只是一层透传视图。
+    # search_path="$user",public 会让非限定名命中视图，导致 CREATE INDEX 失败、脚本跑不下去。
+    # 故这里显式限定 l2_adj.roll_segment（修复「roll_segment 从未被调度」的根因）。
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS roll_segment (
+        CREATE TABLE IF NOT EXISTS l2_adj.roll_segment (
             symbol      TEXT           NOT NULL,
             freq        TEXT           NOT NULL,
             seg_no      INT            NOT NULL,
@@ -315,14 +318,14 @@ def ensure_table(cur):
             PRIMARY KEY (symbol, freq, seg_no)
         )""")
     cur.execute("CREATE INDEX IF NOT EXISTS ix_roll_segment_lookup "
-                "ON roll_segment (symbol, freq, seg_start)")
+                "ON l2_adj.roll_segment (symbol, freq, seg_start)")
     # 幂等补列：已存在的老表（本地就是脚本建的，云端走 migration）也能加上
-    cur.execute("ALTER TABLE roll_segment ADD COLUMN IF NOT EXISTS "
+    cur.execute("ALTER TABLE l2_adj.roll_segment ADD COLUMN IF NOT EXISTS "
                 "price_shift NUMERIC(20,4) NOT NULL DEFAULT 0")
 
 
 def upsert_segments(cur, sym, freq, segs):
-    cur.execute("DELETE FROM roll_segment WHERE symbol=%s AND freq=%s", (sym, freq))
+    cur.execute("DELETE FROM l2_adj.roll_segment WHERE symbol=%s AND freq=%s", (sym, freq))
     if not segs:
         return 0
     rows = [(sym, freq, s['seg_no'], s['seg_start'], s['seg_end'], s['roll_ts'],
@@ -331,7 +334,7 @@ def upsert_segments(cur, sym, freq, segs):
              s.get('change_source'), s.get('contract_code')) for s in segs]
     psycopg2.extras.execute_values(
         cur,
-        "INSERT INTO roll_segment (symbol,freq,seg_no,seg_start,seg_end,roll_ts,"
+        "INSERT INTO l2_adj.roll_segment (symbol,freq,seg_no,seg_start,seg_end,roll_ts,"
         "roll_delta,cum_offset,price_shift,n_bars,src_freq,"
         "change_source,contract_code) VALUES %s", rows)
     return len(rows)
@@ -506,14 +509,36 @@ def main():
     except Exception as e:  # noqa: BLE001
         print(f"  [warn] 段来源核算失败：{e}")
 
-    susp = [q for q in quality if q[2] > 5]
+    # 真正的"疑似误检"= 序列非单调（存在回退步）；单纯高频(月度合约逐月换月)属正常，不当误报
+    backward = set()
+    try:
+        cur.execute("""
+            WITH seg AS (
+                SELECT symbol, seg_start,
+                       (2000 + (substring(contract_code from '\\d{2}')::int)) * 12
+                         + (substring(contract_code from '\\d{2}$')::int) AS ord
+                FROM roll_segment WHERE freq='min15' AND contract_code IS NOT NULL
+            ),
+            step AS (
+                SELECT symbol, ord - LAG(ord) OVER (PARTITION BY symbol ORDER BY seg_start) AS d
+                FROM seg
+            )
+            SELECT symbol, bool_or(d < 0) FROM step WHERE d IS NOT NULL GROUP BY symbol
+        """)
+        backward = {s for s, has in cur.fetchall() if has}
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] 回退步检测失败：{e}")
+
+    susp = [(q, '疑似误检') for q in quality if q[2] > 5 and q[0] in backward]
+    frequent = [(q, '频繁换月(正常)') for q in quality if q[2] > 5 and q[0] not in backward]
     print('\n' + '=' * 92)
-    print('【数据质量】15m 年换月频次异常（正常 2~3 次/年，>5 疑似误检）')
+    print('【数据质量】15m 年换月频次（正常 2~3 次/年；>5 且序列非单调=疑似误检，>5 但逐月前进=月度合约正常）')
     print('=' * 92)
-    print(f"{'品种':<10}{'换月数':>8}{'次/年':>9}{'未复权最低价':>14}{'判定':>12}")
-    for sym, n, py, lo in sorted(susp, key=lambda x: -x[2]):
-        print(f"{sym:<10}{n:>8}{py:>9.1f}{lo:>14.1f}{'疑似误检':>12}")
-    print(f"\n  异常 {len(susp)}/{len(quality)} 品种 | 总耗时 {round(time.time()-t0)}s")
+    print(f"{'品种':<10}{'换月数':>8}{'次/年':>9}{'未复权最低价':>14}{'判定':>16}")
+    for q, tag in sorted(susp + frequent, key=lambda x: -x[0][2]):
+        sym, n, py, lo = q
+        print(f"{sym:<10}{n:>8}{py:>9.1f}{lo:>14.1f}{tag:>16}")
+    print(f"\n  疑似误检 {len(susp)}/{len(quality)} 品种 | 高频正常 {len(frequent)}/{len(quality)} | 总耗时 {round(time.time()-t0)}s")
     c.close()
     return 0
 

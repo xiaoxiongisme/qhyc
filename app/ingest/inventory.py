@@ -25,13 +25,13 @@ from app.models import Inventory
 
 # akshare em 接口品种代号（与品种简称）
 PRODUCT_TO_EM_SYM = {
-    "A": "a", "AG": "ag", "AL": "al", "AU": "au", "B": "b", "BU": "bu",
-    "C": "c", "CF": "cf", "CS": "cs", "CU": "cu", "EB": "eb", "EG": "eg",
+    "A": "a", "AG": "ag", "AL": "al", "AU": "au", "BU": "bu",
+    "C": "c", "CF": "cf", "CU": "cu", "EB": "eb", "EG": "eg",
     "FG": "fg", "I": "i", "J": "j", "JM": "jm", "L": "l", "M": "m",
-    "MA": "ma", "NI": "ni", "NR": "nr", "O": "o", "P": "p", "PB": "pb",
+    "MA": "ma", "NI": "ni", "O": "o", "P": "p", "PB": "pb",
     "PF": "pf", "PG": "pg", "PP": "pp", "RB": "rb", "RM": "rm", "RU": "ru",
     "SA": "sa", "SC": "sc", "SF": "sf", "SM": "sm", "SN": "sn", "SR": "sr",
-    "SS": "ss", "TA": "ta", "V": "v", "Y": "y", "ZC": "zc", "ZN": "zn",
+    "SS": "ss", "TA": "ta", "V": "v", "Y": "y", "ZN": "zn",
 }
 
 
@@ -157,10 +157,10 @@ def collect_inventory_em(session, products: list[str], exchange_map: dict[str, s
 
 def _default_exchange_map() -> dict[str, str]:
     """品种→交易所启发式（用于入库存档时打 exchange 标签）"""
-    dce = {"A", "B", "C", "CS", "EG", "FB", "BB", "I", "J", "JM", "L", "M", "P", "PP", "V", "Y"}
-    czce = {"AP", "CF", "CJ", "CY", "FG", "JR", "LR", "MA", "OI", "PF", "PK", "PM", "RI", "RM", "SA", "SF", "SM", "SR", "TA", "UR", "WH", "WS", "WT", "ZC"}
-    shfe = {"AG", "AL", "AU", "BU", "CU", "FU", "HC", "NI", "NR", "PB", "RB", "RU", "SC", "SN", "SP", "SS", "ZN"}
-    ine = {"BC", "EC", "LU", "NR"}
+    dce = {"A", "C", "EG", "I", "J", "JM", "L", "M", "P", "PP", "V", "Y"}
+    czce = {"AP", "CF", "CJ", "FG", "MA", "OI", "PF", "PK", "RM", "SA", "SF", "SM", "SR", "TA", "UR", "WS", "WT"}
+    shfe = {"AG", "AL", "AU", "BU", "CU", "FU", "HC", "NI", "PB", "RB", "RU", "SC", "SN", "SP", "SS", "ZN"}
+    ine = {"EC", "LU"}
     gfex = {"SI", "LC"}
     m: dict[str, str] = {}
     for p in dce:

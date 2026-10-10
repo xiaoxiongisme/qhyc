@@ -8,6 +8,7 @@ from app.api.routers import (
     calendar,
     dashboard,
     execution,   # P0-1 执行反解层
+    execution_bridge,   # P0-2 执行桥接（供无限易 PythonGO 取单/回报）
     fusion,      # 融合策略推送留痕（防漏看回查）
     health,
     imports,
@@ -41,6 +42,8 @@ api_router.include_router(position.router, prefix="", tags=["position"], depende
 api_router.include_router(fusion.router, prefix="", tags=["fusion"], dependencies=_auth)
 # P0-1 执行反解层（docs/PRD_P0-1_执行反解层_20261002.md）
 api_router.include_router(execution.router, prefix="/execution", tags=["execution"], dependencies=_auth)
+# P0-2 执行桥接（无限易 PythonGO 侧 QhycBridge 使用；docs/... 见 scripts/infinitrader/）
+api_router.include_router(execution_bridge.router, prefix="/execution", tags=["execution-bridge"], dependencies=_auth)
 # M8 决策链路容器化（docs/M8_决策链路容器化_PRD_20260922.md §8）
 api_router.include_router(pipeline.router, prefix="/pipeline", tags=["pipeline"], dependencies=_auth)
 

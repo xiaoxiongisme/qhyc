@@ -121,6 +121,21 @@ def ema(s, n: int):
     return pd.Series(np.asarray(s, float)).ewm(span=n, adjust=False).mean().to_numpy()
 
 
+def htf_direction(c, ema_k: int = 140):
+    """HTF 方向门控（单一真源）：小时线 close 与 EMA(ema_k) 比较，取**前一根**方向。
+
+    ⚠ 生产 `evaluate_symbol` 与**所有**回测脚本都必须调用本函数，不得各自重算。
+    2026-10-10 实测教训：回测脚本曾自行用**日线** EMA140 重算，与生产（小时 EMA140）
+    逐 bar 一致率仅 **67.8%**，且该分叉静默地改变了全部回测结论（同一选品集下 MDD 差 44.9%）。
+
+    返回 int 数组：+1 只允许多 / −1 只允许空 / 0 两侧都允许（仅首根，无门控）。
+    """
+    c = np.asarray(c, float)
+    e = ema(c, ema_k)
+    dir_raw = np.where(c > e, 1, -1)
+    return np.concatenate([[0], dir_raw[:-1]])   # 用前一根方向门控（对齐已收盘，无前视）
+
+
 def atr14(h, l, c, n: int = 14):
     """Wilder RMA 的 ATR(n)。"""
     h = np.asarray(h, float)
@@ -829,9 +844,7 @@ def evaluate_symbol(session, symbol: str, p) -> dict:
     h = df["high"].to_numpy(float)
     l = df["low"].to_numpy(float)
     c = df["close"].to_numpy(float)
-    ema140 = ema(c, p.ema_k)
-    dir_raw = np.where(c > ema140, 1, -1)
-    htf_dir = np.concatenate([[0], dir_raw[:-1]])  # 用前一根方向门控（对齐已收盘，无前视）
+    htf_dir = htf_direction(c, p.ema_k)   # 单一真源（见 htf_direction；无前视）
     det = fusion_state_detail(
         o, h, l, c, htf_dir, p,
         symbol=symbol,

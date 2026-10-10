@@ -28,10 +28,21 @@ from app.data.cost import cost_coefficients, cost_yuan_at, CostNotFoundError
 # （该模块只存在于 WB 手工 docker cp 的 /tmp 桥接文件，镜像重建即断链——
 #  工单 A1）。现改为与相邻行一致的规范导入；别名模块
 #  app/strategies/fusion_signal_exp.py 仍保留，供其它未知调用方使用。
-from app.strategies.fusion_signal import walk_fusion_states, ema, atr14, adx14
+from app.strategies.fusion_signal import (walk_fusion_states, ema, atr14, adx14,
+                                          htf_direction)
 
 OUT = '/tmp/scan3_out'
-CACHE = '/tmp/stop_cali_cache.pkl'      # 与 v1/v2 共用（load_symbol 结构未变）
+# ── 方向层口径（W1, 2026-10-10）────────────────────────────────────────────
+# 生产 `evaluate_symbol` 用**小时** EMA140 + 取前一根方向（见 fusion_signal.htf_direction）。
+# 本脚本原先自行用**日线** EMA140（≈7 个月）重算，与生产逐 bar 一致率仅 67.8%。
+# 默认 hourly = 生产口径；FUSION_DIR_MODE=daily 复现旧结果，仅供口径对照，勿用于结论。
+DIR_MODE = os.environ.get('FUSION_DIR_MODE', 'hourly').strip().lower()
+if DIR_MODE not in ('hourly', 'daily'):
+    raise SystemExit('FUSION_DIR_MODE 只能是 hourly / daily，收到 %r' % DIR_MODE)
+EMA_K = 140
+# 缓存必须按口径分文件：否则改了口径仍读旧缓存，表现为"参数看似生效实则无效"
+# （跨项目记忆 #8 的同型陷阱）。
+CACHE = '/tmp/stop_cali_cache_%s.pkl' % DIR_MODE
 os.makedirs(OUT, exist_ok=True)
 
 WARMUP_DAYS = 200
@@ -193,19 +204,51 @@ def load_symbol(sym, engine):
     raw_close = b60['close'].to_numpy(float)
 
     n = len(b60)
+
+    # ---- 方向层（HTF 门控）：默认 = 生产口径「小时 EMA140 + 取前一根」----
+    # 价基按用户 D2 决策 = 物化复权价（cl）；与生产原始价之差是**已接受的独立分叉**
+    # （生产读 l0_raw.hourly_bar 不复权），但时间框架与 shift 必须一致 —— 这才是 W1 修的。
+    if DIR_MODE == 'hourly':
+        htf_dir = htf_direction(cl, EMA_K)
+    else:
+        # 旧口径（日线 EMA140，按前一已完成交易日广播）—— 仅供口径对照，勿用于结论
+        dclose_ = db['close'].to_numpy(float)
+        ddir = np.where(dclose_ > ema(dclose_, EMA_K), 1, -1)
+        dbd_ = np.array([pd.Timestamp(x).date() for x in db['trade_date']],
+                        dtype='datetime64[D]')
+        bd_ = np.array([np.datetime64(x) for x in b60['d']], dtype='datetime64[D]')
+        pos_ = np.searchsorted(dbd_, bd_, side='left') - 1
+        htf_dir = np.zeros(n, dtype=int)
+        v_ = pos_ >= 0
+        htf_dir[v_] = ddir[pos_[v_]]
+
+    # 日线 ATR：仅 `use_daily_atr=True` 的变体消费（显式开关，非静默分叉），保持原口径
     dclose = db['close'].to_numpy(float)
-    dema = ema(dclose, 140)
-    ddir = np.where(dclose > dema, 1, -1)
     datr = atr14(db['high'].to_numpy(float), db['low'].to_numpy(float), dclose, 14)
     dbd = np.array([pd.Timestamp(x).date() for x in db['trade_date']],
                    dtype='datetime64[D]')
     bd = np.array([np.datetime64(x) for x in b60['d']], dtype='datetime64[D]')
     pos = np.searchsorted(dbd, bd, side='left') - 1
     valid = pos >= 0
-    htf_dir = np.zeros(n, dtype=int)
-    htf_dir[valid] = ddir[pos[valid]]
     daily_atr = np.full(n, np.nan)
     daily_atr[valid] = datr[pos[valid]]
+
+    # ---- W3 非退化自检：脏数据必须 fail loud，不得静默产出"看着合理"的数字 ----
+    # 2026-10-10 事故：10 品种全历史 NaN + 多变体逐位相同，都没被拦住。
+    n_bad = int((~np.isfinite(cl)).sum())
+    if n_bad == n:
+        raise ValueError('%s: 复权 OHLC 全为 NaN —— l2_adj.bar_*m_ba 数据退化' % sym)
+    if n_bad > max(50, 0.02 * n):
+        raise ValueError('%s: 复权价 NaN %d/%d (%.1f%%) —— 物化表疑陈旧，应重建'
+                         % (sym, n_bad, n, 100.0 * n_bad / n))
+    nz = htf_dir[htf_dir != 0]
+    if len(nz) and len(np.unique(nz)) < 2:
+        raise ValueError('%s: htf_dir 恒为 %d —— 方向层退化（价格或指标异常）'
+                         % (sym, int(nz[0])))
+    # 复权后不应再有换月断层；单根 |Δ|>20% 记为跳空告警（汇总，不 raise，避免误伤真实跳空）
+    r0 = cl[:-1]
+    ret = np.abs(np.diff(cl) / np.where(r0 == 0, np.nan, r0))
+    n_jump20 = int(np.nansum(ret > 0.20))
 
     g = b60.groupby('d', sort=True).agg(raw_last=('close', 'last'))
     day_dates = np.array([np.datetime64(x) for x in g.index], dtype='datetime64[D]')
@@ -220,7 +263,8 @@ def load_symbol(sym, engine):
     return dict(sym=sym, o=o, h=h, l=l, c=cl, raw_close=raw_close,
                 dts=b60['dt'].tolist(), days=[np.datetime64(x) for x in b60['d']],
                 htf_dir=htf_dir, daily_atr=daily_atr, close_map=close_map,
-                ma20=ma20, adx=adx_arr, atr=atr_arr, sym_cut=sym_cut)
+                ma20=ma20, adx=adx_arr, atr=atr_arr, sym_cut=sym_cut,
+                n_jump20=n_jump20, dir_mode=DIR_MODE)
 
 
 # ---------------- 事件生成 ----------------
@@ -558,6 +602,10 @@ def main():
 
     margin, msrc = load_margin_map(engine, universe)
     log('margin: %d syms, broker=%d' % (len(margin), sum(1 for v in msrc.values() if v == 'broker')))
+    _nj_syms = sum(1 for sd in data.values() if sd.get('n_jump20', 0))
+    _nj_bars = sum(sd.get('n_jump20', 0) for sd in data.values())
+    log('W3 selfcheck: dir_mode=%s | %d syms | %d syms 含 |Δ|>20%% 跳空 (合计 %d 根)'
+        % (DIR_MODE, len(data), _nj_syms, _nj_bars))
 
     all_days = sorted({d for sd in data.values() for d in sd['days']})
     days_global = np.array(all_days, dtype='datetime64[D]')

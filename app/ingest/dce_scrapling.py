@@ -474,11 +474,18 @@ def save_rows(rows: list[dict]) -> int:
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     from app.core.db import get_engine
+    from app.ingest.blocked_varieties import is_blocked_symbol
     from app.models import MemberPositionRank
 
     seen: dict[tuple, dict] = {}
+    dropped = 0
     for r in rows:
+        if is_blocked_symbol(r.get("symbol")):
+            dropped += 1
+            continue
         seen[(r["trade_date"], r["exchange"], r["symbol"], r["member"], r["version"])] = r
+    if dropped:
+        _log(f"[dce_scrapling] 封禁品种拦截 {dropped} 行（不再采集）")
     data = list(seen.values())
 
     eng = get_engine()

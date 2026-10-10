@@ -16,9 +16,11 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import yaml
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
+
+from app.ingest.blocked_varieties import blocked_list
 
 from app.core.config import PROJECT_ROOT
 from app.core.logging import logger
@@ -33,7 +35,7 @@ def load_transmission_config() -> dict:
 
 
 def sync_sector_map(session: Session) -> int:
-    """yaml 分类 → sector_map（幂等 upsert）"""
+    """yaml 分类 → sector_map（幂等 upsert；被剔品种一并清退）"""
     cfg = load_transmission_config()
     rows = []
     for sector, spec in (cfg.get("sectors") or {}).items():
@@ -51,7 +53,12 @@ def sync_sector_map(session: Session) -> int:
                     "src": "yaml",
                 }
             )
+    # 清退用户剔除（不再观察）的品种：其数据已删，分类亦不应保留
+    blk = blocked_list()
+    if blk:
+        session.execute(delete(SectorMap).where(SectorMap.product.in_(blk)))
     if not rows:
+        session.commit()
         return 0
     stmt = pg_insert(SectorMap).values(rows)
     stmt = stmt.on_conflict_do_update(
@@ -252,7 +259,17 @@ def sync_prior_weights(session: Session) -> int:
                 ),
             }
         )
+    # 清退涉及被剔品种的产业链先验
+    blk = blocked_list()
+    if blk:
+        session.execute(
+            delete(TransmissionWeight).where(
+                TransmissionWeight.src_product.in_(blk)
+                | TransmissionWeight.dst_product.in_(blk)
+            )
+        )
     if not rows:
+        session.commit()
         return 0
     stmt = pg_insert(TransmissionWeight).values(rows)
     stmt = stmt.on_conflict_do_update(

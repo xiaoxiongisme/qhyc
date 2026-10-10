@@ -22,6 +22,7 @@ import pandas as pd
 
 from app.core import symbol_code as SC
 from app.core.logging import logger
+from app.ingest.blocked_varieties import is_blocked
 from app.models import SpotBasis
 
 
@@ -104,6 +105,8 @@ def fetch_spot_basis(
             continue
         sym = _to_str(r.get("symbol"))
         if not sym:
+            continue
+        if is_blocked(sym):
             continue
         near_c = _norm_contract(r.get("near_contract"), d)
         dom_c = _norm_contract(r.get("dominant_contract"), d)

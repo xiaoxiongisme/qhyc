@@ -41,10 +41,9 @@ _PRODUCT_EXCHANGE = {
     "ZN": "SHFE", "PB": "SHFE", "SN": "SHFE", "NI": "SHFE", "SS": "SHFE",
     "FU": "SHFE", "BU": "SHFE",
     "M": "DCE", "Y": "DCE", "I": "DCE", "JM": "DCE", "J": "DCE", "P": "DCE",
-    "C": "DCE", "A": "DCE", "B": "DCE", "L": "DCE", "V": "DCE", "PP": "DCE",
+    "C": "DCE", "A": "DCE", "L": "DCE", "V": "DCE", "PP": "DCE",
     "EG": "DCE", "EB": "DCE",
-    "IF": "CFFEX", "IC": "CFFEX", "IH": "CFFEX", "T": "CFFEX", "TF": "CFFEX", "TS": "CFFEX",
-    "SC": "INE", "NR": "INE", "LU": "INE", "BC": "INE",
+    "SC": "INE", "LU": "INE",
 }
 
 

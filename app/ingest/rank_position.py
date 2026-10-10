@@ -38,6 +38,7 @@ from typing import Iterable
 
 from app.core.db import get_engine
 from app.core.logging import logger
+from app.ingest.blocked_varieties import is_blocked_symbol
 from sqlalchemy import text
 
 VERSION = "v1.0"
@@ -197,8 +198,10 @@ def save_rows(rows: list[dict]) -> int:
         return 0
     eng = get_engine()
     n = 0
-    with eng.begin() as conn:
-        for r in rows:
+    for r in rows:
+        if is_blocked_symbol(r.get("symbol")):
+            continue
+        with eng.begin() as conn:
             conn.execute(_INSERT, r)
             n += 1
     return n
