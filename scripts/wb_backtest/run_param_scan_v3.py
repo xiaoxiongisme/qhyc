@@ -179,8 +179,17 @@ def load_margin_map(engine, universe):
 # ---------------- 每品种静态数据 ----------------
 def load_symbol(sym, engine):
     with engine.connect() as c:
+        # 只取 ba 已物化覆盖的范围：ba 落后于源表时，尾部未物化的 bar 会在
+        # left-merge 时变成 NaN（2026-10-10 实测 MA888 缺 10-09 夜盘 21:00/22:00 两根）。
+        # 截断比填充干净 —— 否则 NaN 会顺着 EMA/ATR 的递推永久污染后续全部指标。
         b60 = pd.read_sql(T("""SELECT bucket, open, high, low, close
-                               FROM l1_mkt.bar_60m WHERE symbol=:s ORDER BY bucket"""),
+                               FROM l1_mkt.bar_60m
+                               WHERE symbol=:s
+                                 AND bucket <= COALESCE(
+                                       (SELECT max(bucket) FROM l2_adj.bar_60m_ba
+                                         WHERE symbol=:s),
+                                       TIMESTAMPTZ '1970-01-01')
+                               ORDER BY bucket"""),
                           c, params={'s': sym})
         db = pd.read_sql(T("""SELECT trade_date, open, high, low, close
                               FROM l0_raw.daily_bar WHERE symbol=:s ORDER BY trade_date"""),
@@ -197,6 +206,24 @@ def load_symbol(sym, engine):
 
     with engine.connect() as _c:
         sig = apply_back_adjust_from_materialized(b60, sym, 'min60', _c)
+
+    # ---- 丢弃价格非有限的 bar（2026-10-10）--------------------------------
+    # ba 表的覆盖空洞**不只在尾部**：实测中间也有（SA888 9/14225、SC888 12/23948、
+    # SI888 6/5318）。必须丢弃，因为 atr14/ema 是**递推**——一个 NaN 会让其后全部
+    # 指标永久 NaN（atr14 的手写递推 `out[i]=a*tr[i]+(1-a)*out[i-1]` 遇 NaN 再也回不来），
+    # 表现是该品种从空洞处起**完全不入场**：静默、量级正常、极难察觉。
+    # 这里丢弃并记数（log + sd['n_drop']），暴露而不掩盖；根治在 CB 重建 ba 表。
+    _okn = (np.isfinite(sig['close'].to_numpy(float))
+            & np.isfinite(sig['open'].to_numpy(float)))
+    n_drop = int((~_okn).sum())
+    if n_drop:
+        sig = sig[_okn].reset_index(drop=True)
+        b60 = b60[_okn].reset_index(drop=True)
+        log('DROP %s: %d/%d 根价格非有限 (%.2f%%) 已丢弃（ba 覆盖空洞）'
+            % (sym, n_drop, int(_okn.size), 100.0 * n_drop / max(int(_okn.size), 1)))
+    if len(b60) < 200:
+        return None
+
     o = sig['open'].to_numpy(float)
     h = sig['high'].to_numpy(float)
     l = sig['low'].to_numpy(float)
@@ -264,15 +291,32 @@ def load_symbol(sym, engine):
                 dts=b60['dt'].tolist(), days=[np.datetime64(x) for x in b60['d']],
                 htf_dir=htf_dir, daily_atr=daily_atr, close_map=close_map,
                 ma20=ma20, adx=adx_arr, atr=atr_arr, sym_cut=sym_cut,
-                n_jump20=n_jump20, dir_mode=DIR_MODE)
+                n_jump20=n_jump20, dir_mode=DIR_MODE, n_drop=n_drop)
 
 
 # ---------------- 事件生成 ----------------
 def gen_events(sd, Prun, stop_scale, use_daily_atr):
+    """生成事件流。
+
+    ⚠ 2026-10-10 修复断链：本函数原先以 `**kw` 把 stop_scale / daily_atr 传给引擎，
+    但生产 `walk_fusion_states` **不接受**这两个形参（`stop_scale`/`daily_atr` 在 app/
+    下已无任何引用）。成因：10-07 CB 把 `fusion_signal_exp` 改成"纯 re-export"别名模块，
+    历史上"带 stop_scale 的引擎契约"随之消失 ⇒ 本函数一调用就 TypeError（主流程等于死码）。
+
+    语义等价改写（依据本文件 line 535 注释与 fusion_backtest 口径）：
+        初始止损 = stop_scale × sl_atr × ATR   ⇒  令 sl_atr' = stop_scale × sl_atr
+    `use_daily_atr` 需引擎侧的 daily_atr 支持，当前引擎没有 ⇒ 显式报错（不再静默降级，
+    否则会重演"参数看似生效实则无效"的退化）。
+    """
     sym = sd['sym']
-    kw = dict(stop_scale=stop_scale)
     if use_daily_atr:
-        kw['daily_atr'] = sd['daily_atr']
+        raise NotImplementedError(
+            "use_daily_atr 变体依赖已移除的引擎契约（daily_atr 形参）；"
+            "生产 walk_fusion_states 不支持。需要该变体请先在 fusion_signal 实现。")
+    kw = {}
+    if stop_scale is not None and float(stop_scale) != 1.0:
+        Prun = SimpleNamespace(**{**vars(Prun),
+                                  'sl_atr': float(Prun.sl_atr) * float(stop_scale)})
     cutn = np.datetime64(sd['sym_cut'])
     events = []
     prev_state, prev_lots, prev_entry_i = 0, 0, -1

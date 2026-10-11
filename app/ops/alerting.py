@@ -68,6 +68,12 @@ class AlertConfig:
         "inventory": "report_date",
         # L1 行情层（fusion 与回测的实际数据源）
         "bar_60m": "bucket",
+        # L2 后复权物化层（P1-1：bar_*_ba 须随 roll_segment + bar_* 同步；
+        # 滞后 ⇒ back_adjusted_rebuild 作业未跑/roll_segment 缺失，会静默产出错误复权价）
+        "l2_adj.bar_5m_ba": "bucket",
+        "l2_adj.bar_15m_ba": "bucket",
+        "l2_adj.bar_30m_ba": "bucket",
+        "l2_adj.bar_60m_ba": "bucket",
         # L2 因子/参考层
         "factor_value": "trade_date",
         "main_contract_map": "trade_date",

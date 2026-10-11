@@ -48,7 +48,7 @@ class FusionBacktestParams:
     entry_mode: str = "both_nm"
     cooldown_bars: int = 3
     min_bars: int = 160
-    max_bars: int = 400
+    max_bars: int = 800
     # —— V3.1~V3.4 门控/加码（与 FusionConfig 同名同义；默认 = V3.4 定稿口径）——
     # ⚠ 必须从 config 全量映射：walk_fusion_states 用 getattr(p, ...) 取值，
     #   参数对象缺字段会回退旧默认（adx_min=0 / use_sbull=True 等），

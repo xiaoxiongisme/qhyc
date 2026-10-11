@@ -287,7 +287,7 @@ fusion:
   min_bars: 160
   stale_minutes: 90         # 信号新鲜度：最新K超过则抑制「状态变化信号」
   display_max_age_min: 14400  # 播报展示上限（分钟，10天）：夜盘→早盘/周末/长假都覆盖
-  max_bars: 400
+  max_bars: 800             # 与 app/core/config.py 默认一致（2026-10-10 由 400 提至 800）
   # ---- 推送形态 ----
   push_stop_levels: true    # 推送中给出止损位 / 保本触发价
   heartbeat: true           # 定时播报持仓（每 30 分钟一档）

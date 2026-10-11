@@ -1343,6 +1343,23 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info("[scheduler] registered minute_and_bars at :07/:37 (staggered, minute-first pipeline)")
 
+    # P1-1：后复权物化 bar_*_ba 定期重建（工单 #8，依赖 l2_adj.roll_segment + l1_mkt.bar_*）。
+    # 错峰在分钟管线 :07/:37 之后 18 分钟，确保 bar_* 已落盘再 as-of join，避免读未提交快照。
+    # sp_build_l2_back_adjusted 自带触发签名（price_shift / Σcum_offset / Σepoch(seg_start) / 段数），
+    # roll_segment 任一项变化自动全量重建，否则仅增量补最新桶（廉价）。本实例为同步专用
+    # （CLOUD_SYNC_ENABLED=1）时已在上方早退分支，不会注册——由云端调度器运行。
+    sched.add_job(
+        _back_adjusted_job,
+        trigger=CronTrigger(minute="25,55", timezone=settings.env.TZ),
+        id="back_adjusted_rebuild",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=900,
+    )
+    logger.info("[scheduler] registered back_adjusted_rebuild at :25/:55 "
+                "(post bars; depends roll_segment + bar_*)")
+
     # fut_kline 增量/派生重建作业已于 2026-10-04 随 fdf 模块退役一并停用（天勤清理专项）。
     # fut_kline 表保留为孤儿表待观测，不再有写入通路（_fut_kline_job/_rebuild_fut_kline_job 已删除）。
     logger.info("[scheduler] fut_kline 增量/重建作业已停用（fdf 退役，天勤清理）")
@@ -2001,6 +2018,35 @@ def _minute_and_bars_job() -> None:
             )
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] minute_and_bars failed: {e}")
+
+
+def _back_adjusted_job() -> None:
+    """P1-1：后复权物化 l2_adj.bar_*_ba 定期重建（工单 #8）。
+
+    对 min5/min15/min30/min60 四个频率各调一次
+    ``CALL l2_adj.sp_build_l2_back_adjusted(:f)``，由存储过程内部依据
+    roll_segment 触发签名决定 full / incremental：
+
+    * roll_segment 任一维度（price_shift / Σcum_offset / Σepoch(seg_start) / 段数）
+      变化 ⇒ 全量重建该 symbol（覆盖 P0-5 等差改写、roll_segment 修正等所有口径变更）；
+    * 否则仅增量补最新桶（廉价，30 分钟一次无压力）。
+
+    写入落 l2_adj.bar_*m_ba 并刷新 back_adjusted_meta.updated_at，供
+    ``_check_freshness`` 的新鲜度告警监控。本作业依赖 ``_minute_and_bars_job``
+    已把 l1_mkt.bar_* 落盘（错峰 :25/:55），且依赖 roll_segment 已是最新。
+    若 roll_segment 不存在，存储过程会抛异常并由下方 except 记日志（不静默）。
+    """
+    logger.info("[scheduler] back_adjusted start")
+    try:
+        with session_scope() as s:
+            for _f in ("min5", "min15", "min30", "min60"):
+                s.execute(
+                    text("CALL l2_adj.sp_build_l2_back_adjusted(:f)"), {"f": _f}
+                )
+            s.flush()
+        logger.info("[scheduler] back_adjusted done (min5/15/30/60)")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] back_adjusted failed: {e}")
 
 
 def _inventory_job() -> None:

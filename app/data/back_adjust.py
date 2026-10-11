@@ -30,7 +30,12 @@ BarStore 目前被上层引用极少（半迁移状态，上层多直接写 SQL�
 from __future__ import annotations
 
 import pandas as pd
+import numpy as np
 from sqlalchemy import text
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 #: freq → 表名（与 scripts/build_roll_segments.TABLE 保持一致）
 TABLE = {'min5': 'bar_5m', 'min15': 'bar_15m',
@@ -233,13 +238,32 @@ def apply_back_adjust_from_materialized(df, symbol, freq, session):
     merged = out.merge(sub, left_on='_bk', right_index=True, how='left',
                       suffixes=('', '_ba'))
 
-    miss = int(merged['adj_offset'].isna().sum())
-    if miss:
-        raise ValueError(
-            f"{symbol}/{freq}: {miss} 根 bar 在 l2_adj.{tbl} 缺失 "
-            f"（ba 覆盖不完整，请先跑 040 build）")
+    # ---- 检漏（2026-10-10 修复）------------------------------------------------
+    # 旧实现只用 `.isna()`：PG `numeric` 的 NaN 取回是 `Decimal('NaN')`（object dtype），
+    # pandas `.isna()` 对它返回 **False** ⇒ NaN 静默穿过守门，一路进到回测里变成
+    # float('nan')，表现为「该品种多个方向/参数变体给出逐位相同的净利」——数据退化指纹。
+    # 现在统一先 to_numeric(errors='coerce') 归一为 float（Decimal('NaN') → nan），
+    # 再对 5 列逐一做有限性检查，任一非法即 fail loud。
     for c in ('open', 'high', 'low', 'close'):
-        out[c] = merged[c + '_ba'].to_numpy()
-    out['adj_offset'] = merged['adj_offset'].to_numpy()
+        out[c] = pd.to_numeric(merged[c + '_ba'], errors='coerce').to_numpy(float)
+    out['adj_offset'] = pd.to_numeric(merged['adj_offset'],
+                                      errors='coerce').to_numpy(float)
+
+    bad = {c: int((~np.isfinite(out[c].to_numpy(float))).sum())
+           for c in ('open', 'high', 'low', 'close', 'adj_offset')}
+    bad = {k: v for k, v in bad.items() if v}
+    n_rows = len(out)
+    n_miss = max(bad.values()) if bad else 0
+    out.attrs['n_miss_adj'] = n_miss
+    if bad:
+        frac = float(n_miss) / max(n_rows, 1)
+        msg = (f"{symbol}/{freq}: l2_adj.{tbl} 取回的复权数据含非有限值 {bad} "
+               f"（{n_miss}/{n_rows} = {100 * frac:.2f}%）")
+        # 分级：零星缺失（典型＝物化表落后于源表的最新几根夜盘/尾盘 bar）放行并记数；
+        # 显著缺失（表陈旧 / PG numeric NaN）必须 fail loud，否则会静默污染回测。
+        if frac > 0.01 or n_miss > 200:
+            raise ValueError(
+                msg + " —— 覆盖缺失严重，请全量重建 040 build（clause：物化表已陈旧或源含 NaN）")
+        logger.warning(msg + " —— 零星缺失放行，调用方应截断或填充后使用")
     out.drop(columns=['_bk'], inplace=True)
     return out

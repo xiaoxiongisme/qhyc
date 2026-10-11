@@ -30,7 +30,7 @@ from sqlalchemy import text as T
 from app.data.back_adjust import apply_back_adjust_from_materialized
 
 OUT = '/tmp/mr2_out'
-CACHE = '/tmp/mr15_cache.pkl'
+CACHE = '/tmp/mr15_cache_%s.pkl' % V.DIR_MODE   # 按方向层口径分文件（W1）
 os.makedirs(OUT, exist_ok=True)
 CUT = np.datetime64('2021-01-01')
 SMOKE = '--smoke' in sys.argv
@@ -152,9 +152,12 @@ def adx(h, l, c, n=14):
 # ============================================================
 def load_symbol_15m(sym, engine):
     with engine.connect() as c:
+        # 只取 ba 已物化覆盖的范围（ba 落后于源表时尾部 bar 会 merge 成 NaN）
         b15 = pd.read_sql(
             T("SELECT bucket, open, high, low, close FROM l1_mkt.bar_15m "
-              "WHERE symbol=:s ORDER BY bucket"),
+              "WHERE symbol=:s AND bucket <= COALESCE("
+              "  (SELECT max(bucket) FROM l2_adj.bar_15m_ba WHERE symbol=:s),"
+              "  TIMESTAMPTZ '1970-01-01') ORDER BY bucket"),
             c, params={'s': sym})
         db = pd.read_sql(
             T("SELECT trade_date, open, high, low, close FROM l0_raw.daily_bar "
@@ -171,22 +174,37 @@ def load_symbol_15m(sym, engine):
     b15['d'] = dt.dt.date
     with engine.connect() as _c:
         sig = apply_back_adjust_from_materialized(b15, sym, 'min15', _c)
+    # 丢弃价格非有限的 bar：ba 覆盖空洞在**序列中间**也有（see W3 report），
+    # 而 atr14/ema 是递推 —— 一个 NaN 会让其后全部指标永久 NaN、该品种不再入场。
+    _okn = (np.isfinite(sig['close'].to_numpy(float))
+            & np.isfinite(sig['open'].to_numpy(float)))
+    n_drop = int((~_okn).sum())
+    if n_drop:
+        sig = sig[_okn].reset_index(drop=True)
+        b15 = b15[_okn].reset_index(drop=True)
+        V.log('DROP %s: %d/%d 根价格非有限已丢弃（ba 覆盖空洞）'
+              % (sym, n_drop, int(_okn.size)))
+    if len(b15) < 200:
+        return None
     o = sig['open'].to_numpy(float)
     h = sig['high'].to_numpy(float)
     l = sig['low'].to_numpy(float)
     cl = sig['close'].to_numpy(float)
     raw_close = b15['close'].to_numpy(float)
     n = len(b15)
-    dclose = db['close'].to_numpy(float)
-    dema = ema(dclose, 140)
-    ddir = np.where(dclose > dema, 1, -1)
-    dbd = np.array([pd.Timestamp(x).date() for x in db['trade_date']],
-                   dtype='datetime64[D]')
-    day = pd.to_datetime(b15['d']).to_numpy(dtype='datetime64[D]')
-    pos = np.searchsorted(dbd, day, side='left') - 1
-    valid = pos >= 0
-    htf_dir = np.zeros(n, dtype=int)
-    htf_dir[valid] = ddir[pos[valid]]
+    # 方向层（W1：对齐生产；单一真源 V.htf_direction = 小时 EMA140 + 取前一根）
+    if V.DIR_MODE == 'hourly':
+        htf_dir = V.htf_direction(cl, V.EMA_K)
+    else:   # 旧口径（日线 EMA140）——仅供口径对照
+        dclose = db['close'].to_numpy(float)
+        ddir = np.where(dclose > ema(dclose, V.EMA_K), 1, -1)
+        dbd = np.array([pd.Timestamp(x).date() for x in db['trade_date']],
+                       dtype='datetime64[D]')
+        day = pd.to_datetime(b15['d']).to_numpy(dtype='datetime64[D]')
+        pos = np.searchsorted(dbd, day, side='left') - 1
+        valid = pos >= 0
+        htf_dir = np.zeros(n, dtype=int)
+        htf_dir[valid] = ddir[pos[valid]]
     g = b15.groupby('d', sort=True).agg(raw_last=('close', 'last'))
     day_dates = pd.to_datetime(g.index).to_numpy(dtype='datetime64[D]')
     raw_last = g['raw_last'].to_numpy(float)
