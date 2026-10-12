@@ -94,6 +94,16 @@ class AlertConfig:
     # 只做 1 的话 `_check_job_heartbeat` 不再报，但表里躺着死数据；只做 2 的话
     # 若代码又意外跑了一次会重新进入窗口。两个都做才闭环。
     retired_task_types: set = field(default_factory=lambda: {"adjust"})
+    # 退役的「子标签」排除（2026-10-13 新增）：部分 task_type（ingest/predict）按
+    # `cron_specs` 的 label 多实例调度；当调度时刻表整体替换（旧 close/noon/night →
+    # 新 pre_open/midday/pre_night）时，旧 label 不再被触发，其 `task_run` 历史冻结在
+    # 替换前日期，会触发"已 N 天无成功"假告警。task_type 本身仍活跃，不能用
+    # `retired_task_types` 排除，故按 "task_type:label" 组合排除。
+    # 维护约定同 retired_task_types：退役 label 时把 "task_type:label" 加进本集合。
+    retired_task_labels: set = field(default_factory=lambda: {
+        "ingest:close", "ingest:noon", "ingest:night",
+        "predict:close", "predict:noon", "predict:night",
+    })
 
 
 def alert_config_from_env() -> AlertConfig:
@@ -278,6 +288,10 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
         # ★ 2026-10-09：退役作业（如 adjust）的 task_run 历史仍在窗口内，
         #   不排除会把「已退役」误报成「停摆」——见 AlertConfig.retired_task_types。
         if str(task) in cfg.retired_task_types:
+            continue
+        # ★ 2026-10-13：退役子标签（task_type 仍活跃但 label 已不再调度，如 ingest/predict
+        #   的 close/noon/night）同样会触发假告警，按 "task_type:label" 组合排除。
+        if f"{task}:{label}" in cfg.retired_task_labels:
             continue
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
