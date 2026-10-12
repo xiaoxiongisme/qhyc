@@ -262,15 +262,17 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
     now = datetime.now(CST)
     out: list[dict] = []
     try:
+        # 同时取 label：月度作业（如 weights_update，task_type 不含 'month' 但 label='monthly'）
+        # 必须靠 label 判定，否则会被下方 'weights' 关键字误归到 12 天阈值，健康月作业也会误报。
         rows = session.execute(text(
-            "SELECT task_type, max(finished_at) FROM task_run "
+            "SELECT task_type, label, max(finished_at) FROM task_run "
             "WHERE status='success' AND finished_at >= now() - interval '30 days' "
-            "GROUP BY task_type"
+            "GROUP BY task_type, label"
         )).fetchall()
     except Exception as e:
         return [{"key": "jobhb", "level": "WARN",
                  "msg": "作业心跳检查失败: {0}".format(str(e)[:120])}]
-    for task, last in rows:
+    for task, label, last in rows:
         if last is None:
             continue
         # ★ 2026-10-09：退役作业（如 adjust）的 task_run 历史仍在窗口内，
@@ -279,12 +281,15 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
             continue
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
-        # 按作业名推断期望间隔：周频/月频作业在非运行日距上次成功天然偏长，用统一短阈值
-        # 会产生大量假告警（如 backtest_weekly 隔 7 天，第 5 天就超 4 天阈值，且每 30 分钟
-        # 检查+cooldown 刚好每次都推，淹没真告警）。故周频给 12 天、月频给 40 天缓冲，
-        # 其余（日频/高频采集类）用默认 days。
+        # 按作业名/label 推断期望间隔：周频/月频作业在非运行日距上次成功天然偏长，用统一短
+        # 阈值会产生大量假告警。故月频给 40 天、周频/训练类给 12 天缓冲，其余（日频/高频
+        # 采集类）用默认 days。
+        # ⚠ 2026-10-13 修复：之前仅靠 task_type 是否含 'month' 判定月频，但 weights_update
+        # 的 task_type 不含 'month' 而被 'weights' 关键字误抓成 12 天，导致月度作业误报。
+        #   现改以 label='monthly' 为准（task_type 含 'month' 仍兼容）。
         t = str(task).lower()
-        if "month" in t:
+        lb = (str(label) if label is not None else "").lower()
+        if "month" in t or "month" in lb:
             thr = 40
         elif any(k in t for k in ("week", "backtest", "lstm", "transmission",
                                   "weights", "retrain", "recalc")):
