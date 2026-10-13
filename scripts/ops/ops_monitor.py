@@ -3,7 +3,8 @@
 
 检查项：
   1. 系统：负载(5min) / 内存 / 根分区磁盘
-  2. 容器：4 个 qhyc 容器是否 running
+  2. 容器：2 个 qhyc 容器是否 running（qhyc-api / qhyc-timescaledb）
+  2b. 系统服务：scheduler / pipeline 等 systemd 单元是否 active（迁云后存活直监控）
   3. 服务：API /health 是否 200；TimescaleDB 是否可查询
   4. 数据：daily_bar 最新交易日距今滞后天数（回迁期可放宽）
   5. 推送：fusion_push_log 最近一次推送是否成功（超时 24h 告警）
@@ -31,7 +32,9 @@ SH = ZoneInfo("Asia/Shanghai")
 STATE_DIR = "/opt/qhyc-ops/state"
 STATE_FILE = os.path.join(STATE_DIR, "alert_state.json")
 ENV_FILE = os.environ.get("QHYC_ENV_FILE", "/Docker/qhyc/.env")
-CONTAINERS = ["qhyc-timescaledb", "qhyc-api", "qhyc-scheduler", "qhyc-pipeline"]
+CONTAINERS = ["qhyc-timescaledb", "qhyc-api"]   # 2026-10-08 P3: scheduler/pipeline 已迁 systemd
+# 迁云后生产调度不再是容器，改为检查 systemd 服务，否则会持续误报「容器未运行」
+SYSTEMD_UNITS = ["qhyc-scheduler.service", "qhyc-pipeline.service"]
 
 # 阈值（4 核 / 8G 机型标定；改机型请同步调 LOAD_WARN）
 LOAD_WARN_RATIO = 1.5      # load5 > cores × 1.5
@@ -167,6 +170,17 @@ def collect() -> dict:
     if down:
         issues.append(("crit", "container", "容器未运行：" + ", ".join(down)))
 
+    # 1b. systemd 服务（P3 迁云后 scheduler/pipeline 在此；存活直监控，弥补告警模块
+    #     跑在调度器进程内、无法侦测自身死亡的能力盲区）
+    units_down = []
+    for u in SYSTEMD_UNITS:
+        rc, out = sh(["systemctl", "is-active", u])
+        if out.strip() != "active":
+            units_down.append(u)
+    m["units_down"] = units_down
+    if units_down:
+        issues.append(("crit", "service", "systemd 服务未运行：" + ", ".join(units_down)))
+
     # 3. 服务
     rc, out = sh(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                   "--max-time", "15", "http://127.0.0.1:8000/health"])
@@ -230,6 +244,7 @@ def render_daily(metrics, issues) -> str:
              f"- 内存：{metrics.get('mem_pct')}% （总 {metrics.get('mem_total_gb')} GB）",
              f"- 磁盘：{metrics.get('disk_pct')}% （剩余 {metrics.get('disk_free_gb')} GB）",
              f"- 容器：{'全部正常' if not metrics.get('containers_down') else '异常 ' + str(metrics.get('containers_down'))}",
+             f"- 系统服务：{'全部正常' if not metrics.get('units_down') else '异常 ' + str(metrics.get('units_down'))}",
              f"- API /health：{metrics.get('api_code')}｜DB：{'ok' if metrics.get('db_ok') else 'DOWN'}",
              ]
     if metrics.get("latest_data_date"):

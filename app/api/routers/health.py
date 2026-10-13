@@ -1,7 +1,7 @@
 """健康检查 + 数据就绪门控（R3①）"""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter
 from sqlalchemy import text
@@ -72,7 +72,8 @@ def health() -> dict:
         "status": "ok",
         "version": __version__,
         "milestone": "M1",
-        "ts": datetime.utcnow().isoformat() + "Z",
+        # 修复：统一用带时区的 UTC，保持 +Z 后缀（API 消费方按 UTC 解析）。
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     try:
         with get_engine().connect() as conn:

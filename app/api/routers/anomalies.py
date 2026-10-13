@@ -1,7 +1,7 @@
 """/anomalies - 异常工单列表与裁决"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,7 +50,9 @@ def resolve_anomaly(ticket_id: int, req: ResolveRequest, db: Session = Depends(f
         raise HTTPException(410, "accept_legacy 已退役（C9 去天勤，天勤不再作为校准源）")
     elif req.action == "false_positive":
         ticket.status = "false_positive"
-        ticket.resolved_at = datetime.utcnow()
+        # 修复：原 datetime.utcnow() 是 naive UTC，落入 DateTime(timezone=True) 列会被
+        # psycopg 按会话时区(Asia/Shanghai)解释，导致 resolved_at 早 8 小时。
+        ticket.resolved_at = datetime.now(timezone.utc)
         ticket.note = (ticket.note or "") + f" | resolved: false_positive ({req.note or ''})"
     else:
         raise HTTPException(400, f"unknown action {req.action}")

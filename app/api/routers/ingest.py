@@ -1,7 +1,7 @@
 """/ingest - 手动触发更新"""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends
@@ -79,7 +79,8 @@ def trigger_ingest(req: IngestRequest, bg: BackgroundTasks):
                 # 汇总
                 summary = {
                     "symbols": [r.to_dict() for r in reports],
-                    "finished_at": datetime.utcnow().isoformat() + "Z",
+                    # 修复：统一带时区 UTC，保持 +Z 后缀（该值作为文本存 message，纯展示）。
+                    "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 }
                 failed = [r for r in reports if r.error]
                 status = "failed" if failed and not req.skip_calibration else "success"
