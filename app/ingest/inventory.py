@@ -23,7 +23,9 @@ from app.core.logging import logger
 from app.models import Inventory
 
 
-# akshare em 接口品种代号（与品种简称）
+# akshare em 接口品种代号（**东财厂商能力映射，有意与 dim_variety 分离**：
+# 东财并非支持全部品种的库存接口；此处缺失=该品种东财无库存数据，属正常，
+# 而非与 dim_variety 重复的陈旧副本。一致性由 tests/test_variety_source_consistency.py 把关）。
 PRODUCT_TO_EM_SYM = {
     "A": "a", "AG": "ag", "AL": "al", "AU": "au", "BU": "bu",
     "C": "c", "CF": "cf", "CU": "cu", "EB": "eb", "EG": "eg",
@@ -62,6 +64,8 @@ def fetch_inventory_em(product: str, exchange: str = "") -> list[dict]:
 
     sym = PRODUCT_TO_EM_SYM.get(product.upper())
     if not sym:
+        # 东财无此品种库存接口代号 → 无数据（debug 可观测，属正常、不噪音）
+        logger.debug("[inventory] em 无品种 {} 的代号映射（东财不支持，返回空）", product)
         return []
     # akshare futures_inventory_em 对大小写敏感（多数品种要大写，少数要小写），
     # 依次尝试 原值 / 大写 / 小写，命中即返回。
