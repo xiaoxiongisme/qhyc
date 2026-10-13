@@ -505,7 +505,17 @@ def backtest_symbols(
                     session, sym, params=params, run_id=run_id, skip_existing=skip_existing
                 )
             )
+            # ★ 韧性（2026-10-13）：每品种提交一次。原实现依赖末尾统一提交，若长事务中
+            # 连接被 DB 重置（"Can't reconnect until invalid transaction"），已算品种的结果
+            # 会随失败提交一起丢失且 run 记录卡 running 成孤儿。逐品种提交后，即使后续品种
+            # 因连接失效失败，已完成的品种结果也已落库，run 终态由 task_repo.finish 的降级
+            # 落库保证不丢。
+            session.commit()
         except Exception as e:
             logger.warning(f"[backtest] {sym} 失败: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
             results.append({"symbol": sym, "error": str(e)})
     return results
