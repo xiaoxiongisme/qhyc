@@ -242,6 +242,17 @@ def bars_consistency_check(new: Any, previous: Any, *, max_jump: float = 0.15) -
 
       现支持 DataFrame / list[dict] 两种形态；无参照物时**明确 warning**
       （否则「跳过校验」与「校验通过」在日志上无法区分，等于静默失效）。
+
+    ★ 2026-10-13 修复（**第四重失效**，本次排查 ingest 连续 partial 的根因）：
+      原实现比的是 ``prev_rows[-1]``（上一成功批次**最新**收盘价） vs
+      ``new_rows[0]``（本批次**最老**收盘价）。
+      ``new`` 是 ``ak.futures_main_sina`` 返回的**全历史** DataFrame（2015→今），
+      故 ``new_rows[0]`` 永远是 2015 年的老价格，而 ``prev_rows[-1]`` 是 2026 年
+      的新价格 → 两者相差数年行情，**跳变恒 >15%** → 每一支「有参照物」的品种
+      都被判为脏数据而拒绝入库；叠加 ``/app/.cache`` 不可写（缓存降级失效）→
+      直接 ``IngestError`` 硬失败 → ingest 大面积 partial（failed=20~50）。
+      正确语义是比「**重叠末端**」：``new_rows[-1]``（本批次最新）vs ``prev_rows[-1]``
+      （上批次最新），这才是真正能拦截「最新价整体错位」的边界。
     """
     def _rows(obj):
         if obj is None:
@@ -282,17 +293,20 @@ def bars_consistency_check(new: Any, previous: Any, *, max_jump: float = 0.15) -
         # fail-loud：无参照物 = 校验**未执行**，必须与「校验通过」区分开
         logger.warning(
             "[resilience] 跨批次一致性校验**跳过**（无参照批次：new=%s previous=%s）"
-            "—— 脏数据拦截此刻**未生效**", "空" if not new_rows else "有",
-            "空" if not prev_rows else "有")
+            "—— 脏数据拦截此刻**未生效**" % (
+                "有" if new_rows else "空", "有" if prev_rows else "空"))
         return None
     try:
+        # ★ 2026-10-13 修复：比「重叠末端」——本批次最新价 vs 上一成功批次最新价。
+        #   原实现误用 new_rows[0]（全历史最老=2015），与 prev_rows[-1]（最新=2026）
+        #   恒差数年行情 → 跳变恒 >15% → 误杀每一支有参照物的品种。
         prev_last = _close(prev_rows[-1])
-        new_first = _close(new_rows[0])
-        if prev_last <= 0 or new_first <= 0:
+        new_last = _close(new_rows[-1])
+        if prev_last <= 0 or new_last <= 0:
             return None
-        jump = abs(new_first - prev_last) / prev_last
+        jump = abs(new_last - prev_last) / prev_last
         if jump > max_jump:
-            return f"跨批次跳变 {jump:.1%} > {max_jump:.1%} ({prev_last} → {new_first})"
+            return f"跨批次跳变 {jump:.1%} > {max_jump:.1%} ({prev_last} → {new_last})"
     except Exception as e:  # noqa: BLE001
         logger.warning("[resilience] 一致性校验异常（本轮不判脏）: %s", e)
         return None
