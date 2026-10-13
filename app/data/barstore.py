@@ -283,16 +283,6 @@ def variety_spec(symbol: str, *, use_cache: bool = True,
     return spec
 
 
-def multiplier_of(symbol: str) -> float:
-    """便捷取乘数；查不到即抛 :class:`VarietySpecNotFoundError`（不返回默认值）。"""
-    return variety_spec(symbol)["multiplier"]
-
-
-def tick_of(symbol: str) -> float | None:
-    """便捷取最小变动价位；``None`` 表示字典未播种（允许跳过 tick 对齐校验）。"""
-    return variety_spec(symbol)["tick_size"]
-
-
 # ---------------------------------------------------------------------------
 # 取数
 # ---------------------------------------------------------------------------
