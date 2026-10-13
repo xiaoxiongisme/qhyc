@@ -77,6 +77,26 @@ def _notify(title: str, content: str) -> None:
         logger.warning(f"[pipeline] 告警推送失败: {e}")
 
 
+def _pg_env_fallback() -> dict:
+    """子进程 ``QH_PG_*`` 兜底值：从应用同一配置源 ``settings.database_url()`` 派生。
+
+    单一真源，避免 worker 自带一份 host 默认（旧 ``127.0.0.1``）与
+    ``app.core.config`` 的 ``POSTGRES_HOST=timescaledb`` 分叉 → 子进程静默连错库。
+    无论配置来自离散 ``POSTGRES_*`` 还是整体 ``DATABASE_URL``，都以应用实际连接的库为准。
+    """
+    from app.core.config import get_settings
+    from sqlalchemy.engine import make_url
+
+    u = make_url(get_settings().database_url())
+    return {
+        "QH_PG_HOST": u.host or "127.0.0.1",
+        "QH_PG_PORT": str(u.port or 5432),
+        "QH_PG_DB": u.database or "futures",
+        "QH_PG_USER": u.username or "futures",
+        "QH_PG_PWD": u.password or "",
+    }
+
+
 def run_once(kind: str, *, wait_readiness: bool = False,
              extra_args: list[str] | None = None) -> dict:
     """执行一次链路（供 cron 与 API 手动触发复用）。"""
@@ -101,15 +121,9 @@ def run_once(kind: str, *, wait_readiness: bool = False,
     })
     # WB 侧子脚本直连 PG 读的是 QH_PG_*，而 compose 只为 pipeline 服务注入了这组变量。
     # api 容器经 /pipeline/run 手动触发时它们缺失 → 子脚本退化为连 localhost 失败。
-    # 这里统一兜底：已有则保留，缺失则从 POSTGRES_* 推导，使任意容器拉起的子进程都能连库。
-    _pg_fallback = {
-        "QH_PG_HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
-        "QH_PG_PORT": os.environ.get("POSTGRES_PORT", "5432"),
-        "QH_PG_DB": os.environ.get("POSTGRES_DB", "futures"),
-        "QH_PG_USER": os.environ.get("POSTGRES_USER", "futures"),
-        "QH_PG_PWD": os.environ.get("POSTGRES_PASSWORD", ""),
-    }
-    for k, v in _pg_fallback.items():
+    # 统一兜底：**从应用同一配置源 settings.database_url() 派生**（单一真源），
+    # 不再自带一份 host 默认（旧 127.0.0.1 与 app.core.config 的 timescaledb 分叉 → 连错库）。
+    for k, v in _pg_env_fallback().items():
         if not env.get(k):
             env[k] = v
     t0 = time.time()
