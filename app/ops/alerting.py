@@ -78,43 +78,11 @@ class AlertConfig:
         "factor_value": "trade_date",
         "main_contract_map": "trade_date",
     })
-    # 已退役作业的 task_type（_check_job_heartbeat 排除用）。
-    #
-    # ★ 2026-10-09 新增。事故：`adjust` 作业 2026-10-04 随 fdf 模块退役删除
-    #   （commit 380cff3），但 `task_run` 里它 9 条历史 run 还在 30 天窗口内
-    #   （最后成功 2026-09-27）→ `_check_job_heartbeat` 扫描「窗口内所有
-    #   task_type」时无法区分「退役」与「停摆」，连续推送假告警
-    #   「作业 adjust 已 11.7 天无成功运行」。这与 `fut_kline` 从
-    #   `freshness_tables` 移除是**同一类问题**：生产者退役后，巡检把
-    #   「不再产出」误读成「产出中断」。
-    #
-    # 维护约定：作业退役时（scheduler 里取消注册 + 删作业代码），必须：
-    #   1. 把它的 task_type 加进本集合；
-    #   2. 清理 `task_run` 里该 task_type 的历史行（运维动作，见任务台账）。
-    # 只做 1 的话 `_check_job_heartbeat` 不再报，但表里躺着死数据；只做 2 的话
-    # 若代码又意外跑了一次会重新进入窗口。两个都做才闭环。
-    retired_task_types: set = field(default_factory=lambda: {"adjust"})
-    # 退役的「子标签」排除（2026-10-13 新增）：部分 task_type（ingest/predict）按
-    # `cron_specs` 的 label 多实例调度；当调度时刻表整体替换（旧 close/noon/night →
-    # 新 pre_open/midday/pre_night）时，旧 label 不再被触发，其 `task_run` 历史冻结在
-    # 替换前日期，会触发"已 N 天无成功"假告警。task_type 本身仍活跃，不能用
-    # `retired_task_types` 排除，故按 "task_type:label" 组合排除。
-    # 维护约定同 retired_task_types：退役 label 时把 "task_type:label" 加进本集合。
-    retired_task_labels: set = field(default_factory=lambda: {
-        "ingest:close", "ingest:noon", "ingest:night",
-        "predict:close", "predict:noon", "predict:night",
-    })
-    # 一次性/手动 label 排除（2026-10-13 新增）：task_run 里除周期性调度作业外，
-    # 还存在大量一次性/手动触发的 run（manual_backfill_20261009、manual-FG888、
-    # cli-manual、boot、single、batch、after-manual-ingest 等）。心跳巡检按
-    # (task_type, label) 分组，会把这些一次性 label 当成「独立作业」监控，而其
-    # 最后一次成功往往是很久以前 → 触发「已 N 天无成功」假告警（本次 inventory
-    # 误报正是 manual_backfill_20261009 这一行所致）。按 label 关键词跳过一次性
-    # 作业：只要 label 含任一 marker 即视为非周期作业，不参与新鲜度巡检。
-    # 维护约定：新增一次性/手动触发路径时，其 label 应含下列 marker 之一（或补进本集合）。
-    oneoff_label_markers: set = field(default_factory=lambda: {
-        "manual", "backfill", "cli", "boot", "single", "batch", "after",
-    })
+    # ★ 2026-10-13 整改：作业心跳巡检不再靠本类的「退役/一次性例外集」去堵误报——
+    #   改为直接读调度器已注册周期作业清单 `app.scheduler_jobs.monitored_jobs()`
+    #   （单一事实源）。清单里没有的作业（退役的 adjust、一次性手动回填 label 等）
+    #   天然不会被监控，故以下三个手工例外集已移除。新增/退役作业只改
+    #   `app/scheduler_jobs.py` + `app/scheduler.py::_build_scheduler` 即可，心跳自动同步。
 
 
 def alert_config_from_env() -> AlertConfig:
@@ -270,12 +238,19 @@ def _check_freshness(session, cfg: AlertConfig) -> list[dict]:
 
 
 def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
-    """作业心跳巡检（2026-10-09 新增，对应 inventory 停摆 10 天无人察觉事件）。
+    """作业心跳巡检（2026-10-09 新增，2026-10-13 重构为清单驱动）。
 
     数据新鲜度巡检（_check_freshness）只校验"表最新日期"——当作业刚停 1~2 天、数据滞后
     还没越过 3 天阈值时它发现不了；本次 inventory 停摆 10 天靠数据滞后间接暴露，正是缺
-    "作业本身是否还在跑"的直监控。本函数查 task_run 成功历史：对近 30 天内有过成功的作业，
-    若距上次成功 > job_heartbeat_days 就告警，能在作业停跑当天即暴露。
+    "作业本身是否还在跑"的直监控。
+
+    ★ 2026-10-13 重构（根因修复，非补丁）：
+    旧实现从 `task_run` 历史**反推**"哪些作业该在跑 + 该多久跑一次"，靠 task_type/label
+    文本关键字猜频率 + 手工例外集堵误报，反复因「命名分类不全」误报（weights_update 月作业
+    被 'weights' 误归、inventory 周频误判、一次性手动 label 被当独立作业、退役 adjust 被当停摆）。
+    新实现直接读 `app.scheduler_jobs.monitored_jobs()`——即调度器 `app/scheduler.py` 真正
+    注册的**周期作业清单**，每个作业带显式 `expected_gap_days`。清单里没有的作业（退役的、
+    一次性手动的）天然不监控；频率不再靠猜。新增/退役作业只改清单，心跳自动同步。
     """
     days = getattr(cfg, "job_heartbeat_days", 4)
     if days <= 0:
@@ -283,57 +258,47 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
     now = datetime.now(CST)
     out: list[dict] = []
     try:
-        # 同时取 label：月度作业（如 weights_update，task_type 不含 'month' 但 label='monthly'）
-        # 必须靠 label 判定，否则会被下方 'weights' 关键字误归到 12 天阈值，健康月作业也会误报。
+        from app.scheduler_jobs import monitored_jobs
+        jobs = monitored_jobs()
+    except Exception as e:
+        return [{"key": "jobhb", "level": "WARN",
+                 "msg": "作业心跳清单加载失败: {0}".format(str(e)[:120])}]
+    if not jobs:
+        return []
+    # 只查"确实注册且写 task_run"的作业类型，避免扫到退役/一次性 label 产生误报。
+    types = sorted({j.task_type for j in jobs})
+    try:
         rows = session.execute(text(
             "SELECT task_type, label, max(finished_at) FROM task_run "
-            "WHERE status='success' AND finished_at >= now() - interval '30 days' "
+            "WHERE status='success' AND task_type = ANY(:types) "
             "GROUP BY task_type, label"
-        )).fetchall()
+        ), {"types": types}).fetchall()
     except Exception as e:
         return [{"key": "jobhb", "level": "WARN",
                  "msg": "作业心跳检查失败: {0}".format(str(e)[:120])}]
+
+    # 注册清单按 (task_type, label) 建索引；label 允许空串（单实例作业）。
+    reg: dict[tuple[str, str], int] = {(j.task_type, j.label): j.expected_gap_days for j in jobs}
+    last_map: dict[tuple[str, str], object] = {}
     for task, label, last in rows:
+        last_map[(str(task), str(label) if label is not None else "")] = last
+
+    for (tt, lb), thr in reg.items():
+        last = last_map.get((tt, lb))
         if last is None:
-            continue
-        # ★ 2026-10-09：退役作业（如 adjust）的 task_run 历史仍在窗口内，
-        #   不排除会把「已退役」误报成「停摆」——见 AlertConfig.retired_task_types。
-        if str(task) in cfg.retired_task_types:
-            continue
-        # ★ 2026-10-13：退役子标签（task_type 仍活跃但 label 已不再调度，如 ingest/predict
-        #   的 close/noon/night）同样会触发假告警，按 "task_type:label" 组合排除。
-        if f"{task}:{label}" in cfg.retired_task_labels:
-            continue
-        # ★ 2026-10-13（补）：一次性/手动 label（manual_backfill_20261009、manual-FG888、
-        #   cli-manual、boot、single、batch、after-manual-ingest 等）不是周期作业，其
-        #   最后成功时间无监控意义，按关键词跳过——否则会像本次 inventory 误报那样，把
-        #   「很久前的一次手动回填」当成「停摆」告警。
-        if label is not None and any(
-                m in str(label).lower() for m in cfg.oneoff_label_markers):
+            # 注册在跑但 task_run 从未成功过：可能是刚部署的新作业，或长期失败。
+            # 与旧实现一致——旧逻辑只盯"近 30 天内有过成功"的作业，无历史即不报；
+            # 真正的长期失败由调度器 EVENT_JOB_ERROR 监听 + 数据新鲜度巡检兜住。
             continue
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
-        # 按作业名/label 推断期望间隔：月频给 40 天、周频/训练类给 12 天缓冲，其余
-        # （日频/高频采集类）用默认 days。判定必须同时看 task_type 与 label
-        # （⚠ 2026-10-13 修复：inventory 的 task_type 不含 'week' 但 label='weekly'，
-        #  只看 task_type 会把它错判为日频 4 天阈值，周频作业在空档期必误报）。
-        t = str(task).lower()
-        lb = (str(label) if label is not None else "").lower()
-        if "month" in t or "month" in lb:
-            thr = 40
-        elif any(k in t or k in lb for k in ("week", "backtest", "lstm",
-                                            "transmission", "weights",
-                                            "retrain", "recalc")):
-            thr = 12
-        else:
-            thr = days
         lag = (now - last).total_seconds() / 86400.0
         if lag > thr:
             out.append({
-                "key": "jobhb_" + str(task),
+                "key": "jobhb_" + tt,
                 "level": "WARN",
-                "msg": "作业 {0} 已 {1:.1f} 天无成功运行（最近成功 {2}，阈值 {3} 天）—— 采集/调度链路可能停摆".format(
-                    task, lag, last.date(), thr),
+                "msg": "作业 {0}（label={1}）已 {2:.1f} 天无成功运行（最近成功 {3}，阈值 {4} 天）—— 采集/调度链路可能停摆".format(
+                    tt, lb, lag, last.date(), thr),
             })
     return out
 
