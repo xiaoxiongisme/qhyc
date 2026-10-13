@@ -104,6 +104,17 @@ class AlertConfig:
         "ingest:close", "ingest:noon", "ingest:night",
         "predict:close", "predict:noon", "predict:night",
     })
+    # 一次性/手动 label 排除（2026-10-13 新增）：task_run 里除周期性调度作业外，
+    # 还存在大量一次性/手动触发的 run（manual_backfill_20261009、manual-FG888、
+    # cli-manual、boot、single、batch、after-manual-ingest 等）。心跳巡检按
+    # (task_type, label) 分组，会把这些一次性 label 当成「独立作业」监控，而其
+    # 最后一次成功往往是很久以前 → 触发「已 N 天无成功」假告警（本次 inventory
+    # 误报正是 manual_backfill_20261009 这一行所致）。按 label 关键词跳过一次性
+    # 作业：只要 label 含任一 marker 即视为非周期作业，不参与新鲜度巡检。
+    # 维护约定：新增一次性/手动触发路径时，其 label 应含下列 marker 之一（或补进本集合）。
+    oneoff_label_markers: set = field(default_factory=lambda: {
+        "manual", "backfill", "cli", "boot", "single", "batch", "after",
+    })
 
 
 def alert_config_from_env() -> AlertConfig:
@@ -293,20 +304,26 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
         #   的 close/noon/night）同样会触发假告警，按 "task_type:label" 组合排除。
         if f"{task}:{label}" in cfg.retired_task_labels:
             continue
+        # ★ 2026-10-13（补）：一次性/手动 label（manual_backfill_20261009、manual-FG888、
+        #   cli-manual、boot、single、batch、after-manual-ingest 等）不是周期作业，其
+        #   最后成功时间无监控意义，按关键词跳过——否则会像本次 inventory 误报那样，把
+        #   「很久前的一次手动回填」当成「停摆」告警。
+        if label is not None and any(
+                m in str(label).lower() for m in cfg.oneoff_label_markers):
+            continue
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
-        # 按作业名/label 推断期望间隔：周频/月频作业在非运行日距上次成功天然偏长，用统一短
-        # 阈值会产生大量假告警。故月频给 40 天、周频/训练类给 12 天缓冲，其余（日频/高频
-        # 采集类）用默认 days。
-        # ⚠ 2026-10-13 修复：之前仅靠 task_type 是否含 'month' 判定月频，但 weights_update
-        # 的 task_type 不含 'month' 而被 'weights' 关键字误抓成 12 天，导致月度作业误报。
-        #   现改以 label='monthly' 为准（task_type 含 'month' 仍兼容）。
+        # 按作业名/label 推断期望间隔：月频给 40 天、周频/训练类给 12 天缓冲，其余
+        # （日频/高频采集类）用默认 days。判定必须同时看 task_type 与 label
+        # （⚠ 2026-10-13 修复：inventory 的 task_type 不含 'week' 但 label='weekly'，
+        #  只看 task_type 会把它错判为日频 4 天阈值，周频作业在空档期必误报）。
         t = str(task).lower()
         lb = (str(label) if label is not None else "").lower()
         if "month" in t or "month" in lb:
             thr = 40
-        elif any(k in t for k in ("week", "backtest", "lstm", "transmission",
-                                  "weights", "retrain", "recalc")):
+        elif any(k in t or k in lb for k in ("week", "backtest", "lstm",
+                                            "transmission", "weights",
+                                            "retrain", "recalc")):
             thr = 12
         else:
             thr = days
