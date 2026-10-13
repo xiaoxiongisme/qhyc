@@ -190,17 +190,32 @@ def _decimals(tick: float) -> int:
     return len(s.split(".")[1]) if "." in s else 0
 
 
-# 品种最小变动价位（用于推送价位对齐交易所报价，避免 6420.75 这种不存在的价）
-_TICKS = {
-    "FG": 1, "SA": 1, "SR": 1, "CF": 5, "TA": 2, "MA": 1, "RM": 1, "OI": 1,
-    "AP": 1, "UR": 1, "SH": 1, "PX": 2, "SF": 2, "SM": 2,
-    "CU": 10, "AL": 5, "ZN": 5, "PB": 5, "NI": 10, "SN": 10, "AU": 0.02,
-    "AG": 1, "RB": 1, "SS": 5, "FU": 1, "BU": 1, "RU": 5, "SP": 2, "AO": 1, "HC": 1,
-    "SC": 0.1, "SI": 5, "LC": 20,
-    "A": 1, "M": 1, "Y": 2, "P": 2, "C": 1, "JD": 1,
-    "L": 1, "V": 1, "PP": 1, "J": 0.5, "JM": 0.5, "I": 0.5, "EG": 1, "EB": 1, "LH": 5,
-}
-_PX_DEC = {k: _decimals(v) for k, v in _TICKS.items()}
+# 品种展示小数位：唯一真源 = dim_variety.tick_size（经 barstore.variety_spec）。
+# 删除本地 _TICKS/_PX_DEC 副本（缺失即静默按 2 位，导致推送价位与交易所 tick 分叉，
+# 例如大商所 P/Y 自 2026-04-01 由 2 元/吨改 1 元/吨，硬编码副本不会跟着变）。
+# 取不到规格时 fail-soft 兜底并**告警一次**（推送是展示用途，不因展示精度而崩）。
+_DEC_CACHE: dict[str, int | None] = {}
+_DEC_WARNED: set[str] = set()
+
+
+def _tick_decimals(code: str) -> int | None:
+    """品种码 → 推送价位展示小数位（读 dim_variety.tick_size）。取不到返回 None。"""
+    if not code:
+        return None
+    if code in _DEC_CACHE:
+        return _DEC_CACHE[code]
+    nd: int | None = None
+    try:
+        from app.data.barstore import variety_spec
+        tick = variety_spec(code).get("tick_size")
+        if tick is not None:
+            nd = _decimals(str(tick))
+    except Exception as e:  # noqa: BLE001  库不可达/品种未登记 → None（fail-soft）
+        if code not in _DEC_WARNED:
+            logger.warning("[scheduler] 取 {} 的 tick 失败，推送价位小数位兜底: {}", code, e)
+            _DEC_WARNED.add(code)
+    _DEC_CACHE[code] = nd
+    return nd
 
 
 def _fmt_num(x, nd: int = 1) -> str:
@@ -214,14 +229,14 @@ def _fmt_num(x, nd: int = 1) -> str:
 
 
 def _px_of(sym: str, val) -> str:
-    """按品种最小变动价位给价（缺失则退化为 2 位/自适应）。"""
+    """按品种最小变动价位给价（真源 dim_variety.tick_size；取不到才自适应兜底）。"""
     if val is None:
         return "-"
     try:
         v = float(val)
     except (TypeError, ValueError):
         return "-"
-    nd = _PX_DEC.get(str(sym or "").rstrip("0123456789").upper())
+    nd = _tick_decimals(str(sym or "").rstrip("0123456789").upper())
     if nd is None:
         nd = 2 if abs(v) < 10000 else 1
     return f"{v:,.{nd}f}"
