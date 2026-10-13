@@ -50,6 +50,7 @@ def _pg_backend_conns() -> int:
 # ---------------------------------------------------------------------------
 # P0-2：重绑定必须原子替换 _engine 与 _SessionLocal
 # ---------------------------------------------------------------------------
+@pytest.mark.requires_db
 def test_rebind_affects_session_scope():
     """重绑定后 session_scope() 必须用新引擎（工单 P0-2 验收）。"""
     e1 = get_engine()
@@ -78,6 +79,7 @@ def test_rebind_reuses_settings_when_url_none():
     assert get_engine() is e1
 
 
+@pytest.mark.requires_db
 def test_rebind_pool_params_applied():
     """池参数可编程覆盖（隧道场景建议 pool_size=8 / max_overflow=16）。"""
     url = os.environ["DATABASE_URL"]
@@ -110,6 +112,7 @@ def test_pool_params_env_override():
 # P1-1：连接泄漏回归（让 NullPool 隔离补丁永久退役）
 # ---------------------------------------------------------------------------
 @pytest.mark.slow
+@pytest.mark.requires_db
 def test_fee_per_lot_no_connection_leak():
     """循环 N>=500 次调用 fee_per_lot，断言连接**不随 N 增长**（工单 P1-1）。
 

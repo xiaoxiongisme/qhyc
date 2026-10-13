@@ -20,6 +20,8 @@ from datetime import date
 
 import pytest
 
+pytestmark = pytest.mark.requires_db
+
 os.environ.setdefault("EXECUTION_BROKER", "sim")
 
 from app.execution import (  # noqa: E402

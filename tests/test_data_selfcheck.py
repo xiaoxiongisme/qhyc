@@ -38,7 +38,26 @@ class _Result:
 
 
 class FakeSession:
-    """按 SQL 关键字返回注入样本的假 session；记录已写工单数量。"""
+    """按 SQL 关键字返回注入样本的假 session；记录已写工单数量。
+
+    ★ 2026-10-13 同步（修复 test_missing_triggers_ticket / test_run_alerts_when_enabled
+    变红）：生产 ``check_missing`` 自 2026-10-09 起改为**按表探测时间列**
+    （查 ``information_schema.columns``，而非硬编码 bucket），以修复 daily_bar 等表
+    因无 bucket 列而整项检查被 ``except`` 吞成 continue 的静默失效。本 fake 必须建模
+    这次 introspection，否则 ``_time_col`` 永远返回 None → 检查被跳过 → 工单计数恒 0
+    （即本次变红的真因，非生产缺陷）。
+    """
+
+    # 各表实际时间列（供 information_schema.columns 探测回报；候选顺序见
+    # data_selfcheck._TIME_COL_CANDIDATES）。
+    _TIME_COLS = {
+        "bar_15m": ["bucket", "symbol", "volume"],
+        "bar_30m": ["bucket", "symbol"],
+        "bar_60m": ["bucket", "symbol"],
+        "daily_bar": ["trade_date", "symbol", "volume"],
+        "minute_bar": ["ts", "symbol"],
+        "hourly_bar": ["trade_datetime", "symbol"],
+    }
 
     def __init__(self, missing_rows=None, zero_rows=None, tail_max=None):
         self.missing_rows = missing_rows or []
@@ -49,9 +68,15 @@ class FakeSession:
 
     def execute(self, sql, params=None):
         s = str(sql).lower()
-        if "bucket::date" in s:          # check_missing 的缺失查询
+        p = params or {}
+        if "information_schema.columns" in s:   # _time_col 的表结构探测
+            t = str(p.get("t") or "").lower()
+            return _Result([(c,) for c in self._TIME_COLS.get(t, [])])
+        if "from bar_15m" in s and "bucket::date" in s:   # 仅 bar_15m 注入缺失样本
             return _Result(self.missing_rows)
-        if "volume = 0" in s:           # check_zero_volume 的零成交查询
+        if "bucket::date" in s:               # 其余表的缺失查询（无注入样本）
+            return _Result([])
+        if "volume = 0" in s:                # check_zero_volume 的零成交查询
             return _Result(self.zero_rows)
         if "max(bucket)" in s or "max(ts)" in s:   # 尾部回退查询
             return _Result([(self.tail_max,)] if self.tail_max is not None else [(None,)])

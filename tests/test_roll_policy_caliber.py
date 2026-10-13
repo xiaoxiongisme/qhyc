@@ -9,6 +9,8 @@ from datetime import date
 import pytest
 from sqlalchemy import text
 
+pytestmark = pytest.mark.requires_db
+
 from app.core.db import session_scope
 from app.execution import roll_policy as rp
 
