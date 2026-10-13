@@ -33,18 +33,9 @@ from app.repositories._base import (
 )
 
 
-# 品种 → 交易所映射（与 akshare 探测一致）
-_PRODUCT_EXCHANGE = {
-    "FG": "CZCE", "SA": "CZCE", "SR": "CZCE", "CF": "CZCE", "TA": "CZCE",
-    "MA": "CZCE", "RM": "CZCE", "OI": "CZCE", "AP": "CZCE", "PK": "CZCE",
-    "RB": "SHFE", "CU": "SHFE", "AU": "SHFE", "AG": "SHFE", "AL": "SHFE",
-    "ZN": "SHFE", "PB": "SHFE", "SN": "SHFE", "NI": "SHFE", "SS": "SHFE",
-    "FU": "SHFE", "BU": "SHFE",
-    "M": "DCE", "Y": "DCE", "I": "DCE", "JM": "DCE", "J": "DCE", "P": "DCE",
-    "C": "DCE", "A": "DCE", "L": "DCE", "V": "DCE", "PP": "DCE",
-    "EG": "DCE", "EB": "DCE",
-    "SC": "INE", "LU": "INE",
-}
+# 品种 → 交易所解析已收敛到唯一真源 AkShareSource.detect_exchange()
+# （底层读 dim_variety.exchange，缺失即抛，不再静默 UNKNOWN）。
+# 原本地副本 _PRODUCT_EXCHANGE 已删除（与 dim_variety.exchange 重复，见 import_product）。
 
 
 class LocalHistoryImporter:
@@ -104,7 +95,10 @@ class LocalHistoryImporter:
             )
         logger.info(f"[import] {product} 文件定位: { {k: str(v) for k, v in files.items()} }")
 
-        exchange = _PRODUCT_EXCHANGE.get(product, "UNKNOWN")
+        # 交易所 = 唯一真源（detect_exchange → variety_spec → dim_variety.exchange）；
+        # 缺失即抛 IngestError，拒绝静默 UNKNOWN 让后续采集走错分支。
+        from app.ingest.akshare_source import AkShareSource
+        exchange = AkShareSource.detect_exchange(product)
         stats: dict[str, Any] = {
             "product": product,
             "exchange": exchange,
