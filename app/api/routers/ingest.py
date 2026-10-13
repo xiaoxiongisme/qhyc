@@ -1,8 +1,10 @@
 """/ingest - 手动触发更新"""
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Optional
+
+from app.core.timefmt import utc_iso_z
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
@@ -80,7 +82,8 @@ def trigger_ingest(req: IngestRequest, bg: BackgroundTasks):
                 summary = {
                     "symbols": [r.to_dict() for r in reports],
                     # 修复：统一带时区 UTC，保持 +Z 后缀（该值作为文本存 message，纯展示）。
-                    "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    # 注意：写入的是「字符串时间戳」（非 timestamptz 对象），见 app.core.timefmt。
+                    "finished_at": utc_iso_z(),
                 }
                 failed = [r for r in reports if r.error]
                 status = "failed" if failed and not req.skip_calibration else "success"

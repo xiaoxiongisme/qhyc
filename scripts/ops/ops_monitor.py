@@ -117,29 +117,19 @@ def psql(sql: str, timeout: int = 30) -> tuple[bool, str]:
     return rc == 0, out
 
 
-def collect() -> dict:
-    """采集全部指标。返回 {指标: 值} 与问题列表。"""
-    m: dict = {}
-    issues: list[tuple[str, str, str]] = []   # (level, key, 描述)
+def sample_system() -> dict:
+    """采集系统资源原始指标（load/disk/mem/swap）。
 
-    # 1. 系统资源
+    抽成独立函数并可在 collect() 中注入，是为了打破依赖、让 ops_monitor 在
+    无 /proc/meminfo、无 os.getloadavg 的开发/测试环境下也能被单元测试覆盖
+    （Feathers《与遗留代码有效工作》：先引入 seam，再做 characterization）。
+    """
     cores = os.cpu_count() or 4
     load5 = os.getloadavg()[1]
-    m["load5"] = round(load5, 2)
-    m["cores"] = cores
-    if load5 > cores * LOAD_WARN_RATIO:
-        issues.append(("warn", "load", f"5 分钟负载 {load5:.2f} > {cores * LOAD_WARN_RATIO:.1f}（{cores} 核）"))
-
     total, used, free = shutil.disk_usage("/")
     disk_pct = used / total * 100
-    m["disk_pct"] = round(disk_pct, 1)
-    m["disk_free_gb"] = round(free / 1024 ** 3, 1)
-    if disk_pct >= DISK_CRIT:
-        issues.append(("crit", "disk", f"根分区已用 {disk_pct:.1f}%（剩余 {m['disk_free_gb']} GB）"))
-    elif disk_pct >= DISK_WARN:
-        issues.append(("warn", "disk", f"根分区已用 {disk_pct:.1f}%（剩余 {m['disk_free_gb']} GB）"))
-
-    meminfo = {}
+    disk_free_gb = round(free / 1024 ** 3, 1)
+    meminfo: dict[str, int] = {}
     try:
         for line in open("/proc/meminfo", encoding="utf-8"):
             k, v = line.split(":", 1)
@@ -149,21 +139,63 @@ def collect() -> dict:
     mem_total = meminfo.get("MemTotal", 1)
     mem_avail = meminfo.get("MemAvailable", mem_total)
     mem_pct = (mem_total - mem_avail) / mem_total * 100
-    m["mem_pct"] = round(mem_pct, 1)
-    m["mem_total_gb"] = round(mem_total / 1024 ** 2, 1)
-    if mem_pct >= MEM_WARN:
-        issues.append(("warn", "mem", f"内存已用 {mem_pct:.1f}%（总 {m['mem_total_gb']} GB）"))
-
-    # swap（有使用说明在吃 swap，值得提示）
+    mem_total_gb = round(mem_total / 1024 ** 2, 1)
+    swap_pct = None
     swap_total = meminfo.get("SwapTotal", 0)
     swap_free = meminfo.get("SwapFree", swap_total)
     if swap_total:
-        m["swap_pct"] = round((swap_total - swap_free) / swap_total * 100, 1)
+        swap_pct = round((swap_total - swap_free) / swap_total * 100, 1)
+    return {
+        "load5": round(load5, 2),
+        "cores": cores,
+        "disk_pct": round(disk_pct, 1),
+        "disk_free_gb": disk_free_gb,
+        "mem_pct": round(mem_pct, 1),
+        "mem_total_gb": mem_total_gb,
+        "swap_pct": swap_pct,
+    }
+
+
+def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
+    """采集全部指标。返回 {指标: 值} 与问题列表。
+
+    sh_fn / psql_fn / system_fn 可注入，用于脱离 docker/systemctl/psql 做单元测试
+    （锁定 2026-10-08 P3 迁云后 scheduler/pipeline 改 systemd 单元、不再被误报
+    「容器未运行」的修复行为）。默认走真实实现，cron 调用 collect() 行为不变。
+    """
+    sh_fn = sh_fn or sh
+    psql_fn = psql_fn or psql
+    system_fn = system_fn or sample_system
+    m: dict = {}
+    issues: list[tuple[str, str, str]] = []   # (level, key, 描述)
+
+    # 1. 系统资源（来自可注入的 system_fn）
+    sm = system_fn()
+    m.update(sm)
+    load5 = sm["load5"]
+    cores = sm["cores"]
+    if load5 > cores * LOAD_WARN_RATIO:
+        issues.append(("warn", "load", f"5 分钟负载 {load5:.2f} > {cores * LOAD_WARN_RATIO:.1f}（{cores} 核）"))
+
+    disk_pct = sm["disk_pct"]
+    disk_free_gb = sm["disk_free_gb"]
+    if disk_pct >= DISK_CRIT:
+        issues.append(("crit", "disk", f"根分区已用 {disk_pct:.1f}%（剩余 {disk_free_gb} GB）"))
+    elif disk_pct >= DISK_WARN:
+        issues.append(("warn", "disk", f"根分区已用 {disk_pct:.1f}%（剩余 {disk_free_gb} GB）"))
+
+    mem_pct = sm["mem_pct"]
+    mem_total_gb = sm["mem_total_gb"]
+    if mem_pct >= MEM_WARN:
+        issues.append(("warn", "mem", f"内存已用 {mem_pct:.1f}%（总 {mem_total_gb} GB）"))
+
+    if sm.get("swap_pct") is not None:
+        m["swap_pct"] = sm["swap_pct"]
 
     # 2. 容器
     down = []
     for c in CONTAINERS:
-        rc, out = sh(["docker", "inspect", "-f", "{{.State.Running}}", c])
+        rc, out = sh_fn(["docker", "inspect", "-f", "{{.State.Running}}", c])
         if rc != 0 or out.strip() != "true":
             down.append(c)
     m["containers_down"] = down
@@ -174,7 +206,7 @@ def collect() -> dict:
     #     跑在调度器进程内、无法侦测自身死亡的能力盲区）
     units_down = []
     for u in SYSTEMD_UNITS:
-        rc, out = sh(["systemctl", "is-active", u])
+        rc, out = sh_fn(["systemctl", "is-active", u])
         if out.strip() != "active":
             units_down.append(u)
     m["units_down"] = units_down
@@ -182,19 +214,19 @@ def collect() -> dict:
         issues.append(("crit", "service", "systemd 服务未运行：" + ", ".join(units_down)))
 
     # 3. 服务
-    rc, out = sh(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                  "--max-time", "15", "http://127.0.0.1:8000/health"])
+    rc, out = sh_fn(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                     "--max-time", "15", "http://127.0.0.1:8000/health"])
     m["api_code"] = out.strip() or str(rc)
     if out.strip() != "200":
         issues.append(("crit", "api", f"/health 返回 {m['api_code']}（期望 200）"))
 
-    ok, _ = psql("SELECT 1")
+    ok, _ = psql_fn("SELECT 1")
     m["db_ok"] = ok
     if not ok:
         issues.append(("crit", "db", "TimescaleDB 不可查询"))
 
     # 4. 数据新鲜度（表不存在/空表时跳过，避免回迁期误报）
-    ok, out = psql("SELECT max(trade_date)::text FROM daily_bar")
+    ok, out = psql_fn("SELECT max(trade_date)::text FROM daily_bar")
     m["latest_data_date"] = out.strip() if ok and out.strip() else None
     if m["latest_data_date"] and m["latest_data_date"] not in ("", "None"):
         try:
@@ -207,7 +239,7 @@ def collect() -> dict:
             pass
 
     # 5. 推送活性（仅交易日/有数据时检查：无数据时本就静默）
-    ok, out = psql(
+    ok, out = psql_fn(
         "SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered")
     m["last_push_at"] = out.strip() if ok and out.strip() else None
     if m["last_push_at"] and m["last_push_at"] not in ("", "None"):
