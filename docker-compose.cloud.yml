@@ -81,8 +81,18 @@ services:
       - /home/ubuntu/qhyc_work/share/qh:/app/qh
       # config/local.yaml 的 imports.container_root=/app/imports（空目录占位）
       - /home/ubuntu/qhyc_work/share/imports:/app/imports
-      # ⚠ 不要挂 ./config 覆盖镜像内配置：云端若目录为空会把配置盖没。
-      #   需要改配置走 env 覆盖，或在服务器上放好 config 再挂。
+      # 代码挂载（源码=运行码）：改代码后 git pull + `docker compose -f docker-compose.cloud.yml
+      # up -d --no-deps api` 即生效，无需重建镜像、不依赖镜像内烤入的代码
+      # （镜像仅提供依赖/web/dist/pipeline_src 等非代码产物）。
+      # 宿主 /Docker/qhyc/app 等为 775、文件 664（appuser uid 10001 只读可访问）；只读挂载防容器内改动。
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./tests:/app/tests:ro
+      - ./migrations:/app/migrations:ro
+      - ./conftest.py:/app/conftest.py:ro
+      - ./pytest.ini:/app/pytest.ini:ro
+      # ⚠ config 暂不挂载：保留镜像内 cloud 配置（含云端实测调校值），避免仓库 config
+      #   覆盖线上定制；确需 git 化管理 config 时再挂 ./config:ro 并核对 cloud.yaml 一致。
     ports:
       # 安全：仅绑宿主环回（与本地 compose 同策略）。API 在 key 为占位符时不鉴权，
       # 绑 0.0.0.0 等于把 13 个 POST 写端点暴露到公网。外部访问走 ssh -L 或反向代理。

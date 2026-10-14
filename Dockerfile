@@ -123,6 +123,12 @@ COPY migrations ./migrations
 # 验收测试：随镜像入库，远端容器可直接 `python -m pytest tests/` 复跑
 # （T18 双向等价回归 / T16 前视守卫 / V4 数据自检 / V5 组合熔断）
 COPY tests ./tests
+# 根级测试配置必须同入库：conftest.py 把 scripts/ 加入 sys.path（否则
+# test_lookahead_guard 顶层 import compute_factor_v1v6 失败、整轮收集中断），
+# 并含 requires_db seam；pytest.ini 限定 testpaths=tests（否则收集 scripts/ 下
+# 顶层 raise SystemExit 的冒烟脚本会崩收集）。此前漏 COPY → 生产镜像无法容器内跑测试。
+COPY conftest.py ./conftest.py
+COPY pytest.ini ./pytest.ini
 # M5 看板静态文件（Stage 1 构建产物）
 COPY --from=webbuilder /build/dist ./web/dist
 # M8 决策链路源码（WB skill 的内化副本）
