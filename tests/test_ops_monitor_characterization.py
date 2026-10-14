@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from datetime import datetime, timedelta, timezone
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _spec = importlib.util.spec_from_file_location(
@@ -64,10 +65,14 @@ def _base_tables():
         "systemd:qhyc-pipeline.service": (0, "active"),
         "curl": (0, "200"),
     }
+    # 新鲜度用「相对 now」的时间戳，避免硬编码日期随时间跨阈值被误判为过期（时间炸弹：
+    # 原写死 2026-10-13 的推送时间，跨天后 push_silence 误报使本用例变红）。
+    _now = datetime.now(timezone.utc)
     psql_table = {
         "SELECT 1": (True, ""),
-        "SELECT max(trade_date)::text FROM daily_bar": (True, "2026-10-12"),
-        "SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered": (True, "2026-10-13T01:00:00+00:00"),
+        "SELECT max(trade_date)::text FROM daily_bar": (True, _now.date().isoformat()),
+        "SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered":
+            (True, (_now - timedelta(minutes=30)).isoformat()),
     }
     return sh_table, psql_table
 
