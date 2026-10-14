@@ -16,6 +16,7 @@ from app.api.routers import (
     pipeline,    # M8 决策链路容器化
     position,    # §18.4/§18.5 M6a
     predict,
+    scheduled_tasks,  # 2026-10-14 定时任务字典/流水查询（迁移 043）
     symbols,
     tasks,
 )
@@ -46,5 +47,7 @@ api_router.include_router(execution.router, prefix="/execution", tags=["executio
 api_router.include_router(execution_bridge.router, prefix="/execution", tags=["execution-bridge"], dependencies=_auth)
 # M8 决策链路容器化（docs/M8_决策链路容器化_PRD_20260922.md §8）
 api_router.include_router(pipeline.router, prefix="/pipeline", tags=["pipeline"], dependencies=_auth)
+# 定时任务字典/运行流水（migrations/043；用户 2026-10-14 需求）
+api_router.include_router(scheduled_tasks.router, prefix="/ops/tasks", tags=["ops-tasks"], dependencies=_auth)
 
 __all__ = ["api_router"]

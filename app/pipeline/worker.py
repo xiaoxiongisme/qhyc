@@ -224,6 +224,14 @@ def build_scheduler() -> BlockingScheduler:
     )
     logger.info(f"[pipeline] registered check {cfg.check_day} "
                 f"{cfg.check_hour:02d}:{cfg.check_minute:02d}")
+    # 2026-10-14：纳入 ops.scheduled_task 字典控制（迁移 043）——
+    # ① 字典禁用的作业不注册；② 全部作业成败落 ops.scheduled_task_run。
+    try:
+        from app.ops.task_registry import apply_registry_to_scheduler
+
+        apply_registry_to_scheduler(sched)
+    except Exception as e:  # noqa: BLE001 —— 记账基础设施故障不拖垮 worker
+        logger.warning(f"[pipeline] task_registry 应用失败（按原样注册）: {e}")
     return sched
 
 

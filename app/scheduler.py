@@ -1214,6 +1214,7 @@ def _build_scheduler() -> BlockingScheduler:
             misfire_grace_time=1800,
         )
         logger.info(f"[scheduler] SYNC-ONLY mode: registered cloud_local_sync at {_sh:02d}:{_sm:02d} (CLOUD_SYNC_ENABLED)")
+        _apply_task_registry(sched)
         return sched
 
     for spec in settings.cron_specs:
@@ -1517,7 +1518,25 @@ def _build_scheduler() -> BlockingScheduler:
     except Exception as e:
         logger.exception(f"[scheduler] 告警作业注册失败: {e}")
 
+    _apply_task_registry(sched)
     return sched
+
+
+def _apply_task_registry(sched: BlockingScheduler) -> None:
+    """把 ops.scheduled_task 字典控制应用到调度器（2026-10-14，迁移 043）。
+
+    ① 字典 enabled=false 的作业移除（不注册，日志显式说明——绝不静默）；
+    ② 挂运行流水监听：全部作业的 SUBMITTED/EXECUTED/ERROR/MISSED 落
+       ops.scheduled_task_run（不依赖各作业自己写 task_run）。
+
+    字典表不可用（迁移未应用/库不通）时按原样注册并 WARNING，不阻断启动。
+    """
+    try:
+        from app.ops.task_registry import apply_registry_to_scheduler
+
+        apply_registry_to_scheduler(sched)
+    except Exception as e:  # noqa: BLE001 —— 记账/字典基础设施故障不得拖垮调度器
+        logger.warning(f"[scheduler] task_registry 应用失败（按原样注册）: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -2023,10 +2042,24 @@ def _minute_and_bars_job() -> None:
                 # 故任何缺口（含>3天）下次运行都会自动补齐；纯 upsert、1天/块，
                 # 无 synthesize_bars_incremental 的 DELETE 静默漏桶问题。
                 synth_stats = {}
-                for _f in ("min5", "min15", "min30", "min60"):
-                    s.execute(text("CALL public.sp_build_l1_from_minute(:f)"), {"f": _f})
-                    synth_stats[_f] = "ok"
-                s.flush()
+                # 2026-10-14：存储过程也纳入 ops.scheduled_task 字典控制与流水记录
+                # （用户要求"存储过程也需要"）。字典禁用则跳过 CALL 并显式记日志。
+                from app.ops.task_registry import record_execution, sp_enabled
+
+                if not sp_enabled("sp_build_l1_from_minute"):
+                    logger.warning(
+                        "[scheduler] sp_build_l1_from_minute 被字典禁用"
+                        "（ops.scheduled_task.enabled=false），跳过 L1 聚合"
+                    )
+                else:
+                    with record_execution(
+                        "sp_build_l1_from_minute",
+                        payload={"freqs": ["min5", "min15", "min30", "min60"]},
+                    ):
+                        for _f in ("min5", "min15", "min30", "min60"):
+                            s.execute(text("CALL public.sp_build_l1_from_minute(:f)"), {"f": _f})
+                            synth_stats[_f] = "ok"
+                        s.flush()
             logger.info(
                 f"[scheduler] minute_and_bars done: minute_ok={m_ok}/{len(m_stats)} "
                 f"synth={synth_stats}"
@@ -2054,11 +2087,25 @@ def _back_adjusted_job() -> None:
     logger.info("[scheduler] back_adjusted start")
     try:
         with session_scope() as s:
-            for _f in ("min5", "min15", "min30", "min60"):
-                s.execute(
-                    text("CALL l2_adj.sp_build_l2_back_adjusted(:f)"), {"f": _f}
+            # 2026-10-14：存储过程纳入 ops.scheduled_task 字典控制与流水记录。
+            # 字典禁用则跳过 CALL 并显式记日志（不静默）。
+            from app.ops.task_registry import record_execution, sp_enabled
+
+            if not sp_enabled("sp_build_l2_back_adjusted"):
+                logger.warning(
+                    "[scheduler] sp_build_l2_back_adjusted 被字典禁用"
+                    "（ops.scheduled_task.enabled=false），跳过后复权重建"
                 )
-            s.flush()
+            else:
+                with record_execution(
+                    "sp_build_l2_back_adjusted",
+                    payload={"freqs": ["min5", "min15", "min30", "min60"]},
+                ):
+                    for _f in ("min5", "min15", "min30", "min60"):
+                        s.execute(
+                            text("CALL l2_adj.sp_build_l2_back_adjusted(:f)"), {"f": _f}
+                        )
+                    s.flush()
         logger.info("[scheduler] back_adjusted done (min5/15/30/60)")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] back_adjusted failed: {e}")
