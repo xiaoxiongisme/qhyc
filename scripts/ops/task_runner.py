@@ -39,19 +39,22 @@ import sys
 import time
 from datetime import datetime, timezone
 
-PSQL = ["docker", "exec", "qhyc-timescaledb", "psql", "-U", "futures", "-d", "futures",
+PSQL = ["docker", "exec", "-i", "qhyc-timescaledb", "psql", "-U", "futures", "-d", "futures",
         "-v", "ON_ERROR_STOP=1", "-t", "-A"]
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
 
 
 def _psql_query(sql: str, vars: dict | None = None, timeout: int = 30) -> tuple[bool, str]:
-    """执行一条 SQL，返回 (ok, 输出)。"""
+    """执行一条 SQL，返回 (ok, 输出)。
+
+    SQL 经 stdin 传入（``docker exec -i ... psql``，不带 ``-c``）：已实测云端该方式
+    下 psql 变量插值（``:'var'``）正常工作，避免 ``-c`` 模式下插值/引号差异导致的语法错。
+    """
     cmd = list(PSQL)
     for k, v in (vars or {}).items():
         cmd += ["-v", f"{k}={v}"]
-    cmd += ["-c", sql]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, input=sql, capture_output=True, text=True, timeout=timeout)
     except Exception as e:  # noqa: BLE001 —— docker 不在/超时都算不可用
         return False, f"{type(e).__name__}: {e}"
     if p.returncode != 0:
