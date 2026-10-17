@@ -1366,14 +1366,14 @@ def _build_scheduler() -> BlockingScheduler:
     # （CLOUD_SYNC_ENABLED=1）时已在上方早退分支，不会注册——由云端调度器运行。
     sched.add_job(
         _back_adjusted_job,
-        trigger=CronTrigger(minute="25,55", timezone=settings.env.TZ),
+        trigger=CronTrigger(hour="2,11,15", minute="55", timezone=settings.env.TZ),
         id="back_adjusted_rebuild",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
         misfire_grace_time=900,
     )
-    logger.info("[scheduler] registered back_adjusted_rebuild at :25/:55 "
+    logger.info("[scheduler] registered back_adjusted_rebuild at 02:55/11:55/15:55 "
                 "(post bars; depends roll_segment + bar_*)")
 
     # fut_kline 增量/派生重建作业已于 2026-10-04 随 fdf 模块退役一并停用（天勤清理专项）。
@@ -1517,6 +1517,30 @@ def _build_scheduler() -> BlockingScheduler:
             logger.info("[scheduler] alerting 停用（ALERT_ENABLED!=1）")
     except Exception as e:
         logger.exception(f"[scheduler] 告警作业注册失败: {e}")
+
+    # 字典周期再同步作业：定期把 ops.scheduled_task.schedule 变更同步到内存作业，
+    # 免重启即时生效（详见 app.ops.task_registry.resync_jobs_from_db）。
+    # 默认每 5 分钟一次；若 DB 已登记 scheduler_resync 行，下方的 apply_registry_to_scheduler
+    # 会在启动时按 DB schedule 覆盖此默认值（同样无需改代码）。
+    try:
+        from apscheduler.triggers.cron import CronTrigger as _Cron
+        from app.ops.task_registry import resync_jobs_from_db
+
+        sched.add_job(
+            resync_jobs_from_db,
+            trigger=_Cron.from_crontab("*/5 * * * *", timezone=settings.env.TZ),
+            id="scheduler_resync",
+            args=[sched],
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+        logger.info(
+            "[scheduler] registered scheduler_resync (every 5min, DB-driven)"
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[scheduler] scheduler_resync 注册失败: {e}")
 
     _apply_task_registry(sched)
     return sched
@@ -2077,37 +2101,51 @@ def _back_adjusted_job() -> None:
 
     * roll_segment 任一维度（price_shift / Σcum_offset / Σepoch(seg_start) / 段数）
       变化 ⇒ 全量重建该 symbol（覆盖 P0-5 等差改写、roll_segment 修正等所有口径变更）；
-    * 否则仅增量补最新桶（廉价，30 分钟一次无压力）。
+    * 否则仅增量补最新桶（廉价，一天三次无压力）。
 
     写入落 l2_adj.bar_*m_ba 并刷新 back_adjusted_meta.updated_at，供
     ``_check_freshness`` 的新鲜度告警监控。本作业依赖 ``_minute_and_bars_job``
-    已把 l1_mkt.bar_* 落盘（错峰 :25/:55），且依赖 roll_segment 已是最新。
+    已把 l1_mkt.bar_* 落盘（错峰各整点 :55：02:55/11:55/15:55），且依赖 roll_segment 已是最新。
     若 roll_segment 不存在，存储过程会抛异常并由下方 except 记日志（不静默）。
     """
     logger.info("[scheduler] back_adjusted start")
+    from app.ops.task_registry import record_start, record_finish, sp_enabled
+    if not sp_enabled("sp_build_l2_back_adjusted"):
+        logger.warning(
+            "[scheduler] sp_build_l2_back_adjusted 被字典禁用"
+            "（ops.scheduled_task.enabled=false），跳过后复权重建"
+        )
+        return
+    run_id = record_start(
+        "sp_build_l2_back_adjusted",
+        trigger="auto",
+        payload={"freqs": ["min5", "min15", "min30", "min60"]},
+    )
     try:
         with session_scope() as s:
-            # 2026-10-14：存储过程纳入 ops.scheduled_task 字典控制与流水记录。
-            # 字典禁用则跳过 CALL 并显式记日志（不静默）。
-            from app.ops.task_registry import record_execution, sp_enabled
-
-            if not sp_enabled("sp_build_l2_back_adjusted"):
-                logger.warning(
-                    "[scheduler] sp_build_l2_back_adjusted 被字典禁用"
-                    "（ops.scheduled_task.enabled=false），跳过后复权重建"
+            for _f in ("min5", "min15", "min30", "min60"):
+                s.execute(
+                    text("CALL l2_adj.sp_build_l2_back_adjusted(:f)"), {"f": _f}
                 )
-            else:
-                with record_execution(
-                    "sp_build_l2_back_adjusted",
-                    payload={"freqs": ["min5", "min15", "min30", "min60"]},
-                ):
-                    for _f in ("min5", "min15", "min30", "min60"):
-                        s.execute(
-                            text("CALL l2_adj.sp_build_l2_back_adjusted(:f)"), {"f": _f}
-                        )
-                    s.flush()
-        logger.info("[scheduler] back_adjusted done (min5/15/30/60)")
-    except Exception as e:  # noqa: BLE001
+            s.flush()
+        # 溯源补强：本次运行刷新的符号数（区分"增量补桶"与"全量级联重锚"，
+        # 回应 2026-10-15 溯源诉求——全量重建会刷新全部 228 个符号）。
+        with session_scope() as s2:
+            touched = s2.execute(
+                text(
+                    "SELECT count(*) FROM l2_adj.back_adjusted_meta "
+                    "WHERE updated_at >= now() - interval '15 minutes'"
+                )
+            ).scalar() or 0
+        record_finish(
+            run_id,
+            "success",
+            payload={"freqs": ["min5", "min15", "min30", "min60"],
+                      "touched_symbols": int(touched)},
+        )
+        logger.info(f"[scheduler] back_adjusted done; touched={touched} symbols")
+    except Exception as e:  # noqa: BLE016
+        record_finish(run_id, "failed", message=str(e)[:500])
         logger.exception(f"[scheduler] back_adjusted failed: {e}")
 
 

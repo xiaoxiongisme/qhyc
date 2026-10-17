@@ -17,8 +17,13 @@
 3. **存储过程执行记录** :func:`call_sp_recorded` / :func:`sp_enabled` ——
    CALL 存储过程同样过字典门并记流水（用户要求"存储过程也需要"）。
 4. **APScheduler 监听** :func:`apply_registry_to_scheduler` —— 统一给调度器
-   挂：① 字典禁用的作业移除；② 全部作业的 SUBMITTED/EXECUTED/ERROR/MISSED
-   事件落流水（不依赖各作业自己写 task_run）。
+   挂：① 字典禁用的作业移除；② 按字典 ``schedule`` 列（标准 5 段 cron）重注册作业
+   触发时间，使 DB 成为频率单一真相、覆盖代码硬编码 cron；③ 全部作业的
+   SUBMITTED/EXECUTED/ERROR/MISSED 事件落流水（不依赖各作业自己写 task_run）。
+5. **周期再同步** :func:`resync_jobs_from_db` —— 由内置 ``scheduler_resync`` 作业
+   定时调用，把 ``ops.scheduled_task`` 的频率/禁用变更**即时**应用到运行中的作业，
+   免去 ``docker restart qhyc-api`` 才重载的限制（启动时的 ``apply_registry_to_scheduler``
+   只跑一次）。已知限制：仅处理"已注册作业"，DB 新增/重新启用作业仍需重启。
 
 防静默失效纪律（本项目头号缺陷类型）
 ----------------------------------
@@ -42,6 +47,10 @@ from app.core.logging import logger
 #: 字典/流水不可用时的告警只发一次（避免每作业每次执行都刷屏）
 _WARNED: set[str] = set()
 _WARN_LOCK = threading.Lock()
+
+#: 系统/运维类作业：永不被字典禁用逻辑移除（避免"自我关停"再同步等基础设施）。
+#: 这些作业的"启用"由代码保证，但频率仍可由 DB schedule 调。
+SYSTEM_JOBS: set[str] = {"scheduler_resync"}
 
 
 def _warn_once(key: str, msg: str) -> None:
@@ -340,8 +349,188 @@ def sp_enabled(task_id: str, default: bool = True) -> bool:
 # APScheduler 集成
 # ---------------------------------------------------------------------------
 
+def _parse_db_cron(expr: Any, tz: Any) -> Any | None:
+    """把 ``ops.scheduled_task.schedule`` 的 5 段 cron 字符串解析为 CronTrigger。
+
+    仅当字符串为合法 cron（恰好 5 字段、可被 APScheduler 解析）时返回 trigger；
+    否则返回 ``None``（调用方沿用代码内硬编码的默认 cron，绝不抛错）。这样即使
+    schedule 列仍是早期"目录说明"文本也不会破坏调度。
+    """
+    if expr is None:
+        return None
+    expr = str(expr).strip()
+    if not expr:
+        return None
+    # 合法 cron 必须恰好 5 字段（分 时 日 月 周）；否则视为说明文本，忽略
+    if len(expr.split()) != 5:
+        return None
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+
+        return CronTrigger.from_crontab(expr, timezone=tz)
+    except Exception as exc:  # noqa: BLE001
+        _warn_once(
+            f"bad_schedule:{expr}",
+            f"[task_registry] schedule 列值 {expr!r} 不是合法 cron（已忽略，沿用代码默认）: {exc}",
+        )
+        return None
+
+
+def _reregister_schedules_from_db(sched: Any) -> None:
+    """按字典 ``schedule`` 列重注册 apscheduler 作业的触发时间。
+
+    在 :func:`apply_registry_to_scheduler` 内、禁用作业移除之后调用：读取
+    ``ops.scheduled_task(executor='apscheduler')`` 的 schedule 列，对当前已注册的作业
+    用 ``CronTrigger.from_crontab`` 重建触发器（``sched.reschedule_job`` 保留
+    func/args/kwargs/max_instances/coalesce 等，仅换触发时间）。合法的 schedule 即视为
+    频率的"单一真相"，覆盖 ``_build_scheduler`` 里的硬编码 ``CronTrigger``；非法/空则
+    保留代码默认。任何异常只记日志，不影响调度器启动。
+    """
+    tz = getattr(sched, "timezone", None)
+    try:
+        from app.core.db import get_session_factory
+
+        factory = get_session_factory()
+        with factory() as s:
+            rows = s.execute(
+                text(
+                    "SELECT task_id, schedule FROM ops.scheduled_task "
+                    "WHERE executor = 'apscheduler'"
+                )
+            ).all()
+    except Exception as exc:  # noqa: BLE001
+        _warn_once(
+            "registry_unavailable_schedule",
+            f"[task_registry] 读取 schedule 列失败（沿用代码默认 cron）: {exc}",
+        )
+        return
+
+    db_schedule = {str(r[0]): ("" if r[1] is None else str(r[1])) for r in rows}
+    for job in sched.get_jobs():
+        expr = db_schedule.get(job.id)
+        if not expr:  # 未登记 schedule 的作业：保留代码默认
+            continue
+        trigger = _parse_db_cron(expr, tz)
+        if trigger is None:
+            continue
+        try:
+            sched.reschedule_job(job.id, trigger=trigger)
+            logger.info(
+                f"[task_registry] 作业 {job.id} 触发时间已按字典 schedule={expr!r} 重注册"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"[task_registry] 作业 {job.id} 按 schedule 重注册失败（沿用默认）: {exc}"
+            )
+
+
+def _job_crontab(trigger: Any) -> str | None:
+    """返回触发器的稳定签名串，用于与 DB 重算结果做幂等比较。
+
+    直接复用 ``CronTrigger.__repr__``（含 minute/hour/day/month/day_of_week 与
+    timezone，字段顺序固定）：两个**同源解析**出的 trigger 其 repr 必相等 → 已同步则
+    跳过、不抖动；非 CronTrigger（如 IntervalTrigger）返回 None。
+    """
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(trigger, CronTrigger):
+        return None
+    try:
+        return repr(trigger)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resync_jobs_from_db(sched: Any) -> None:
+    """周期再同步：把 DB 的 schedule/enabled 变更应用到运行中的作业，免重启。
+
+    与 :func:`apply_registry_to_scheduler`（仅启动时跑一次）互补：本函数由内置的
+    ``scheduler_resync`` 作业定时调用，使 ``ops.scheduled_task`` 的频率/禁用变更
+    **即时生效**，无需 ``docker restart qhyc-api``：
+
+      * schedule 列（合法 5 段 cron）与当前触发时间不一致 → ``reschedule_job``；
+      * enabled=false 且作业当前在跑 → ``remove_job``（基础设施作业除外，见
+        :data:`SYSTEM_JOBS`，防止"自我关停"再同步）；
+      * 已按 DB 同步的作业不做任何动作（幂等，无抖动）。
+
+    已知限制：DB 新增/重新启用的作业（需重建 func/args，字典表未存）不在本函数范围，
+    仍须重启；本函数只处理"已注册作业的触发时间 + 禁用开关"。
+    任何异常只记日志，绝不拖垮调度器。
+    """
+    tz = getattr(sched, "timezone", None)
+    try:
+        from app.core.db import get_session_factory
+
+        factory = get_session_factory()
+        with factory() as s:
+            rows = s.execute(
+                text(
+                    "SELECT task_id, schedule, enabled FROM ops.scheduled_task "
+                    "WHERE executor = 'apscheduler'"
+                )
+            ).all()
+    except Exception as exc:  # noqa: BLE001
+        _warn_once(
+            "registry_unavailable_resync",
+            f"[task_registry] 周期再同步读取失败（跳过本次）: {exc}",
+        )
+        return
+
+    db = {
+        str(r[0]): {
+            "schedule": ("" if r[1] is None else str(r[1])),
+            "enabled": bool(r[2]),
+        }
+        for r in rows
+    }
+
+    for job in sched.get_jobs():
+        rec = db.get(job.id)
+        if rec is None:
+            continue  # 纯代码作业（不在字典）：不动，交给代码默认
+        # ① 禁用：移除作业（基础设施作业除外，防自我关停）
+        if not rec["enabled"] and job.id not in SYSTEM_JOBS:
+            try:
+                sched.remove_job(job.id)
+                logger.info(
+                    f"[task_registry] 周期再同步：作业 {job.id} 字典已禁用，已移除"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"[task_registry] 周期再同步移除作业 {job.id} 失败: {exc}"
+                )
+            continue
+        # ② 频率：仅当与当前触发时间不一致才 reschedule（幂等，无抖动）
+        expr = rec["schedule"]
+        if not expr:
+            continue
+        trigger = _parse_db_cron(expr, tz)
+        if trigger is None:
+            continue
+        try:
+            cur = _job_crontab(job.trigger)
+            new = _job_crontab(trigger)
+        except Exception:  # noqa: BLE001
+            cur = new = None
+        if cur is not None and cur == new:
+            continue  # 已同步，跳过
+        try:
+            sched.reschedule_job(job.id, trigger=trigger)
+            logger.info(
+                f"[task_registry] 周期再同步：作业 {job.id} 触发时间已更新为 "
+                f"schedule={expr!r}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"[task_registry] 周期再同步作业 {job.id} 失败（沿用当前）: {exc}"
+            )
+
+
 def apply_registry_to_scheduler(sched: Any) -> None:
-    """给调度器应用字典控制：① 移除 enabled=false 的作业；② 挂运行流水监听。
+    """给调度器应用字典控制：① 移除 enabled=false 的作业；② 按 schedule 列重注册
+    触发时间；③ 挂运行流水监听。
 
     在 ``_build_scheduler`` 返回前调用（scheduler.py 与 pipeline/worker.py 均已接）。
     任何失败只记日志，不影响调度器启动。
@@ -350,7 +539,7 @@ def apply_registry_to_scheduler(sched: Any) -> None:
         disabled = disabled_apscheduler_jobs()
         if disabled:
             for job in sched.get_jobs():
-                if job.id in disabled:
+                if job.id in disabled and job.id not in SYSTEM_JOBS:
                     try:
                         sched.remove_job(job.id)
                         logger.info(
@@ -361,6 +550,12 @@ def apply_registry_to_scheduler(sched: Any) -> None:
                         logger.warning(f"[task_registry] 移除作业 {job.id} 失败: {exc}")
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[task_registry] 字典门应用失败（按原样注册）: {exc}")
+
+    # ② 按字典 schedule 列重注册触发时间（DB 成为频率单一真相，覆盖硬编码 cron）
+    try:
+        _reregister_schedules_from_db(sched)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[task_registry] schedule 重注册失败（沿用代码默认 cron）: {exc}")
 
     install_run_recorder(sched)
 
@@ -495,4 +690,5 @@ __all__ = [
     "call_sp_recorded",
     "apply_registry_to_scheduler",
     "install_run_recorder",
+    "resync_jobs_from_db",
 ]

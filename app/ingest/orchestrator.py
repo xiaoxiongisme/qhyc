@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta
 from typing import Iterable
 
 from app.core.config import MainContractSpec, get_settings
-from app.core.bootstrap import release_symbol_lock, try_symbol_lock
+from app.core.bootstrap import ingest_lock_holder, symbol_ingest_lock
 from app.core.logging import logger
 from app.ingest.akshare_source import AkShareSource
 from app.repositories._base import upsert_daily_bars
@@ -64,33 +64,40 @@ class IngestOrchestrator:
             exchange=spec.exchange,
             product=spec.product,
         )
-        # R3③ 品种级锁：boot 与定时任务并发时，同品种只允许一个执行者
-        if not try_symbol_lock(self.session, spec.symbol):
-            report.error = "skipped: symbol locked by another ingest task"
-            logger.warning(f"[ingest] {spec.symbol} 被其他任务锁定，跳过")
-            return report
-        try:
-            # 1. akshare 拉取
-            src = AkShareSource(spec.exchange)
-            rows = src.fetch_daily(spec.symbol, start, end)
-            if rows:
-                n = upsert_daily_bars(self.session, rows)
-                self.session.commit()
-                report.akshare_rows = n
-                logger.info(
-                    f"[ingest] {spec.symbol} akshare upserted {n}"
+        # R3③ 品种级锁：boot 与定时任务并发时，同品种只允许一个执行者。
+        # ★ 2026-10-16：改用专用连接持锁的 symbol_ingest_lock（旧写法在业务
+        #    session 上 try/unlock，commit 后连接归还池、并发下解锁落到别的
+        #    连接 → 锁泄漏，同品种后续恒被跳过；详见 bootstrap 函数 docstring）。
+        with symbol_ingest_lock(spec.symbol) as got:
+            if not got:
+                report.error = "skipped: symbol locked by another ingest task"
+                holder = ingest_lock_holder(spec.symbol)
+                logger.warning(
+                    f"[ingest] {spec.symbol} 被其他任务锁定，跳过"
+                    + (f"（持锁 pid={holder[0]} state={holder[1]} "
+                       f"since={holder[2]}）" if holder else "")
                 )
+                return report
+            try:
+                # 1. akshare 拉取
+                src = AkShareSource(spec.exchange)
+                rows = src.fetch_daily(spec.symbol, start, end)
+                if rows:
+                    n = upsert_daily_bars(self.session, rows)
+                    self.session.commit()
+                    report.akshare_rows = n
+                    logger.info(
+                        f"[ingest] {spec.symbol} akshare upserted {n}"
+                    )
 
-            # C9 去天勤：原天勤补缺 + 二次比对的校准逻辑已移除（天勤不再作为源/校准源）。
-            # 日线仅由 akshare 主源入库；如需数据质量监控，后续以 akshare 双源/规则替代。
-            return report
-        except Exception as e:
-            self.session.rollback()
-            report.error = str(e)
-            logger.exception(f"[ingest] {spec.symbol} 失败: {e}")
-            return report
-        finally:
-            release_symbol_lock(self.session, spec.symbol)
+                # C9 去天勤：原天勤补缺 + 二次比对的校准逻辑已移除（天勤不再作为源/校准源）。
+                # 日线仅由 akshare 主源入库；如需数据质量监控，后续以 akshare 双源/规则替代。
+                return report
+            except Exception as e:
+                self.session.rollback()
+                report.error = str(e)
+                logger.exception(f"[ingest] {spec.symbol} 失败: {e}")
+                return report
 
     def ingest_all(
         self,

@@ -87,7 +87,7 @@ def _pg_env_fallback() -> dict:
     from app.core.config import get_settings
     from sqlalchemy.engine import make_url
 
-    u = make_url(get_settings().database_url())
+    u = make_url(get_settings().env.database_url())
     return {
         "QH_PG_HOST": u.host or "127.0.0.1",
         "QH_PG_PORT": str(u.port or 5432),

@@ -151,7 +151,7 @@ VALUES
  ('warehouse_receipt', '仓单日报采集', '每日 18:40 四所仓单（scrapling 浏览器版，受 warehouse_receipt.enabled 门）', 'apscheduler', '40 18 * * *', '每日 18:40', 'app/scheduler.py::_warehouse_receipt_job', 'cloud-container', TRUE, 3),
  ('hourly_collect', '小时线增量采集', '每小时整点全品种小时线增量（受 hourly.enabled 门）', 'apscheduler', '0 * * * *', '每小时整点', 'app/scheduler.py::_hourly_job', 'cloud-container', TRUE, 3),
  ('minute_and_bars', '分钟优先管线', '每 :07/:37 1 分钟并入 minute_bar 并增量合成 bar_5/15/30/60m（内含 CALL sp_build_l1_from_minute）', 'apscheduler', '7,37 * * * *', '每小时 :07/:37', 'app/scheduler.py::_minute_and_bars_job', 'cloud-container', TRUE, 3),
- ('back_adjusted_rebuild', '后复权物化重建', '每 :25/:55 重建 l2_adj.bar_*_ba（内含 CALL sp_build_l2_back_adjusted，roll_segment 签名变化自动全量）', 'apscheduler', '25,55 * * * *', '每小时 :25/:55', 'app/scheduler.py::_back_adjusted_job', 'cloud-container', TRUE, 3),
+ ('back_adjusted_rebuild', '后复权物化重建', '每日 02:55/11:55/15:55 重建 l2_adj.bar_*_ba（内含 CALL sp_build_l2_back_adjusted，roll_segment 签名变化自动全量；2026-10-15 由每小时 :25/:55 降频为一天三次）', 'apscheduler', '55 2,11,15 * * *', '每日 02:55/11:55/15:55', 'app/scheduler.py::_back_adjusted_job', 'cloud-container', TRUE, 3),
  ('inventory_weekly', '库存周报采集', '工作日 17:00 库存采集（受 inventory.enabled 门）', 'apscheduler', '0 17 * * 1-5', '工作日 17:00', 'app/scheduler.py::_inventory_job', 'cloud-container', TRUE, 4),
  ('spot_basis_daily', '基差/现货日频', '每日 17:10 现货价格+基差入库（受 spot_basis.enabled 门）', 'apscheduler', '10 17 * * *', '每日 17:10', 'app/scheduler.py::_spot_basis_job', 'cloud-container', TRUE, 3),
  ('daily_futures_refresh', '期货日频刷新', '每日 18:10 刷新 contract_daily 与 main_contract_map', 'apscheduler', '10 18 * * *', '每日 18:10', 'scripts/daily_futures_refresh.py::main', 'cloud-container', TRUE, 3),
@@ -159,7 +159,8 @@ VALUES
  ('factor_ic_monitor_daily', '因子 IC 监控', '每日 16:45 因子 IC 监控（受 factor_ic_monitor_enabled 开关）', 'apscheduler', '45 16 * * *', '每日 16:45', 'app/scheduler.py::_factor_ic_monitor_job', 'cloud-container', TRUE, 3),
  ('data_selfcheck_daily', '数据自检', '每日 17:35 数据自检写 anomaly_ticket 工单（默认关，DATA_SELFCHECK_ENABLED=1 开启）', 'apscheduler', '35 17 * * *', '每日 17:35', 'app/scheduler.py::_data_selfcheck_job', 'cloud-container', FALSE, 3),
  ('ops_backup_daily', '运维逻辑备份', '每日备份关键小表（rebuild 前可回滚点；BACKUP_ENABLED=1 开启，时间由 BACKUP_RUN_HOUR/MINUTE 决定）', 'apscheduler', '0 4 * * *', '每日（env 可调）', 'app/scheduler.py::_backup_daily_job', 'cloud-container', TRUE, 3),
- ('ops_alert_check', '巡检告警', '每 10 分钟资源/数据新鲜度/DB uptime/作业心跳巡检（ALERT_ENABLED=1 开启）', 'apscheduler', '*/10 * * * *', '每 10 分钟', 'app/scheduler.py::_alert_check_job', 'cloud-container', TRUE, 3)
+ ('ops_alert_check', '巡检告警', '每 10 分钟资源/数据新鲜度/DB uptime/作业心跳巡检（ALERT_ENABLED=1 开启）', 'apscheduler', '*/10 * * * *', '每 10 分钟', 'app/scheduler.py::_alert_check_job', 'cloud-container', TRUE, 3),
+ ('scheduler_resync', '调度字典周期再同步', '每 5 分钟把 ops.scheduled_task.schedule/enabled 变更同步到内存作业，免 docker restart 即时生效（app/ops/task_registry.py::resync_jobs_from_db）', 'apscheduler', '*/5 * * * *', '每 5 分钟', 'app/ops/task_registry.py::resync_jobs_from_db', 'cloud-container', TRUE, 3)
 ON CONFLICT (task_id) DO UPDATE SET
     name = EXCLUDED.name, purpose = EXCLUDED.purpose, executor = EXCLUDED.executor,
     schedule = EXCLUDED.schedule, schedule_desc = EXCLUDED.schedule_desc,
