@@ -87,7 +87,7 @@ def _pg_env_fallback() -> dict:
     from app.core.config import get_settings
     from sqlalchemy.engine import make_url
 
-    u = make_url(get_settings().database_url())
+    u = make_url(get_settings().env.database_url())
     return {
         "QH_PG_HOST": u.host or "127.0.0.1",
         "QH_PG_PORT": str(u.port or 5432),
@@ -106,29 +106,37 @@ def run_once(kind: str, *, wait_readiness: bool = False,
     if wait_readiness and cfg.readiness_enabled:
         data_ready = readiness.wait_ready(cfg.readiness_timeout_min, cfg.readiness_poll_sec)
         if not data_ready and cfg.notify_on_failure:
+            # 不再断言"超时 N 分钟"：非交易日缺数会立即返回（详见 readiness.py），
+            # 措辞以结果为准，避免告警正文与真实耗时不符。
             _notify("⚠ 决策链路降级：数据未就绪",
-                    f"run_date={date.today()} readiness 超时 {cfg.readiness_timeout_min} 分钟，"
+                    f"run_date={date.today()} readiness 未通过（最长等待 "
+                    f"{cfg.readiness_timeout_min} 分钟），"
                     f"轻基本面相关字段将标 N/A，链路照常继续。")
 
     run_id = recorder.start_run(kind, date.today(), digest)
     args = list(_KIND_ARGS.get(kind, ["--daily"])) + list(extra_args or [])
-    env = os.environ.copy()
-    env.update({
-        "QH_BRIEF_BASE": cfg.brief_base,
-        "PYTHONPATH": snapshot,
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "TZ": os.environ.get("TZ", "Asia/Shanghai"),
-    })
-    # WB 侧子脚本直连 PG 读的是 QH_PG_*，而 compose 只为 pipeline 服务注入了这组变量。
-    # api 容器经 /pipeline/run 手动触发时它们缺失 → 子脚本退化为连 localhost 失败。
-    # 统一兜底：**从应用同一配置源 settings.database_url() 派生**（单一真源），
-    # 不再自带一份 host 默认（旧 127.0.0.1 与 app.core.config 的 timescaledb 分叉 → 连错库）。
-    for k, v in _pg_env_fallback().items():
-        if not env.get(k):
-            env[k] = v
     t0 = time.time()
     status, error, code = "ok", None, 0
+    # ⚠ 环境变量构造必须与子进程调用同处一个 try。原实现把 _pg_env_fallback()
+    #   留在 try 之外，它一抛异常（2026-10-15~17 的 'Settings' object has no
+    #   attribute 'database_url'）就直接跳出 run_once：finish_run 永不执行，
+    #   pipeline_run 永久停在 running、不落 steps，也不推失败告警——链路连挂
+    #   3 天才在"简报缺失"上被发现。任何异常都要收进 status=fail，由 finally 收尾。
     try:
+        env = os.environ.copy()
+        env.update({
+            "QH_BRIEF_BASE": cfg.brief_base,
+            "PYTHONPATH": snapshot,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TZ": os.environ.get("TZ", "Asia/Shanghai"),
+        })
+        # WB 侧子脚本直连 PG 读的是 QH_PG_*，而 compose 只为 pipeline 服务注入了这组变量。
+        # api 容器经 /pipeline/run 手动触发时它们缺失 → 子脚本退化为连 localhost 失败。
+        # 统一兜底：**从应用同一配置源 settings.database_url() 派生**（单一真源），
+        # 不再自带一份 host 默认（旧 127.0.0.1 与 app.core.config 的 timescaledb 分叉 → 连错库）。
+        for k, v in _pg_env_fallback().items():
+            if not env.get(k):
+                env[k] = v
         proc = subprocess.run(
             [sys.executable, "run_pipeline.py", *args],
             cwd=snapshot, env=env, capture_output=True, text=True,
@@ -142,18 +150,22 @@ def run_once(kind: str, *, wait_readiness: bool = False,
     except subprocess.TimeoutExpired:
         status, error = "partial", f"timeout>{cfg.step_timeout_sec}s"
     except Exception as e:  # noqa: BLE001
-        status, error = "fail", str(e)[:500]
-
-    steps = [{
-        "i": 1, "name": kind, "ok": status == "ok",
-        "dur_s": round(time.time() - t0, 1), "exit": code,
-    }]
-    artifacts = _collect_artifacts(cfg.brief_base, t0)
-    recorder.finish_run(run_id, status, steps=steps, artifacts=artifacts,
-                        data_ready=data_ready, error=error)
-    if status != "ok" and cfg.notify_on_failure:
-        _notify(f"❌ 决策链路 {kind} 失败",
-                f"run_id={run_id} status={status}\n{error or ''}"[:1500])
+        status, error = "fail", f"{type(e).__name__}: {e}"[:500]
+        logger.exception(f"[pipeline] {kind} 调度层异常: {e}")
+    finally:
+        steps = [{
+            "i": 1, "name": kind, "ok": status == "ok",
+            "dur_s": round(time.time() - t0, 1), "exit": code,
+        }]
+        artifacts = _collect_artifacts(cfg.brief_base, t0)
+        try:
+            recorder.finish_run(run_id, status, steps=steps, artifacts=artifacts,
+                                data_ready=data_ready, error=error)
+        except Exception as e:  # noqa: BLE001 —— 收尾失败也要留痕，不能再静默
+            logger.error(f"[pipeline] finish_run 失败 run_id={run_id} status={status}: {e}")
+        if status != "ok" and cfg.notify_on_failure:
+            _notify(f"❌ 决策链路 {kind} 失败",
+                    f"run_id={run_id} status={status}\n{error or ''}"[:1500])
     return {"run_id": run_id, "status": status, "data_ready": data_ready,
             "artifacts": artifacts, "error": error}
 
