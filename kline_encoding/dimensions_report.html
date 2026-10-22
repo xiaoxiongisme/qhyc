@@ -1,0 +1,526 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>多维度分析报告</title><style>
+body{font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#FBFAF7;color:#26215C;margin:0;padding:32px 40px;line-height:1.65}
+.wrap{max-width:980px;margin:0 auto}
+h1{font-size:24px;font-weight:700;margin:0 0 4px}
+h2{font-size:18px;font-weight:700;margin:36px 0 10px;padding-left:10px;border-left:4px solid #5C4FA1}
+h3{font-size:14.5px;font-weight:700;margin:22px 0 8px}
+.sub{color:#888780;font-size:12.5px;margin-bottom:18px}
+.box{background:#fff;border:1px solid #E5E2D8;border-radius:10px;padding:14px 16px;margin:12px 0;font-size:13px}
+.box.ok{border-left:4px solid #2E7D4F;background:#F4FAF6}
+.box.warn{border-left:4px solid #EF9F27;background:#FDF9F0}
+.box.bad{border-left:4px solid #C4372E;background:#FBF4F3}
+table{border-collapse:collapse;width:100%;font-size:12px;margin:10px 0;background:#fff}
+th{background:#F6F4EE;color:#26215C;font-weight:600;padding:6px 8px;border:1px solid #E5E2D8;text-align:center}
+td{padding:5px 8px;border:1px solid #EFEDE4;text-align:center}
+td.l{text-align:left}
+tr:nth-child(even) td{background:#FCFBF8}
+.fig{background:#fff;border:1px solid #E5E2D8;border-radius:10px;padding:10px;margin:14px 0}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.p-pass{background:#E4F2E9;color:#2E7D4F}.p-fail{background:#F9E7E5;color:#C4372E}.p-mid{background:#FBF0DC;color:#9A6209}
+code{background:#F1EFE7;border-radius:4px;padding:1px 5px;font-size:11.5px}
+.mut{color:#888780;font-size:11.5px}
+b.r{color:#C4372E}b.g{color:#2E7D4F}b.p{color:#5C4FA1}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:800px){.grid2{display:block}}
+</style></head><body><div class="wrap"><h1>再多点维度：矩阵与线性代数之外的八个分析视角</h1><div class="sub">甲醇 MA + 乙二醇 EG · 主力连续 1 分钟 · 2020-2025 训练 489,975 根/品种 + 2026 holdout 35,865 根/品种 · 口径：夜盘归属次日交易日、会话内 60 秒相邻对 · 2026-10-17</div><h2>一、八个新维度总览</h2><table><thead><tr><th>维度</th><th>数学对象</th><th>关键读数（MA / EG）</th><th>判决</th></tr></thead><tbody><tr><td class="l">① 信息论与压缩</td><td>熵、块熵、冗余度</td><td>熵率 2.722 / 2.780 bit，压缩率 45.4% / 46.3%</td><td><span class="pill p-pass">六位码过半是冗余</span></td></tr><tr><td>② 记忆深度</td><td>k 阶马尔可夫链 holdout 损失</td><td>增益 +0.066 / +0.031（一阶），+0.041 / +0.035（二阶）</td><td><span class="pill p-mid">二阶仍有增量，三阶饱和</span></td></tr><tr><td>③ 图论</td><td>加权有向图 / 社区 / PageRank</td><td>显著边 59/64，社区=[阴4态|阳4态]，Q=0.093</td><td><span class="pill p-pass">拓扑复现阴阳两族</span></td></tr><tr><td class="l">④ 频域与节律</td><td>FFT / 星期×时段矩阵 / 月度</td><td>周一振幅为周二~周五的 0.69 倍；月峰谷比 1.39</td><td><span class="pill p-pass">周一效应 + 三月高峰</span></td></tr><tr><td class="l">⑤ 结构稳定性</td><td>跨年 Fro 漂移 / χ² / CUSUM</td><td>漂移 0.08–0.33；2026 vs 训练 0.24；CUSUM 无变点</td><td><span class="pill p-mid">统计显著、量级小、无退化</span></td></tr><tr><td>⑥ 长程标度</td><td>DFA / 方差比 / 池化 ACF</td><td>DFA α₁ₘ=0.76；VR(10)=0.66；ACF₆₀=0.34</td><td><span class="pill p-pass">波动长记忆、收益短程回归</span></td></tr><tr><td>⑦ 条件结构</td><td>P(下一态|当前态) / JS 距离</td><td>综卦对 JS=0.0011 vs 错卦对 0.0354</td><td><span class="pill p-fail">推翻「综卦=大变动」</span></td></tr><tr><td>⑧ 尾部相依</td><td>极端分位联合超越 / 领先滞后</td><td>99% 分位联合/独立 = 34.3×；峰值在 k=0</td><td><span class="pill p-pass">风控共振，无领先套利</span></td></tr></tbody></table><div class="box"><b>一句话总括：</b>八根 K 线形态码是一个「低熵、二阶记忆、阴阳分族、有节律、长记忆波动」的系统——可预测性稀缺但真实（一阶 top-1 24–28% vs 随机 12.5%），且全部集中在幅度维度；形态码本身的六位里只有约 2.7 比特是有效信息。</div><h2>二、维度① 信息论与压缩：每根 K 线只讲 2.7 比特的话</h2><div class="fig"><svg viewBox="0 0 680 300" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度一 · 信息论与压缩：六位码每根只携带 2.72 比特</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">熵率 = 块熵 H(下一态 | 前三态)；对比 6 bit 编码上限</text>
+<text x="140.0" y="92.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">H(当前状态)</text>
+<rect x="150.0" y="78.0" width="76.1" height="20.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="232.1" y="92.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.927 bit</text>
+<text x="140.0" y="126.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">H(下一态 | 当前态)</text>
+<rect x="150.0" y="112.0" width="71.8" height="20.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="227.8" y="126.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.760 bit</text>
+<text x="140.0" y="160.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">块熵 k=2</text>
+<rect x="150.0" y="146.0" width="71.2" height="20.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="227.2" y="160.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.739 bit</text>
+<text x="140.0" y="194.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">块熵 k=3（熵率）</text>
+<rect x="150.0" y="180.0" width="70.8" height="20.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="226.8" y="194.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.722 bit</text>
+<line x1="150.0" y1="78.0" x2="150.0" y2="214.0" stroke="#888780" stroke-width="1"/>
+<text x="150.0" y="232.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">0</text>
+<text x="228.0" y="232.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">3</text>
+<line x1="306.0" y1="70.0" x2="306.0" y2="214.0" stroke="#C4372E" stroke-width="1.4" stroke-dasharray="4,3"/>
+<text x="306.0" y="66.0" font-size="9.5" fill="#C4372E" text-anchor="middle" font-weight="600">六位码 = 6 bit</text>
+<text x="40.0" y="262.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="600">压缩率 = 2.722 / 6 = 45.4%   有效字母表 = e^2.93 ≈ 18.7 个等价态</text>
+<text x="40.0" y="280.0" font-size="9.5" fill="#888780" text-anchor="start" font-weight="400">EG 复验: 熵率 2.780 bit（46.3%），两品种一致</text>
+<text x="430.0" y="60.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">分年熵率（2020–2026）</text>
+<line x1="420.0" y1="200.0" x2="645.0" y2="200.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="203.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.5</text>
+<line x1="420.0" y1="174.0" x2="645.0" y2="174.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="177.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.6</text>
+<line x1="420.0" y1="148.0" x2="645.0" y2="148.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="151.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.7</text>
+<line x1="420.0" y1="122.0" x2="645.0" y2="122.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="125.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.8</text>
+<polyline points="430.0,142.0 460.0,126.9 490.0,127.8 520.0,130.7 550.0,166.4 580.0,165.7 610.0,122.8" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<circle cx="430.0" cy="142.0" r="2.8" fill="#3E3480"/><circle cx="460.0" cy="126.9" r="2.8" fill="#3E3480"/><circle cx="490.0" cy="127.8" r="2.8" fill="#3E3480"/><circle cx="520.0" cy="130.7" r="2.8" fill="#3E3480"/><circle cx="550.0" cy="166.4" r="2.8" fill="#3E3480"/><circle cx="580.0" cy="165.7" r="2.8" fill="#3E3480"/><circle cx="610.0" cy="122.8" r="2.8" fill="#3E3480"/><polyline points="430.0,113.2 460.0,166.3 490.0,150.4 520.0,113.8 550.0,112.2 580.0,111.0 610.0,147.4" fill="none" stroke="#C4372E" stroke-width="1.8" stroke-opacity="1.0"/>
+<circle cx="430.0" cy="113.2" r="2.8" fill="#C4372E"/><circle cx="460.0" cy="166.3" r="2.8" fill="#C4372E"/><circle cx="490.0" cy="150.4" r="2.8" fill="#C4372E"/><circle cx="520.0" cy="113.8" r="2.8" fill="#C4372E"/><circle cx="550.0" cy="112.2" r="2.8" fill="#C4372E"/><circle cx="580.0" cy="111.0" r="2.8" fill="#C4372E"/><circle cx="610.0" cy="147.4" r="2.8" fill="#C4372E"/><text x="430.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">20</text>
+<text x="460.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">21</text>
+<text x="490.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">22</text>
+<text x="520.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">23</text>
+<text x="550.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">24</text>
+<text x="580.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">25</text>
+<text x="610.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">26</text>
+<rect x="430.0" y="236.0" width="9.0" height="9.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="443.0" y="244.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">MA</text>
+<rect x="470.0" y="236.0" width="9.0" height="9.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="483.0" y="244.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">EG</text>
+<text x="430.0" y="268.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">熵率七年稳定在 2.63–2.80 bit：</text>
+<text x="430.0" y="282.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">结构不随时间退化，也无趋势</text>
+</svg></div><table><thead><tr><th>指标</th><th>MA</th><th>EG</th><th>含义</th></tr></thead><tbody><tr><td class="l">H(当前状态)</td><td>2.927 bit</td><td>2.863 bit</td><td>八态边缘分布的熵</td></tr><tr><td class="l">H(下一态 | 当前态)</td><td>2.760 bit</td><td>2.809 bit</td><td>一阶条件熵</td></tr><tr><td>块熵 k=2</td><td>2.739 bit</td><td>2.793 bit</td><td>两态记忆</td></tr><tr><td class="l">块熵 k=3（熵率）</td><td><b>2.722 bit</b></td><td><b>2.780 bit</b></td><td>每根实际信息量</td></tr><tr><td>压缩率</td><td><b class="r">45.4%</b></td><td><b class="r">46.3%</b></td><td>2.7 / 6 比特</td></tr><tr><td>有效字母表</td><td>18.7 个等价态</td><td>17.5</td><td>e^H，八态实际只当 ~18 个等概态用</td></tr><tr><td>冗余度</td><td>0.205 bit</td><td>0.084 bit</td><td>H(X) − 熵率</td></tr></tbody></table><div class="box ok"><b>结论：</b>六位编码每根只携带约 <b>2.72 比特</b>（MA）/ <b>2.78 比特</b>（EG）信息，压缩率 45–46%——超过一半的码位是冗余。分年熵率七年稳定在 2.63–2.80 bit，结构不随时间退化。工程含义：存储/传输六位码可无损压掉一半；任何基于「8 态等概」的假设（如均匀先验）都高估了信息量。</div><h2>三、维度② 记忆深度：卦变二阶仍有增量，三阶起饱和</h2><div class="fig"><svg viewBox="0 0 680 310" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度二 · 记忆深度：二阶马尔可夫仍有增量，三阶起饱和</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">2020–2025 训练 → 2026 holdout 平均 log2 损失（比特/根，越低越好）</text>
+<line x1="80.0" y1="240.0" x2="330.0" y2="240.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="74.0" y="243.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.6</text>
+<line x1="80.0" y1="200.0" x2="330.0" y2="200.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="74.0" y="203.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.7</text>
+<line x1="80.0" y1="160.0" x2="330.0" y2="160.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="74.0" y="163.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.8</text>
+<line x1="80.0" y1="120.0" x2="330.0" y2="120.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="74.0" y="123.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.9</text>
+<line x1="80.0" y1="80.0" x2="330.0" y2="80.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="74.0" y="83.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">3.0</text>
+<rect x="90.0" y="113.7" width="28.0" height="126.3" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="104.0" y="108.7" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.916</text>
+<rect x="124.0" y="169.2" width="28.0" height="70.8" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="138.0" y="164.2" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.777</text>
+<text x="124.0" y="258.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">0 阶</text>
+<rect x="150.0" y="140.1" width="28.0" height="99.9" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="164.0" y="135.1" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.850</text>
+<rect x="184.0" y="181.7" width="28.0" height="58.3" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="198.0" y="176.7" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.746</text>
+<text x="184.0" y="258.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">1 阶</text>
+<rect x="210.0" y="156.6" width="28.0" height="83.4" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="224.0" y="151.6" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.809</text>
+<rect x="244.0" y="195.8" width="28.0" height="44.2" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="258.0" y="190.8" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.711</text>
+<text x="244.0" y="258.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">2 阶</text>
+<rect x="270.0" y="161.7" width="28.0" height="78.3" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="284.0" y="156.7" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.796</text>
+<rect x="304.0" y="199.4" width="28.0" height="40.6" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="318.0" y="194.4" font-size="9" fill="#26215C" text-anchor="middle" font-weight="600">2.702</text>
+<text x="304.0" y="258.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">3 阶</text>
+<rect x="90.0" y="278.0" width="9.0" height="9.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="103.0" y="286.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">MA</text>
+<rect x="130.0" y="278.0" width="9.0" height="9.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="143.0" y="286.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">EG</text>
+<text x="200.0" y="286.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">增益: 一阶 +0.066 / 二阶 +0.041 / 三阶 +0.013 bit</text>
+<text x="430.0" y="60.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">一阶模型的 top-1 猜中率 vs 持续性基线</text>
+<text x="424.0" y="97.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">MA 一阶马尔可夫</text>
+<rect x="430.0" y="84.0" width="168.5" height="20.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="604.5" y="98.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">24.1%</text>
+<text x="424.0" y="137.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">MA 持续性(猜不变)</text>
+<rect x="430.0" y="124.0" width="122.7" height="20.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="558.7" y="138.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">17.5%</text>
+<text x="424.0" y="177.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">EG 一阶马尔可夫</text>
+<rect x="430.0" y="164.0" width="197.5" height="20.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="633.5" y="178.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">28.2%</text>
+<text x="424.0" y="217.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">EG 持续性(猜不变)</text>
+<rect x="430.0" y="204.0" width="134.7" height="20.0" rx="3" fill="#E5B8B0" fill-opacity="1.0"/>
+<text x="570.7" y="218.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">19.2%</text>
+<text x="430.0" y="262.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">知道当前卦象，猜中率 24–28%</text>
+<text x="430.0" y="278.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">（随机 12.5%，持续性 17–19%）</text>
+<text x="430.0" y="296.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">→ 形状信息真实存在，但不足以稳定预测</text>
+</svg></div><table><thead><tr><th>模型（2026 holdout）</th><th>MA log2损失</th><th>EG log2损失</th><th>MA 增益</th><th>EG 增益</th></tr></thead><tbody><tr><td class="l">0 阶马尔可夫</td><td>2.9158</td><td>2.7771</td><td>+0.0661</td><td>+0.0314</td></tr><tr><td class="l">1 阶马尔可夫</td><td>2.8497</td><td>2.7457</td><td>+0.0412</td><td>+0.0351</td></tr><tr><td class="l">2 阶马尔可夫</td><td>2.8086</td><td>2.7106</td><td>+0.0128</td><td>+0.0089</td></tr><tr><td class="l">3 阶马尔可夫</td><td>2.7958</td><td>2.7016</td><td>—</td><td>—</td></tr></tbody></table><table><thead><tr><th>准确率口径</th><th>MA</th><th>EG</th></tr></thead><tbody><tr><td class="l">一阶模型 top-1 猜中率</td><td>24.1%</td><td>28.2%</td></tr><tr><td class="l">持续性基线（猜不变）</td><td>17.5%</td><td>19.2%</td></tr><tr><td class="l">随机基线（8 选 1）</td><td>12.5%</td><td>12.5%</td></tr></tbody></table><div class="box"><b>结论：</b>记忆以一阶为主（增益 +0.066 bit），二阶仍有实质增量（+0.041 bit），三阶起饱和（+0.013 bit）。一阶模型的 top-1 猜中率 24.1%（MA）/ 28.2%（EG），显著高于持续性基线（17.5%/19.2%）与随机（12.5%）。即：<b>「知道当前卦象」确实提高猜中率，但绝对水平仍接近抛硬币</b>——形态信息真实存在，用于过滤与状态识别可以，用于直接预测下一根方向不够。</div><h2>四、维度③ 图论：转移图的社区就是阴阳两族</h2><div class="fig"><svg viewBox="0 0 680 370" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度三 · 图论：转移图的社区结构就是「阴阳两族」</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">节点大小 ∝ PageRank；紫实线=显著偏好边(z>3)，绿虚线=显著回避边(z<-3)，灰细线=其余边</text>
+<rect x="90.0" y="66.0" width="520.0" height="96.0" rx="10" fill="#CFC6E6" fill-opacity="0.35"/>
+<rect x="90.0" y="214.0" width="520.0" height="96.0" rx="10" fill="#DCE8F0" fill-opacity="0.5"/>
+<text x="96.0" y="80.0" font-size="9.5" fill="#3E3480" text-anchor="start" font-weight="600">阳族（实体向上 4 态）</text>
+<text x="96.0" y="228.0" font-size="9.5" fill="#3A6A8A" text-anchor="start" font-weight="600">阴族（实体向下 4 态）</text>
+<line x1="140.0" y1="258.0" x2="270.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5355114329888518" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="258.0" x2="400.0" y2="258.0" stroke="#3E3480" stroke-width="0.8710838961673041"/>
+<line x1="140.0" y1="258.0" x2="530.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6069248921799983" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="258.0" x2="140.0" y2="110.0" stroke="#3E3480" stroke-width="1.0874318496216129"/>
+<line x1="140.0" y1="258.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6029864106111157" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="258.0" x2="400.0" y2="110.0" stroke="#3E3480" stroke-width="1.3170721783709007"/>
+<line x1="140.0" y1="258.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7484498331841485" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="140.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5460531642153555"/>
+<line x1="270.0" y1="258.0" x2="400.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6447308055593037" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="530.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5356092295236811"/>
+<line x1="270.0" y1="258.0" x2="140.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6235730670624747" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="270.0" y2="110.0" stroke="#3E3480" stroke-width="0.9565982998245851"/>
+<line x1="270.0" y1="258.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7190527594116853" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="530.0" y2="110.0" stroke="#3E3480" stroke-width="1.1196464714613412"/>
+<line x1="400.0" y1="258.0" x2="270.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5462718675163372" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="258.0" x2="530.0" y2="258.0" stroke="#3E3480" stroke-width="0.8156066079473963"/>
+<line x1="400.0" y1="258.0" x2="140.0" y2="110.0" stroke="#3E3480" stroke-width="0.9738848074034988"/>
+<line x1="400.0" y1="258.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6067337744043512" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="258.0" x2="400.0" y2="110.0" stroke="#3E3480" stroke-width="1.3100418070381947"/>
+<line x1="400.0" y1="258.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7828266428542436" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="140.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.58445228850453" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="270.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5851323685139429"/>
+<line x1="530.0" y1="258.0" x2="400.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5487986821979056"/>
+<line x1="530.0" y1="258.0" x2="140.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.5973667490292975" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6995152370867161" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.746428991646076" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="530.0" y2="110.0" stroke="#3E3480" stroke-width="1.183974585245323"/>
+<line x1="140.0" y1="110.0" x2="140.0" y2="258.0" stroke="#3E3480" stroke-width="1.0845556411928619"/>
+<line x1="140.0" y1="110.0" x2="270.0" y2="258.0" stroke="#3E3480" stroke-width="1.0271654710381217"/>
+<line x1="140.0" y1="110.0" x2="400.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5829074524218889" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="110.0" x2="530.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.554544376593348" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="110.0" x2="270.0" y2="110.0" stroke="#3E3480" stroke-width="1.1362937491353926"/>
+<line x1="140.0" y1="110.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.5497065275389814" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="110.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7867295112744808" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="140.0" y2="258.0" stroke="#3E3480" stroke-width="1.024367109568535"/>
+<line x1="270.0" y1="110.0" x2="270.0" y2="258.0" stroke="#3E3480" stroke-width="1.0598937565408613"/>
+<line x1="270.0" y1="110.0" x2="400.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5858213997112085" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="530.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5724893027938586" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.5541338243671096" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.8209453283346801" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="140.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5946861939381168" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="270.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6224645570657582" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="400.0" y2="258.0" stroke="#3E3480" stroke-width="0.8680621407415212"/>
+<line x1="400.0" y1="110.0" x2="530.0" y2="258.0" stroke="#3E3480" stroke-width="0.7903581170465588"/>
+<line x1="400.0" y1="110.0" x2="140.0" y2="110.0" stroke="#3E3480" stroke-width="0.9040166707641157"/>
+<line x1="400.0" y1="110.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.661912455074398" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.8165010126552641" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="140.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6352509191261587" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="270.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5847550077326987"/>
+<line x1="530.0" y1="110.0" x2="400.0" y2="258.0" stroke="#3E3480" stroke-width="0.8248224257522018"/>
+<line x1="530.0" y1="110.0" x2="530.0" y2="258.0" stroke="#3E3480" stroke-width="0.8119259513071502"/>
+<line x1="530.0" y1="110.0" x2="140.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6305835177759462" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7229980645101544" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7382597260679922" stroke-dasharray="3,3"/>
+<circle cx="140.0" cy="258.0" r="24.9" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="140.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">离☲</text>
+<text x="140.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000000</text>
+<text x="140.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.099</text>
+<circle cx="270.0" cy="258.0" r="26.4" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="270.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">艮☶</text>
+<text x="270.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000001</text>
+<text x="270.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.115</text>
+<circle cx="400.0" cy="258.0" r="25.0" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="400.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">震☳</text>
+<text x="400.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000100</text>
+<text x="400.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.100</text>
+<circle cx="530.0" cy="258.0" r="23.8" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="530.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">坤☷</text>
+<text x="530.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000101</text>
+<text x="530.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.087</text>
+<circle cx="140.0" cy="110.0" r="25.2" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="140.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">乾☰</text>
+<text x="140.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010000</text>
+<text x="140.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.102</text>
+<circle cx="270.0" cy="110.0" r="28.8" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="270.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">巽☴</text>
+<text x="270.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010001</text>
+<text x="270.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.143</text>
+<circle cx="400.0" cy="110.0" r="30.3" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="400.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">兑☱</text>
+<text x="400.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010100</text>
+<text x="400.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.159</text>
+<circle cx="530.0" cy="110.0" r="33.5" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="530.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">坎☵</text>
+<text x="530.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010101</text>
+<text x="530.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.195</text>
+<text x="40.0" y="330.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">64 条边中 59 条显著（偏好 25 / 回避 34）　强连通=是（任意态可达任意态）</text>
+<text x="40.0" y="346.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">贪心模块度社区 = [离艮震坤 | 乾巽兑坎]，Q=0.093　加权平均路径 = 1.96 bit</text>
+<text x="40.0" y="362.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">距离矩阵的「两家族」在图拓扑中独立复现；EG 社区划分逐位相同</text>
+</svg></div><table><thead><tr><th>图论量</th><th>MA</th><th>EG</th><th>解读</th></tr></thead><tbody><tr><td class="l">显著边（3σ）</td><td>59/64（+25/-34）</td><td>59/64</td><td>九成边的偏好/回避显著偏离边缘分布</td></tr><tr><td>强连通性</td><td>是</td><td>是</td><td>不可约：任意态可达任意态，无吸收态</td></tr><tr><td>社区划分</td><td>[离艮震坤 | 乾巽兑坎]</td><td>同左</td><td><b>图拓扑独立复现距离矩阵的两家族</b></td></tr><tr><td>模块度 Q</td><td>0.093</td><td>0.062</td><td>弱社区：家族内偏好强于家族间</td></tr><tr><td>加权平均路径</td><td>1.96 bit</td><td>1.97 bit</td><td>从一态「游走」到另一态的平均信息成本</td></tr><tr><td class="l">PageRank 最高</td><td>坎☵ 0.195</td><td>坎☵ 0.229</td><td>高波动双影态是网络的枢纽</td></tr></tbody></table><div class="box ok"><b>结论：</b>把 8×8 转移矩阵当有向图看，社区检测把八态干净地切成「阴族（实体向下四态）」与「阳族（实体向上四态）」——与距离矩阵聚类逐位一致，两个独立方法互证。PageRank 最高的枢纽是<b>坎☵</b>（双影高波动态），平均路径仅 ~1.96 bit：这个网络很小、很通达，任何形态一两个转移内就能到任何其他形态。</div><h2>五、维度④ 频域与节律：周一效应与三月高峰</h2><div class="fig"><svg viewBox="0 0 680 350" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度四 · 频域与节律：卦气有日内节律，也有「周一效应」</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: 日内振幅轮廓(5分钟块, MA)；右上: 星期一–星期五均振幅；右下: 月均振幅</text>
+<line x1="48.0" y1="181.7" x2="328.0" y2="181.7" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="184.7" font-size="9" fill="#888780" text-anchor="end" font-weight="400">5%</text>
+<line x1="48.0" y1="155.4" x2="328.0" y2="155.4" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="158.4" font-size="9" fill="#888780" text-anchor="end" font-weight="400">10%</text>
+<line x1="48.0" y1="129.1" x2="328.0" y2="129.1" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="132.1" font-size="9" fill="#888780" text-anchor="end" font-weight="400">15%</text>
+<line x1="48.0" y1="102.8" x2="328.0" y2="102.8" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="105.8" font-size="9" fill="#888780" text-anchor="end" font-weight="400">20%</text>
+<line x1="48.0" y1="76.5" x2="328.0" y2="76.5" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="79.5" font-size="9" fill="#888780" text-anchor="end" font-weight="400">25%</text>
+<rect x="52.0" y="66.0" width="60.0" height="148.0" rx="2" fill="#CFC6E6" fill-opacity="0.35"/>
+<text x="80.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">早盘 9:00</text>
+<rect x="112.0" y="66.0" width="48.0" height="148.0" rx="2" fill="#CFC6E6" fill-opacity="0.35"/>
+<text x="134.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">午盘 10:15</text>
+<rect x="160.0" y="66.0" width="72.0" height="148.0" rx="2" fill="#CFC6E6" fill-opacity="0.35"/>
+<text x="194.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">下午 13:30</text>
+<rect x="232.0" y="66.0" width="96.0" height="148.0" rx="2" fill="#DCE8F0" fill-opacity="0.35"/>
+<text x="278.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">夜盘 21:00</text>
+<polyline points="52.0,75.5 56.0,119.1 60.0,128.2 64.0,131.1 68.0,135.6 72.0,138.7 76.0,136.4 80.0,139.7 84.0,141.7 88.0,141.3 92.0,142.6 96.0,143.9 100.0,138.8 104.0,141.4 108.0,144.2 112.0,131.9 116.0,143.6 120.0,145.0 124.0,144.5 128.0,145.7 132.0,147.0 136.0,144.3 140.0,146.4 144.0,147.1 148.0,145.3 152.0,146.1 156.0,144.8 160.0,121.1 164.0,140.8 168.0,144.0 172.0,143.7 176.0,146.3 180.0,147.4 184.0,144.4 188.0,146.6 192.0,147.6 196.0,146.6 200.0,147.6 204.0,148.0 208.0,145.0 212.0,147.4 216.0,148.3 220.0,147.1 224.0,146.4 228.0,145.7 232.0,78.4 236.0,122.3 240.0,131.7 244.0,135.1 248.0,140.3 252.0,144.4 256.0,141.0 260.0,144.5 264.0,146.8 268.0,148.0 272.0,148.9 276.0,150.4 280.0,146.0 284.0,149.7 288.0,150.7 292.0,150.3 296.0,151.2 300.0,152.9 304.0,147.4 308.0,151.0 312.0,152.1 316.0,152.0 320.0,153.5 324.0,151.3" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<text x="56.0" y="85.5" font-size="8.5" fill="#3E3480" text-anchor="start" font-weight="600">开盘块 25.19%</text>
+<text x="324.0" y="143.3" font-size="8.5" fill="#3E3480" text-anchor="end" font-weight="600">10.78%</text>
+<text x="108.0" y="136.2" font-size="8.5" fill="#3E3480" text-anchor="middle" font-weight="600">12.13%</text>
+<text x="40.0" y="238.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">开盘段占比 1.16×　夜盘占比 0.97×　日内谱峰周期 115 / 172.5 分钟</text>
+<text x="40.0" y="254.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">（115 分钟 ≈ 单段会话长度：节律来自开收盘结构，非神秘周期）</text>
+<text x="420.0" y="66.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">星期效应（平均振幅）</text>
+<text x="414.0" y="97.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="600">周一</text>
+<rect x="420.0" y="84.0" width="80.3" height="11.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="505.3" y="93.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">8.65%</text>
+<rect x="420.0" y="96.0" width="69.1" height="11.0" rx="3" fill="#E5B8B0" fill-opacity="1.0"/>
+<text x="494.1" y="105.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">7.44%</text>
+<text x="414.0" y="127.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周二</text>
+<rect x="420.0" y="114.0" width="114.8" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="539.8" y="123.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.36%</text>
+<rect x="420.0" y="126.0" width="100.1" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="525.1" y="135.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">10.78%</text>
+<text x="414.0" y="157.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周三</text>
+<rect x="420.0" y="144.0" width="115.2" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="540.2" y="153.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.40%</text>
+<rect x="420.0" y="156.0" width="100.3" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="525.3" y="165.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">10.80%</text>
+<text x="414.0" y="187.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周四</text>
+<rect x="420.0" y="174.0" width="117.0" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="542.0" y="183.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.60%</text>
+<rect x="420.0" y="186.0" width="102.1" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="527.1" y="195.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">11.00%</text>
+<text x="414.0" y="217.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周五</text>
+<rect x="420.0" y="204.0" width="117.8" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="542.8" y="213.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.69%</text>
+<rect x="420.0" y="216.0" width="103.9" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="528.9" y="225.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">11.19%</text>
+<rect x="420.0" y="240.0" width="9.0" height="9.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="433.0" y="248.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">MA</text>
+<rect x="460.0" y="240.0" width="9.0" height="9.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="473.0" y="248.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">EG</text>
+<text x="500.0" y="248.0" font-size="9" fill="#C4372E" text-anchor="start" font-weight="600">红=周一</text>
+<text x="420.0" y="272.0" font-size="10" fill="#C4372E" text-anchor="start" font-weight="600">周一振幅仅为周二~周五的 0.69 倍（EG 0.68）</text>
+<text x="420.0" y="288.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">星期×时段矩阵 σ₁ 占 72%：星期效应几乎是单一因子</text>
+<text x="420.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">月均振幅（%）：三月最高 / 八月最低，峰谷比 1.39，F=891（p<1e-16）</text>
+<text x="420.0" y="328.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">日振幅谱无可交易周期（红噪声型）；季节性用于仓位日历，不用于择时</text>
+</svg></div><h3>星期 × 平均振幅</h3><table><thead><tr><th>星期</th><th>MA</th><th>EG</th></tr></thead><tbody><tr><td>周一</td><td>8.645%</td><td>7.442%</td></tr><tr><td>周二</td><td>12.365%</td><td>10.783%</td></tr><tr><td>周三</td><td>12.403%</td><td>10.803%</td></tr><tr><td>周四</td><td>12.604%</td><td>10.999%</td></tr><tr><td>周五</td><td>12.691%</td><td>11.192%</td></tr></tbody></table><h3>月度平均振幅（%）</h3><table><thead><tr><th>月份</th><th>1月</th><th>2月</th><th>3月</th><th>4月</th><th>5月</th><th>6月</th><th>7月</th><th>8月</th><th>9月</th><th>10月</th><th>11月</th><th>12月</th></tr></thead><tbody><tr><td>MA</td><td>11.70</td><td>11.41</td><td>15.16</td><td>13.19</td><td>13.07</td><td>12.12</td><td>11.93</td><td>10.91</td><td>12.18</td><td>14.44</td><td>13.38</td><td>11.90</td></tr><tr><td>EG</td><td>10.75</td><td>10.01</td><td>14.67</td><td>12.69</td><td>11.36</td><td>10.10</td><td>10.12</td><td>8.97</td><td>10.22</td><td>11.86</td><td>10.89</td><td>10.27</td></tr></tbody></table><div class="box"><b>结论：</b>① <b class="r">周一效应</b>——周一平均振幅只有周二~周五的 0.69 倍（MA）/ 0.68 倍（EG），且星期×时段矩阵 σ₁ 占 72%，说明星期效应几乎是单一因子（周一 vs 其余）；② <b>月令节律</b>——三月振幅最高、八月最低，峰谷比 1.39，F 检验 p&lt;1e-16；③ 日内谱峰周期 115/172.5 分钟 ≈ 会话长度，节律来自开收盘结构而非神秘周期；④ 日振幅谱为红噪声型，无可交易的多日周期。<b>用途：仓位日历（周一/八月降波动预期），不是择时信号。</b></div><h2>六、维度⑤ 结构稳定性：2026 不比任何普通年份更怪</h2><div class="fig"><svg viewBox="0 0 680 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度五 · 结构稳定性：转移矩阵逐年漂移，但 2026 不比普通年份更怪</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: 各年转移矩阵相对全样本的 Frobenius 相对差；右: CUSUM 变点监测 + 惊讶度</text>
+<line x1="52.0" y1="220.0" x2="320.0" y2="220.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="48.0" y="223.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">0.0</text>
+<line x1="52.0" y1="177.1" x2="320.0" y2="177.1" stroke="#E8E6DE" stroke-width="1"/>
+<text x="48.0" y="180.1" font-size="9" fill="#888780" text-anchor="end" font-weight="400">0.1</text>
+<line x1="52.0" y1="134.3" x2="320.0" y2="134.3" stroke="#E8E6DE" stroke-width="1"/>
+<text x="48.0" y="137.3" font-size="9" fill="#888780" text-anchor="end" font-weight="400">0.2</text>
+<line x1="52.0" y1="91.4" x2="320.0" y2="91.4" stroke="#E8E6DE" stroke-width="1"/>
+<text x="48.0" y="94.4" font-size="9" fill="#888780" text-anchor="end" font-weight="400">0.3</text>
+<rect x="60.0" y="179.5" width="15.0" height="40.5" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<rect x="76.0" y="187.3" width="15.0" height="32.7" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="75.0" y="236.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">20</text>
+<rect x="96.0" y="126.1" width="15.0" height="93.9" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<rect x="112.0" y="77.9" width="15.0" height="142.1" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="111.0" y="236.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">21</text>
+<rect x="132.0" y="114.1" width="15.0" height="105.9" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<rect x="148.0" y="113.0" width="15.0" height="107.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="147.0" y="236.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">22</text>
+<rect x="168.0" y="185.0" width="15.0" height="35.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<rect x="184.0" y="175.8" width="15.0" height="44.2" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="183.0" y="236.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">23</text>
+<rect x="204.0" y="121.3" width="15.0" height="98.7" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<rect x="220.0" y="142.5" width="15.0" height="77.5" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="219.0" y="236.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">24</text>
+<rect x="240.0" y="128.8" width="15.0" height="91.2" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<rect x="256.0" y="120.7" width="15.0" height="99.3" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="255.0" y="236.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">25</text>
+<rect x="276.0" y="125.1" width="15.0" height="94.9" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<rect x="292.0" y="120.3" width="15.0" height="99.7" rx="3" fill="#E5B8B0" fill-opacity="1.0"/>
+<text x="291.0" y="236.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">26</text>
+<text x="291.0" y="120.1" font-size="8.5" fill="#C4372E" text-anchor="middle" font-weight="600">0.22</text>
+<line x1="52.0" y1="119.0" x2="320.0" y2="119.0" stroke="#C4372E" stroke-width="1.2" stroke-dasharray="4,3"/>
+<text x="322.0" y="114.0" font-size="8.5" fill="#C4372E" text-anchor="end" font-weight="600">2026 vs 训练 = 0.24</text>
+<text x="40.0" y="258.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">跨年漂移 0.08–0.33，量级小且无单调趋势</text>
+<text x="40.0" y="274.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">χ² 齐性检验 p<1e-16（样本 50 万+，小差异也显著）</text>
+<text x="420.0" y="60.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">震☳→震☳ 条件概率：逐窗口偏离 z（窗口=2000根）</text>
+<line x1="426.0" y1="82.5" x2="652.0" y2="82.5" stroke="#C4372E" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="648.0" y="78.5" font-size="8.5" fill="#C4372E" text-anchor="end" font-weight="600">+3σ</text>
+<line x1="426.0" y1="217.5" x2="652.0" y2="217.5" stroke="#C4372E" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="648.0" y="227.5" font-size="8.5" fill="#C4372E" text-anchor="end" font-weight="600">-3σ</text>
+<line x1="426.0" y1="150.0" x2="652.0" y2="150.0" stroke="#888780" stroke-width="1" stroke-dasharray="3,2"/>
+<polyline points="430.0,158.1 430.6,130.5 431.3,162.4 431.9,164.4 432.6,154.9 433.2,146.1 433.8,178.3 434.5,185.3 435.1,160.8 435.7,143.0 436.4,175.4 437.0,180.0 437.7,161.4 438.3,133.9 438.9,135.0 439.6,136.1 440.2,152.8 440.8,147.5 441.5,126.0 442.1,114.8 442.8,136.3 443.4,136.4 444.0,142.3 444.7,183.9 445.3,161.3 445.9,135.7 446.6,167.5 447.2,175.5 447.9,184.0 448.5,186.0 449.1,144.8 449.8,132.1 450.4,176.8 451.0,137.7 451.7,162.5 452.3,170.4 453.0,134.3 453.6,128.4 454.2,143.5 454.9,138.6 455.5,150.2 456.1,146.0 456.8,154.8 457.4,161.8 458.1,169.8 458.7,161.6 459.3,130.5 460.0,151.0 460.6,152.1 461.2,115.3 461.9,153.3 462.5,136.1 463.2,159.8 463.8,142.8 464.4,155.9 465.1,146.5 465.7,153.4 466.3,169.3 467.0,167.5 467.6,191.6 468.3,135.3 468.9,124.0 469.5,140.2 470.2,147.6 470.8,149.4 471.4,129.1 472.1,107.0 472.7,145.4 473.4,162.2 474.0,168.6 474.6,168.8 475.3,160.3 475.9,131.6 476.6,144.2 477.2,111.7 477.8,156.7 478.5,175.8 479.1,129.4 479.7,121.0 480.4,88.5 481.0,113.0 481.7,108.4 482.3,108.9 482.9,101.2 483.6,97.2 484.2,133.3 484.8,153.3 485.5,161.9 486.1,126.2 486.8,194.1 487.4,206.4 488.0,224.5 488.7,207.0 489.3,200.7 489.9,184.2 490.6,216.4 491.2,194.8 491.9,171.0 492.5,172.8 493.1,149.3 493.8,116.2 494.4,160.9 495.0,185.1 495.7,155.4 496.3,198.3 497.0,162.4 497.6,154.6 498.2,169.8 498.9,166.3 499.5,178.7 500.1,156.7 500.8,170.4 501.4,146.8 502.1,162.2 502.7,184.6 503.3,184.4 504.0,179.9 504.6,156.6 505.2,161.5 505.9,173.2 506.5,228.0 507.2,203.8 507.8,173.1 508.4,144.8 509.1,142.4 509.7,168.3 510.3,144.2 511.0,136.1 511.6,133.3 512.3,168.7 512.9,146.7 513.5,162.7 514.2,198.8 514.8,138.4 515.4,130.5 516.1,187.7 516.7,210.9 517.4,139.6 518.0,141.8 518.6,149.6 519.3,167.9 519.9,169.4 520.6,160.9 521.2,97.7 521.8,132.4 522.5,172.8 523.1,152.7 523.7,171.5 524.4,142.4 525.0,136.9 525.7,152.1 526.3,176.9 526.9,153.3 527.6,181.2 528.2,199.4 528.8,175.3 529.5,147.9 530.1,158.9 530.8,169.3 531.4,141.3 532.0,146.0 532.7,149.9 533.3,145.5 533.9,149.1 534.6,124.0 535.2,158.1 535.9,169.9 536.5,173.2 537.1,167.2 537.8,135.3 538.4,157.8 539.0,141.1 539.7,135.7 540.3,161.5 541.0,113.3 541.6,109.1 542.2,143.1 542.9,133.3 543.5,147.8 544.1,129.6 544.8,148.3 545.4,146.7 546.1,125.0 546.7,144.2 547.3,161.0 548.0,152.2 548.6,166.6 549.2,149.2 549.9,120.3 550.5,184.2 551.2,165.1 551.8,115.3 552.4,156.9 553.1,134.3 553.7,124.8 554.3,169.2 555.0,187.3 555.6,193.9 556.3,145.4 556.9,172.6 557.5,103.8 558.2,138.7 558.8,153.4 559.4,146.1 560.1,170.4 560.7,169.9 561.4,209.1 562.0,175.7 562.6,160.0 563.3,118.9 563.9,159.2 564.6,172.0 565.2,175.0 565.8,146.1 566.5,149.4 567.1,134.3 567.7,153.4 568.4,142.8 569.0,143.6 569.7,142.3 570.3,151.4 570.9,154.0 571.6,131.5 572.2,135.3 572.8,126.2 573.5,165.8 574.1,187.0 574.8,113.1 575.4,85.6 576.0,162.9 576.7,144.2 577.3,132.3 577.9,146.1 578.6,156.5 579.2,113.7 579.9,112.4 580.5,118.4 581.1,125.2 581.8,141.0 582.4,159.3 583.0,188.8 583.7,181.7 584.3,145.5 585.0,150.4 585.6,168.8 586.2,113.2 586.9,102.9 587.5,129.4 588.1,156.6 588.8,179.5 589.4,93.0 590.1,118.3 590.7,126.5 591.3,131.4 592.0,152.5 592.6,138.1 593.2,171.5 593.9,159.5 594.5,133.1 595.2,160.5 595.8,127.8 596.4,117.0 597.1,146.7 597.7,155.9 598.3,171.6 599.0,130.4 599.6,137.5 600.3,133.9 600.9,84.9 601.5,119.4 602.2,83.9 602.8,122.2 603.4,121.3 604.1,176.2 604.7,154.9 605.4,134.3 606.0,160.3 606.6,107.6 607.3,137.4 607.9,161.8 608.6,160.3 609.2,130.6 609.8,127.5 610.5,116.8 611.1,166.1 611.7,148.6 612.4,111.8 613.0,147.3 613.7,134.1 614.3,117.0 614.9,168.6 615.6,168.2 616.2,154.0 616.8,124.2 617.5,145.5 618.1,193.8 618.8,178.1 619.4,185.3 620.0,158.4 620.7,168.7 621.3,169.8 621.9,169.8 622.6,161.0 623.2,147.3 623.9,129.8 624.5,184.9 625.1,156.0 625.8,158.7 626.4,148.2 627.0,132.6 627.7,144.8 628.3,195.6 629.0,152.5 629.6,146.0 630.2,124.3 630.9,134.7 631.5,169.9 632.1,165.9 632.8,127.8 633.4,139.6 634.1,176.6 634.7,116.1 635.3,164.6 636.0,171.5 636.6,149.1 637.2,136.9 637.9,130.7 638.5,166.4 639.2,130.5 639.8,150.8 640.4,193.2 641.1,211.3 641.7,202.3 642.3,186.0 643.0,182.0 643.6,201.8 644.3,183.9 644.9,194.4 645.5,171.5 646.2,161.9 646.8,133.9 647.4,142.4 648.1,142.4 648.7,165.4 649.4,195.8 650.0,150.2" fill="none" stroke="#3E3480" stroke-width="1.2" stroke-opacity="1.0"/>
+<text x="430.0" y="258.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">逐窗口 z 最大 3.6σ，1036 窗中 9 窗越 ±3σ</text>
+<text x="430.0" y="274.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">（1036 窗期望假阳性 ~5 窗；越带即正常波动，无持续单侧漂移）</text>
+<text x="420.0" y="300.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">2026 惊讶度（log2损失）: MA 2.850 vs 训练 2.754（+0.096）</text>
+<text x="420.0" y="316.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">EG 2.746 vs 2.813（-0.068）——一升一降，无系统性退化</text>
+</svg></div><table><thead><tr><th>年份</th><th>MA Fro 相对差</th><th>EG Fro 相对差</th></tr></thead><tbody><tr><td>2020</td><td>0.094</td><td>0.076</td></tr><tr><td>2021</td><td>0.219</td><td>0.331</td></tr><tr><td>2022</td><td>0.247</td><td>0.250</td></tr><tr><td>2023</td><td>0.082</td><td>0.103</td></tr><tr><td>2024</td><td>0.230</td><td>0.181</td></tr><tr><td>2025</td><td>0.213</td><td>0.232</td></tr><tr><td>2026</td><td>0.221</td><td>0.233</td></tr></tbody></table><table><thead><tr><th>稳定性检验</th><th>MA</th><th>EG</th></tr></thead><tbody><tr><td class="l">2026 vs 训练集 Fro</td><td>0.236</td><td>0.247</td></tr><tr><td class="l">χ² 齐性（年×64格）</td><td>χ²=49868, p<1e-16</td><td>χ²=52196, p<1e-16</td></tr><tr><td class="l">2026 惊讶度（log2损失）</td><td>2.8497（训练 2.7537，+0.0961）</td><td>2.7457（训练 2.8134，-0.0678）</td></tr><tr><td class="l">CUSUM 变点</td><td>无持续单侧漂移</td><td>无持续单侧漂移</td></tr></tbody></table><div class="box warn"><b>结论：</b>转移矩阵逐年漂移 0.08–0.33 且 χ² 在 50 万样本下高度显著——<b>但量级小、无单调趋势、CUSUM 无变点</b>。2026 对训练集的漂移（MA 0.236 / EG 0.247）落在普通年份区间内，惊讶度一升（MA +0.096 bit）一降（EG −0.068 bit），无系统性退化。工程含义：<b>用滚动窗口（如近 2 年）重估转移矩阵即可，不需要变点检测机制</b>；若死用 2020 年的矩阵，每根多付约 0.1 bit 的预测成本。</div><h2>七、维度⑥ 长程标度：波动长记忆，收益短程回归</h2><div class="fig"><svg viewBox="0 0 680 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度六 · 长程标度：振幅长记忆（DFA α≈0.8），收益短程均值回归（VR<1）</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: DFA 双对数（斜率=α）；右上: 方差比 VR(k)；右下: 振幅自相关衰减</text>
+<text x="60.0" y="62.0" font-size="9.5" fill="#3E3480" text-anchor="start" font-weight="600">1分钟振幅 DFA</text>
+<polyline points="70.0,210.0 124.3,175.8 162.8,155.4 217.2,129.8 255.7,109.1 285.6,99.0 310.0,84.9" fill="none" stroke="#3E3480" stroke-width="1.6" stroke-opacity="1.0"/>
+<circle cx="70.0" cy="210.0" r="2.6" fill="#3E3480"/><circle cx="124.3" cy="175.8" r="2.6" fill="#3E3480"/><circle cx="162.8" cy="155.4" r="2.6" fill="#3E3480"/><circle cx="217.2" cy="129.8" r="2.6" fill="#3E3480"/><circle cx="255.7" cy="109.1" r="2.6" fill="#3E3480"/><circle cx="285.6" cy="99.0" r="2.6" fill="#3E3480"/><circle cx="310.0" cy="84.9" r="2.6" fill="#3E3480"/><text x="60.0" y="236.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">α = 0.76（EG 0.80）→ 波动率聚集、长记忆</text>
+<text x="60.0" y="252.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">日振幅 DFA α = 1.12 → 日间持续性更强</text>
+<text x="60.0" y="268.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">注: 会话≤120根, 日内 DFA 有效标度 4–24 根</text>
+<text x="420.0" y="62.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">方差比 VR(k)</text>
+<line x1="430.0" y1="83.3" x2="640.0" y2="83.3" stroke="#C4372E" stroke-width="1.2" stroke-dasharray="4,3"/>
+<text x="636.0" y="79.3" font-size="8.5" fill="#C4372E" text-anchor="end" font-weight="600">随机游走</text>
+<polyline points="440.0,101.2 486.0,117.2 532.0,128.5" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<polyline points="440.0,93.2 486.0,105.8 532.0,116.4" fill="none" stroke="#C4372E" stroke-width="1.4" stroke-opacity="0.8"/>
+<text x="440.0" y="166.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">2</text>
+<text x="440.0" y="95.2" font-size="8" fill="#3E3480" text-anchor="middle" font-weight="600">0.87</text>
+<text x="486.0" y="166.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">5</text>
+<text x="486.0" y="111.2" font-size="8" fill="#3E3480" text-anchor="middle" font-weight="600">0.75</text>
+<text x="532.0" y="166.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">10</text>
+<text x="532.0" y="122.5" font-size="8" fill="#3E3480" text-anchor="middle" font-weight="600">0.66</text>
+<text x="420.0" y="186.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">VR<1 且随 k 递减：短程收益均值回归</text>
+<text x="420.0" y="214.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">振幅自相关（同会话内池化）</text>
+<line x1="432.0" y1="300.0" x2="645.0" y2="300.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="303.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.0</text>
+<line x1="432.0" y1="286.0" x2="645.0" y2="286.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="289.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.2</text>
+<line x1="432.0" y1="272.0" x2="645.0" y2="272.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="275.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.4</text>
+<line x1="432.0" y1="258.0" x2="645.0" y2="258.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="261.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.6</text>
+<polyline points="440.0,261.9 472.0,265.0 504.0,267.6 536.0,270.2 568.0,272.9 600.0,276.3" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<polyline points="440.0,256.9 472.0,259.9 504.0,262.1 536.0,264.8 568.0,267.8 600.0,272.2" fill="none" stroke="#C4372E" stroke-width="1.4" stroke-opacity="0.8"/>
+<text x="440.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">1</text>
+<text x="472.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">2</text>
+<text x="504.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">5</text>
+<text x="536.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">10</text>
+<text x="568.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">20</text>
+<text x="600.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">60</text>
+<text x="420.0" y="322.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">60 根后仍 0.34：波动聚集跨会话延续</text>
+</svg></div><table><thead><tr><th>方差比 VR(k)</th><th>MA</th><th>EG</th></tr></thead><tbody><tr><td>k=2</td><td>0.866</td><td>0.926</td></tr><tr><td>k=5</td><td>0.746</td><td>0.832</td></tr><tr><td>k=10</td><td>0.661</td><td>0.752</td></tr></tbody></table><table><thead><tr><th>振幅自相关（同会话池化）</th><th>MA</th><th>EG</th></tr></thead><tbody><tr><td>1 根</td><td>0.544</td><td>0.615</td></tr><tr><td>2 根</td><td>0.500</td><td>0.572</td></tr><tr><td>5 根</td><td>0.463</td><td>0.542</td></tr><tr><td>10 根</td><td>0.426</td><td>0.502</td></tr><tr><td>20 根</td><td>0.388</td><td>0.460</td></tr><tr><td>60 根</td><td>0.339</td><td>0.398</td></tr></tbody></table><div class="box ok"><b>结论：</b>三个刻度讲同一个故事——<b>振幅（波动率）是长记忆的</b>：1 分钟 DFA α=0.76（EG 0.80，>0.5 即持续性），日振幅 α=1.12，振幅自相关 60 根后仍 0.34–0.40；而<b>收益是短程均值回归的</b>：VR(2)=0.87–0.93，VR(10)=0.66–0.75 且随 k 递减。这正是「波动率聚集」的标度签名，与 V5 的三层讲解、线性代数的 Γ₁ 振幅可预测性（23.6%）互为印证。注意：会话 ≤120 根，日内 DFA 有效标度只有 4–24 根，α 的绝对值应打折看，符号方向（>0.5）才是稳健结论。</div><h2>八、维度⑦ 条件结构：综卦「貌离神合」</h2><div class="fig"><svg viewBox="0 0 680 340" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度七 · 条件结构：综卦「貌离神合」——静态最远，动态最近</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: P(下一根振幅5档 | 当前态)，MA；右: 条件分布的 JS 距离（比特，越小越像）</text>
+<text x="40.0" y="64.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">行=当前态 → 列=下一根振幅档(低→高)</text>
+<text x="142.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档1</text>
+<text x="186.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档2</text>
+<text x="230.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档3</text>
+<text x="274.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档4</text>
+<text x="318.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档5</text>
+<text x="112.0" y="94.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">离☲ 000000</text>
+<rect x="120.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="141.0" y="94.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">26</text>
+<rect x="164.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="185.0" y="94.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">25</text>
+<rect x="208.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="94.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="273.0" y="94.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="296.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="317.0" y="94.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">12</text>
+<text x="112.0" y="124.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">艮☶ 000001</text>
+<rect x="120.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="141.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="164.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="185.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">18</text>
+<rect x="208.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="252.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="296.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="317.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<text x="112.0" y="154.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">震☳ 000100</text>
+<rect x="120.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="141.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<rect x="164.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="185.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="208.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="252.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="296.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="317.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<text x="112.0" y="184.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">坤☷ 000101</text>
+<rect x="120.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="141.0" y="184.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">10</text>
+<rect x="164.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="185.0" y="184.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">12</text>
+<rect x="208.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="229.0" y="184.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">18</text>
+<rect x="252.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="273.0" y="184.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">24</text>
+<rect x="296.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="317.0" y="184.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">36</text>
+<text x="112.0" y="214.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">乾☰ 010000</text>
+<rect x="120.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="141.0" y="214.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">28</text>
+<rect x="164.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="185.0" y="214.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">24</text>
+<rect x="208.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="214.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="273.0" y="214.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="296.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="317.0" y="214.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">11</text>
+<text x="112.0" y="244.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">巽☴ 010001</text>
+<rect x="120.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="141.0" y="244.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">23</text>
+<rect x="164.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="185.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="208.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="252.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<rect x="296.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="317.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">15</text>
+<text x="112.0" y="274.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">兑☱ 010100</text>
+<rect x="120.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="141.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="164.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="185.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="208.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<rect x="296.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="317.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<text x="112.0" y="304.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">坎☵ 010101</text>
+<rect x="120.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="141.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="164.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="185.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">18</text>
+<rect x="208.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="296.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="317.0" y="304.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">24</text>
+<text x="40.0" y="336.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">各行集中度最高仅 36%：给定当前态，下一根振幅仍接近边缘分布（20%）</text>
+<text x="430.0" y="76.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">条件分布 JS 距离（比特）</text>
+<text x="424.0" y="112.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="600">综卦对（影线换边）</text>
+<rect x="430.0" y="100.0" width="3.0" height="16.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="438.0" y="112.0" font-size="9" fill="#26215C" text-anchor="start" font-weight="600">0.0011</text>
+<rect x="430.0" y="118.0" width="4.4" height="16.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="439.4" y="130.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">0.0017</text>
+<text x="424.0" y="168.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="600">错卦对（三爻全反）</text>
+<rect x="430.0" y="156.0" width="92.1" height="16.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="527.1" y="168.0" font-size="9" fill="#26215C" text-anchor="start" font-weight="600">0.0354</text>
+<rect x="430.0" y="174.0" width="118.0" height="16.0" rx="3" fill="#E5B8B0" fill-opacity="1.0"/>
+<text x="553.0" y="186.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">0.0454</text>
+<rect x="430.0" y="216.0" width="9.0" height="9.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="443.0" y="224.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">MA</text>
+<rect x="470.0" y="216.0" width="9.0" height="9.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="483.0" y="224.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">EG</text>
+<text x="430.0" y="248.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">综卦对条件分布几乎相同（JS 0.001–0.002），</text>
+<text x="430.0" y="264.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">比错卦对近 30 倍。</text>
+<text x="430.0" y="288.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">距离矩阵说「综卦=大变动」（3.28 > 均值2.89），</text>
+<text x="430.0" y="304.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">条件动态说「综卦=小变动」——预测问题里，</text>
+<text x="430.0" y="320.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">动态口径才是该信的那个。</text>
+</svg></div><table><thead><tr><th>条件分布比较（JS 距离，比特）</th><th>MA</th><th>EG</th><th>含义</th></tr></thead><tbody><tr><td class="l">综卦对（影线换边）均值</td><td><b class="g">0.0011</b></td><td><b class="g">0.0017</b></td><td>条件分布几乎相同</td></tr><tr><td class="l">错卦对（三爻全反）均值</td><td><b class="r">0.0354</b></td><td><b class="r">0.0454</b></td><td>条件分布明显不同</td></tr><tr><td class="l">各态下一根振幅集中度</td><td>21–36%</td><td>21–36%</td><td>最高档也只 21–36%，接近边缘分布 20%</td></tr></tbody></table><div class="box bad"><b>结论（推翻前论）：</b>V2/矩阵视角曾判「综卦=大变动」——因为综卦对在特征空间距离 3.28，比平均 2.89 还远。但条件分布给出相反答案：<b>综卦对的下一根振幅分布 JS 距离仅 0.001–0.002 比特，比错卦对近 30 倍</b>。静态几何（当前长什么样）与动态几何（之后怎么走）是两个问题；对预测而言，<b>动态口径才该信</b>——影线换边不改变后续动力学，「上下影互换」在演化意义上近似同一个状态的两种观测。</div><h2>九、维度⑧ 尾部相依：极端行情同生共死</h2><div class="fig"><svg viewBox="0 0 680 300" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度八 · 尾部相依：甲醇×乙二醇在极端行情里「同生共死」</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: 联合超越概率 / 独立假设（倍）；右: 95% 尾部超越的领先滞后</text>
+<line x1="60.0" y1="210.0" x2="300.0" y2="210.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="56.0" y="213.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">0×</text>
+<line x1="60.0" y1="175.0" x2="300.0" y2="175.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="56.0" y="178.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">9×</text>
+<line x1="60.0" y1="140.0" x2="300.0" y2="140.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="56.0" y="143.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">18×</text>
+<line x1="60.0" y1="105.0" x2="300.0" y2="105.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="56.0" y="108.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">27×</text>
+<line x1="60.0" y1="70.0" x2="300.0" y2="70.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="56.0" y="73.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">36×</text>
+<rect x="70.0" y="192.0" width="40.0" height="18.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="90.0" y="186.0" font-size="10" fill="#26215C" text-anchor="middle" font-weight="600">4.6×</text>
+<text x="90.0" y="228.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">振幅>90分位</text>
+<rect x="136.0" y="177.1" width="40.0" height="32.9" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="156.0" y="171.1" font-size="10" fill="#26215C" text-anchor="middle" font-weight="600">8.5×</text>
+<text x="156.0" y="228.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">振幅>95分位</text>
+<rect x="202.0" y="76.7" width="40.0" height="133.3" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="222.0" y="70.7" font-size="10" fill="#26215C" text-anchor="middle" font-weight="600">34.3×</text>
+<text x="222.0" y="228.0" font-size="9" fill="#5F5E5A" text-anchor="middle" font-weight="400">振幅>99分位</text>
+<line x1="60.0" y1="206.1" x2="300.0" y2="206.1" stroke="#2E7D4F" stroke-width="1.2" stroke-dasharray="4,3"/>
+<text x="296.0" y="202.1" font-size="8.5" fill="#2E7D4F" text-anchor="end" font-weight="600">独立假设 1×</text>
+<text x="40.0" y="254.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">99% 分位联合概率 0.34% vs 独立 0.01%——极端波动几乎必然共振</text>
+<text x="40.0" y="270.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">条件概率: P(MA极端|EG极端)=34%（EG 同）</text>
+<text x="40.0" y="288.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">→ 两品种不是分散化对象，是同一个风险因子的两个读数</text>
+<text x="420.0" y="62.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">95% 尾部联合超越（领先滞后 ±5 分钟）</text>
+<line x1="432.0" y1="94.2" x2="648.0" y2="94.2" stroke="#CFC6E6" stroke-width="1" stroke-dasharray="3,2"/>
+<text x="644.0" y="90.2" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">同步值</text>
+<polyline points="440.0,156.6 470.0,156.9 500.0,153.8 530.0,149.8 560.0,140.4 590.0,94.0 620.0,139.1 650.0,147.4 680.0,152.0 710.0,154.1 740.0,153.7" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<circle cx="440.0" cy="156.6" r="2.6" fill="#3E3480"/><circle cx="470.0" cy="156.9" r="2.6" fill="#3E3480"/><circle cx="500.0" cy="153.8" r="2.6" fill="#3E3480"/><circle cx="530.0" cy="149.8" r="2.6" fill="#3E3480"/><circle cx="560.0" cy="140.4" r="2.6" fill="#3E3480"/><circle cx="590.0" cy="94.0" r="2.6" fill="#3E3480"/><circle cx="620.0" cy="139.1" r="2.6" fill="#3E3480"/><circle cx="650.0" cy="147.4" r="2.6" fill="#3E3480"/><circle cx="680.0" cy="152.0" r="2.6" fill="#3E3480"/><circle cx="710.0" cy="154.1" r="2.6" fill="#3E3480"/><circle cx="740.0" cy="153.7" r="2.6" fill="#3E3480"/><circle cx="590.0" cy="94.0" r="4.5" fill="none" stroke="#C4372E" stroke-width="1.6"/><text x="440.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">-5</text>
+<text x="470.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">-4</text>
+<text x="500.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">-3</text>
+<text x="530.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">-2</text>
+<text x="560.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">-1</text>
+<text x="590.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">0</text>
+<text x="620.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">+1</text>
+<text x="650.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">+2</text>
+<text x="680.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">+3</text>
+<text x="710.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">+4</text>
+<text x="740.0" y="186.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">+5</text>
+<text x="420.0" y="212.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">峰值钉在 k=0（2.11%），±5 分钟衰减 30%</text>
+<text x="420.0" y="228.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">与收益互相关结论一致：无分钟级领先结构</text>
+<text x="420.0" y="248.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="700">工程含义：</text>
+<text x="420.0" y="264.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">① 风控共振探测器（同时亮高波动态即联动减仓）</text>
+<text x="420.0" y="280.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">② 不存在「甲醇先动、乙二醇跟」的套利结构</text>
+</svg></div><table><thead><tr><th>分位</th><th>联合超越</th><th>独立假设</th><th>倍数</th><th>P(MA极端|EG极端)</th><th>P(EG极端|MA极端)</th></tr></thead><tbody><tr><td>>90 分位</td><td>4.64%</td><td>1.00%</td><td><b class="r">4.6×</b></td><td>46%</td><td>46%</td></tr><tr><td>>95 分位</td><td>2.11%</td><td>0.25%</td><td><b class="r">8.5×</b></td><td>42%</td><td>42%</td></tr><tr><td>>99 分位</td><td>0.34%</td><td>0.01%</td><td><b class="r">34.3×</b></td><td>34%</td><td>34%</td></tr></tbody></table><table><thead><tr><th>滞后 k（分钟）</th><th>-5</th><th>-4</th><th>-3</th><th>-2</th><th>-1</th><th>0</th><th>+1</th><th>+2</th><th>+3</th><th>+4</th><th>+5</th></tr></thead><tbody><tr><td class="l">95% 尾部联合</td><td>1.36</td><td>1.36</td><td>1.39</td><td>1.44</td><td>1.56</td><td>2.11</td><td>1.57</td><td>1.47</td><td>1.42</td><td>1.39</td><td>1.40</td></tr></tbody></table><div class="box bad"><b>结论：</b>MA 与 EG 的极端波动强烈共尾：99% 分位的联合超越概率是独立假设的 <b>34 倍</b>（0.34% vs 0.01%），90% 分位也有 4.6 倍；且领先滞后峰值钉在 k=0，±5 分钟衰减约 30%。<b>两个品种不是分散化对象，而是同一个风险因子的两个读数</b>——与收益互相关（同刻 0.44）、联合 MI（0.086 bit）结论一致。工程上直接用作风控共振探测器：同板块品种同时亮高波动态 ⇒ 联动降仓，而不是各算各的止损。</div><h2>十、交叉验证：新维度与既有结论的互证网</h2><table><thead><tr><th>新维度结论</th><th>印证/推翻的既有结论</th><th>关系</th></tr></thead><tbody><tr><td class="l">熵率 2.72 bit、压缩率 45%</td><td>V6 code7：六位码在振幅维只捕获 11.9%</td><td>印证（信息论版）</td></tr><tr><td class="l">一阶 top-1 24–28% vs 随机 12.5%</td><td>V3：八态链是合格马尔可夫链</td><td>印证</td></tr><tr><td class="l">图社区 = 阴4态|阳4态</td><td>矩阵视角：距离矩阵两家族聚类</td><td>独立方法互证</td></tr><tr><td class="l">转移图 59/64 边显著、不可约</td><td>V1：混合时间 1.1 根、无吸收态</td><td>印证</td></tr><tr><td class="l">DFA α>0.5、VR<1、ACF 衰减慢</td><td>V5 波动率聚集 + 线性代数 Γ₁ 振幅可预测 23.6%</td><td>印证（标度版）</td></tr><tr><td class="l">周一振幅低 31%、三月最高</td><td>V4 日×时段矩阵 σ₁=72.5% 可分离结构</td><td>延伸（新增日历因子）</td></tr><tr><td class="l">2026 漂移在普通年份区间内</td><td>V4：2026 holdout 规律存活</td><td>印证</td></tr><tr><td class="l"><b>综卦条件分布几乎相同（JS 0.001）</b></td><td><b>V2/矩阵视角「综卦=大变动」（距离 3.28）</b></td><td><b>推翻（静态口径误导）</b></td></tr><tr><td class="l">尾部相依 34×、峰值 k=0</td><td>矩阵视角：MA×EG 同步共动无领先</td><td>印证（极端版）</td></tr></tbody></table><h2>十一、工程结论（七条）</h2><div class="box"><b>1. 存储与传输：</b>六位码可无损压缩约 55%（熵率 2.72/6 bit），按 8 态等概设计的任何先验或采样方案都会高估信息量。<br><b>2. 状态识别可用、方向预测不可用：</b>一阶猜中率 24–28% 显著高于基线，但绝对水平接近抛硬币；形态码适合做<b>市场状态分类器与过滤器</b>，不适合做方向信号。<br><b>3. 二阶记忆值得建模：</b>2 阶马尔可夫比 1 阶再省 0.041 bit/根（约 1.4% 预测成本），3 阶起饱和——实现取 2 阶即可。<br><b>4. 仓位日历：</b>周一降波动预期（振幅仅周二~周五的 0.69 倍）、三月高波动、八月低波动，纳入仓位/止损的日期标定。<br><b>5. 风控共振：</b>MA/EG 极端波动共尾 34 倍且同步——同板块联动降仓规则；不要做跨品种分钟级领先套利（不存在）。<br><b>6. 滚动重估：</b>转移矩阵年漂移 0.08–0.33、2026 无异常——用近 2 年滚动窗口估计即可，无需变点检测。<br><b>7. 标度意识：</b>波动长记忆（DFA α≈0.8）+ 收益短程回归（VR&lt;1）⇒ 止损/加仓的时间标度应匹配：幅度类决策（仓位、止损宽度）看波动聚集，方向类决策看短程回归，不要混用。</div><h2>十二、口径与边界</h2><div class="box"><b>口径：</b>① 编码为 实体方向2位+上影2位+下影2位（00=无/跌，01=有/涨），加 open/chg/amp 构成四元组；② 相邻对限定会话内 60 秒（夜盘归属次日交易日）；③ 训练 2020-2025（489,975 根/品种），holdout 2026（35,865 根/品种）；④ 日内 DFA 受会话 ≤120 根限制，有效标度 4–24 根，α 的绝对值打折看、方向看；⑤ 全部结论经 MA/EG 双品种交叉验证，方向一致。<br><br><b>边界声明：</b>本报告为期货 K 线形态编码的统计分析，属传统文化（八卦编码）与量化研究的结合探索，结论仅供研究参考，不构成任何投资建议；实际交易请以正规行情数据、专业机构意见与自身风险承受能力为准。</div><div class="mut">生成于 2026-10-17 · 数据：MA/EG 主力连续 1 分钟 2020-2026 · 脚本：step24_dimensions.py / step25_dim_figs.py / step26_report_dimensions.py</div></div></body></html>

@@ -1,0 +1,39 @@
+<svg viewBox="0 0 680 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度六 · 长程标度：振幅长记忆（DFA α≈0.8），收益短程均值回归（VR<1）</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: DFA 双对数（斜率=α）；右上: 方差比 VR(k)；右下: 振幅自相关衰减</text>
+<text x="60.0" y="62.0" font-size="9.5" fill="#3E3480" text-anchor="start" font-weight="600">1分钟振幅 DFA</text>
+<polyline points="70.0,210.0 124.3,175.8 162.8,155.4 217.2,129.8 255.7,109.1 285.6,99.0 310.0,84.9" fill="none" stroke="#3E3480" stroke-width="1.6" stroke-opacity="1.0"/>
+<circle cx="70.0" cy="210.0" r="2.6" fill="#3E3480"/><circle cx="124.3" cy="175.8" r="2.6" fill="#3E3480"/><circle cx="162.8" cy="155.4" r="2.6" fill="#3E3480"/><circle cx="217.2" cy="129.8" r="2.6" fill="#3E3480"/><circle cx="255.7" cy="109.1" r="2.6" fill="#3E3480"/><circle cx="285.6" cy="99.0" r="2.6" fill="#3E3480"/><circle cx="310.0" cy="84.9" r="2.6" fill="#3E3480"/><text x="60.0" y="236.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">α = 0.76（EG 0.80）→ 波动率聚集、长记忆</text>
+<text x="60.0" y="252.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">日振幅 DFA α = 1.12 → 日间持续性更强</text>
+<text x="60.0" y="268.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">注: 会话≤120根, 日内 DFA 有效标度 4–24 根</text>
+<text x="420.0" y="62.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">方差比 VR(k)</text>
+<line x1="430.0" y1="83.3" x2="640.0" y2="83.3" stroke="#C4372E" stroke-width="1.2" stroke-dasharray="4,3"/>
+<text x="636.0" y="79.3" font-size="8.5" fill="#C4372E" text-anchor="end" font-weight="600">随机游走</text>
+<polyline points="440.0,101.2 486.0,117.2 532.0,128.5" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<polyline points="440.0,93.2 486.0,105.8 532.0,116.4" fill="none" stroke="#C4372E" stroke-width="1.4" stroke-opacity="0.8"/>
+<text x="440.0" y="166.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">2</text>
+<text x="440.0" y="95.2" font-size="8" fill="#3E3480" text-anchor="middle" font-weight="600">0.87</text>
+<text x="486.0" y="166.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">5</text>
+<text x="486.0" y="111.2" font-size="8" fill="#3E3480" text-anchor="middle" font-weight="600">0.75</text>
+<text x="532.0" y="166.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">10</text>
+<text x="532.0" y="122.5" font-size="8" fill="#3E3480" text-anchor="middle" font-weight="600">0.66</text>
+<text x="420.0" y="186.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">VR<1 且随 k 递减：短程收益均值回归</text>
+<text x="420.0" y="214.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">振幅自相关（同会话内池化）</text>
+<line x1="432.0" y1="300.0" x2="645.0" y2="300.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="303.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.0</text>
+<line x1="432.0" y1="286.0" x2="645.0" y2="286.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="289.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.2</text>
+<line x1="432.0" y1="272.0" x2="645.0" y2="272.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="275.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.4</text>
+<line x1="432.0" y1="258.0" x2="645.0" y2="258.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="428.0" y="261.0" font-size="8.5" fill="#888780" text-anchor="end" font-weight="400">0.6</text>
+<polyline points="440.0,261.9 472.0,265.0 504.0,267.6 536.0,270.2 568.0,272.9 600.0,276.3" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<polyline points="440.0,256.9 472.0,259.9 504.0,262.1 536.0,264.8 568.0,267.8 600.0,272.2" fill="none" stroke="#C4372E" stroke-width="1.4" stroke-opacity="0.8"/>
+<text x="440.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">1</text>
+<text x="472.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">2</text>
+<text x="504.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">5</text>
+<text x="536.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">10</text>
+<text x="568.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">20</text>
+<text x="600.0" y="314.0" font-size="8.5" fill="#888780" text-anchor="middle" font-weight="400">60</text>
+<text x="420.0" y="322.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">60 根后仍 0.34：波动聚集跨会话延续</text>
+</svg>

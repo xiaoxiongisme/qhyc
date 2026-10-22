@@ -1,0 +1,47 @@
+<svg viewBox="0 0 680 300" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度一 · 信息论与压缩：六位码每根只携带 2.72 比特</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">熵率 = 块熵 H(下一态 | 前三态)；对比 6 bit 编码上限</text>
+<text x="140.0" y="92.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">H(当前状态)</text>
+<rect x="150.0" y="78.0" width="76.1" height="20.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="232.1" y="92.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.927 bit</text>
+<text x="140.0" y="126.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">H(下一态 | 当前态)</text>
+<rect x="150.0" y="112.0" width="71.8" height="20.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="227.8" y="126.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.760 bit</text>
+<text x="140.0" y="160.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">块熵 k=2</text>
+<rect x="150.0" y="146.0" width="71.2" height="20.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="227.2" y="160.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.739 bit</text>
+<text x="140.0" y="194.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">块熵 k=3（熵率）</text>
+<rect x="150.0" y="180.0" width="70.8" height="20.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="226.8" y="194.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">2.722 bit</text>
+<line x1="150.0" y1="78.0" x2="150.0" y2="214.0" stroke="#888780" stroke-width="1"/>
+<text x="150.0" y="232.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">0</text>
+<text x="228.0" y="232.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">3</text>
+<line x1="306.0" y1="70.0" x2="306.0" y2="214.0" stroke="#C4372E" stroke-width="1.4" stroke-dasharray="4,3"/>
+<text x="306.0" y="66.0" font-size="9.5" fill="#C4372E" text-anchor="middle" font-weight="600">六位码 = 6 bit</text>
+<text x="40.0" y="262.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="600">压缩率 = 2.722 / 6 = 45.4%   有效字母表 = e^2.93 ≈ 18.7 个等价态</text>
+<text x="40.0" y="280.0" font-size="9.5" fill="#888780" text-anchor="start" font-weight="400">EG 复验: 熵率 2.780 bit（46.3%），两品种一致</text>
+<text x="430.0" y="60.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">分年熵率（2020–2026）</text>
+<line x1="420.0" y1="200.0" x2="645.0" y2="200.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="203.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.5</text>
+<line x1="420.0" y1="174.0" x2="645.0" y2="174.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="177.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.6</text>
+<line x1="420.0" y1="148.0" x2="645.0" y2="148.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="151.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.7</text>
+<line x1="420.0" y1="122.0" x2="645.0" y2="122.0" stroke="#E8E6DE" stroke-width="1"/>
+<text x="414.0" y="125.0" font-size="9" fill="#888780" text-anchor="end" font-weight="400">2.8</text>
+<polyline points="430.0,142.0 460.0,126.9 490.0,127.8 520.0,130.7 550.0,166.4 580.0,165.7 610.0,122.8" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<circle cx="430.0" cy="142.0" r="2.8" fill="#3E3480"/><circle cx="460.0" cy="126.9" r="2.8" fill="#3E3480"/><circle cx="490.0" cy="127.8" r="2.8" fill="#3E3480"/><circle cx="520.0" cy="130.7" r="2.8" fill="#3E3480"/><circle cx="550.0" cy="166.4" r="2.8" fill="#3E3480"/><circle cx="580.0" cy="165.7" r="2.8" fill="#3E3480"/><circle cx="610.0" cy="122.8" r="2.8" fill="#3E3480"/><polyline points="430.0,113.2 460.0,166.3 490.0,150.4 520.0,113.8 550.0,112.2 580.0,111.0 610.0,147.4" fill="none" stroke="#C4372E" stroke-width="1.8" stroke-opacity="1.0"/>
+<circle cx="430.0" cy="113.2" r="2.8" fill="#C4372E"/><circle cx="460.0" cy="166.3" r="2.8" fill="#C4372E"/><circle cx="490.0" cy="150.4" r="2.8" fill="#C4372E"/><circle cx="520.0" cy="113.8" r="2.8" fill="#C4372E"/><circle cx="550.0" cy="112.2" r="2.8" fill="#C4372E"/><circle cx="580.0" cy="111.0" r="2.8" fill="#C4372E"/><circle cx="610.0" cy="147.4" r="2.8" fill="#C4372E"/><text x="430.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">20</text>
+<text x="460.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">21</text>
+<text x="490.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">22</text>
+<text x="520.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">23</text>
+<text x="550.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">24</text>
+<text x="580.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">25</text>
+<text x="610.0" y="216.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">26</text>
+<rect x="430.0" y="236.0" width="9.0" height="9.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="443.0" y="244.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">MA</text>
+<rect x="470.0" y="236.0" width="9.0" height="9.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="483.0" y="244.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">EG</text>
+<text x="430.0" y="268.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">熵率七年稳定在 2.63–2.80 bit：</text>
+<text x="430.0" y="282.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">结构不随时间退化，也无趋势</text>
+</svg>

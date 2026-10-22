@@ -1,0 +1,175 @@
+<svg viewBox="0 0 680 400" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">八态距离矩阵（形态特征空间欧氏距离，按聚类重排）— MA</text>
+<text x="40.0" y="46.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">特征=平均涨跌/振幅/CLV/上影/下影。颜色越深=差异越大；白框=错卦对，虚线框=综卦对</text>
+<text x="151.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">乾☰</text>
+<text x="197.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">巽☴</text>
+<text x="243.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">兑☱</text>
+<text x="289.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">坎☵</text>
+<text x="335.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">离☲</text>
+<text x="381.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">震☳</text>
+<text x="427.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">艮☶</text>
+<text x="473.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">坤☷</text>
+<text x="120.0" y="97.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">乾☰ 010000</text>
+<rect x="128" y="70" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="150.0" y="97.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<rect x="174" y="70" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="196.0" y="97.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<rect x="220" y="70" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="242.0" y="97.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">3.0</text>
+<rect x="266" y="70" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="288.0" y="97.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">3.1</text>
+<rect x="312" y="70" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="334.0" y="97.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="358" y="70" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="380.0" y="97.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.9</text>
+<rect x="404" y="70" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="426.0" y="97.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="450" y="70" width="44" height="44" rx="4" fill="#3E3480"/>
+<rect x="450" y="70" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="472.0" y="97.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.5</text>
+<text x="120.0" y="143.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">巽☴ 010001</text>
+<rect x="128" y="116" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="150.0" y="143.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<rect x="174" y="116" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="196.0" y="143.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<rect x="220" y="116" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="220" y="116" width="44" height="44" rx="4" fill="none" stroke="#26215C" stroke-width="1.2" stroke-dasharray="3,2"/>
+<text x="242.0" y="143.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.8</text>
+<rect x="266" y="116" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="288.0" y="143.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.4</text>
+<rect x="312" y="116" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="334.0" y="143.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.0</text>
+<rect x="358" y="116" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="358" y="116" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="380.0" y="143.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.3</text>
+<rect x="404" y="116" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="426.0" y="143.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<rect x="450" y="116" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="472.0" y="143.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.0</text>
+<text x="120.0" y="189.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">兑☱ 010100</text>
+<rect x="128" y="162" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="150.0" y="189.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">3.0</text>
+<rect x="174" y="162" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="174" y="162" width="44" height="44" rx="4" fill="none" stroke="#26215C" stroke-width="1.2" stroke-dasharray="3,2"/>
+<text x="196.0" y="189.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.8</text>
+<rect x="220" y="162" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="242.0" y="189.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<rect x="266" y="162" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="288.0" y="189.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.0</text>
+<rect x="312" y="162" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="334.0" y="189.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.3</text>
+<rect x="358" y="162" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="380.0" y="189.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.1</text>
+<rect x="404" y="162" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="404" y="162" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="426.0" y="189.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.6</text>
+<rect x="450" y="162" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="472.0" y="189.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<text x="120.0" y="235.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">坎☵ 010101</text>
+<rect x="128" y="208" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="150.0" y="235.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">3.1</text>
+<rect x="174" y="208" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="196.0" y="235.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.4</text>
+<rect x="220" y="208" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="242.0" y="235.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.0</text>
+<rect x="266" y="208" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="288.0" y="235.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<rect x="312" y="208" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="312" y="208" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="334.0" y="235.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="358" y="208" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="380.0" y="235.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<rect x="404" y="208" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="426.0" y="235.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.3</text>
+<rect x="450" y="208" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="472.0" y="235.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.4</text>
+<text x="120.0" y="281.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">离☲ 000000</text>
+<rect x="128" y="254" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="150.0" y="281.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="174" y="254" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="196.0" y="281.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.0</text>
+<rect x="220" y="254" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="242.0" y="281.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.3</text>
+<rect x="266" y="254" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="266" y="254" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="288.0" y="281.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="312" y="254" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="334.0" y="281.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<rect x="358" y="254" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="380.0" y="281.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.0</text>
+<rect x="404" y="254" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="426.0" y="281.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.5</text>
+<rect x="450" y="254" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="472.0" y="281.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<text x="120.0" y="327.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">震☳ 000100</text>
+<rect x="128" y="300" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="150.0" y="327.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.9</text>
+<rect x="174" y="300" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="174" y="300" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="196.0" y="327.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.3</text>
+<rect x="220" y="300" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="242.0" y="327.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.1</text>
+<rect x="266" y="300" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="288.0" y="327.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<rect x="312" y="300" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="334.0" y="327.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.0</text>
+<rect x="358" y="300" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="380.0" y="327.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<rect x="404" y="300" width="44" height="44" rx="4" fill="#A397D2"/>
+<rect x="404" y="300" width="44" height="44" rx="4" fill="none" stroke="#26215C" stroke-width="1.2" stroke-dasharray="3,2"/>
+<text x="426.0" y="327.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.7</text>
+<rect x="450" y="300" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="472.0" y="327.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<text x="120.0" y="373.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">艮☶ 000001</text>
+<rect x="128" y="346" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="150.0" y="373.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="174" y="346" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="196.0" y="373.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<rect x="220" y="346" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<rect x="220" y="346" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="242.0" y="373.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.6</text>
+<rect x="266" y="346" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="288.0" y="373.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.3</text>
+<rect x="312" y="346" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="334.0" y="373.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.5</text>
+<rect x="358" y="346" width="44" height="44" rx="4" fill="#A397D2"/>
+<rect x="358" y="346" width="44" height="44" rx="4" fill="none" stroke="#26215C" stroke-width="1.2" stroke-dasharray="3,2"/>
+<text x="380.0" y="373.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.7</text>
+<rect x="404" y="346" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="426.0" y="373.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<rect x="450" y="346" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="472.0" y="373.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.0</text>
+<text x="120.0" y="419.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">坤☷ 000101</text>
+<rect x="128" y="392" width="44" height="44" rx="4" fill="#3E3480"/>
+<rect x="128" y="392" width="44" height="44" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+<text x="150.0" y="419.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.5</text>
+<rect x="174" y="392" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="196.0" y="419.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">4.0</text>
+<rect x="220" y="392" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="242.0" y="419.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="266" y="392" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="288.0" y="419.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.4</text>
+<rect x="312" y="392" width="44" height="44" rx="4" fill="#6E5FB8"/>
+<text x="334.0" y="419.0" font-size="9" fill="#FFFFFF" text-anchor="middle" font-weight="400">3.5</text>
+<rect x="358" y="392" width="44" height="44" rx="4" fill="#A397D2"/>
+<text x="380.0" y="419.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.6</text>
+<rect x="404" y="392" width="44" height="44" rx="4" fill="#CFC6E6"/>
+<text x="426.0" y="419.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">2.0</text>
+<rect x="450" y="392" width="44" height="44" rx="4" fill="#F6F4EE"/>
+<text x="472.0" y="419.0" font-size="9" fill="#26215C" text-anchor="middle" font-weight="400">0.0</text>
+<text x="40.0" y="402.0" font-size="11" fill="#26215C" text-anchor="start" font-weight="700">平均距离对比</text>
+<text x="40.0" y="434.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">其他对（差1个字段）</text>
+<rect x="200" y="424" width="260" height="14" rx="3" fill="#888780" fill-opacity="0.8"/>
+<text x="466.3" y="435.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">2.89</text>
+<text x="40.0" y="458.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">综卦对（影线换边）</text>
+<rect x="200" y="448" width="296" height="14" rx="3" fill="#5C4FA1" fill-opacity="0.8"/>
+<text x="501.6" y="459.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">3.28</text>
+<text x="40.0" y="482.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">错卦对（三爻全反）</text>
+<rect x="200" y="472" width="359" height="14" rx="3" fill="#C4372E" fill-opacity="0.8"/>
+<text x="564.7" y="483.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">3.99</text>
+<text x="470.0" y="424.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">聚类读出真实结构：</text>
+<text x="470.0" y="442.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">阳线4态（乾巽兑坎）与阴线4态</text>
+<text x="470.0" y="456.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">（离震艮坤）先分家，家族内</text>
+<text x="470.0" y="470.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">再按影线模式（无/下/上/双）排</text>
+<text x="470.0" y="488.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">“综卦=小变动”在数据里不成立</text>
+</svg>

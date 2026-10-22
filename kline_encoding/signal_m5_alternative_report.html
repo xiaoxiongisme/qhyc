@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>去掉 M5 会员门控 + 单品种可计算替代方案</title>
+<style>
+:root{--bg:#0f1419;--card:#1a2027;--ink:#e6edf3;--mut:#8b98a5;--acc:#4dd0e1;--ok:#66bb6a;--bad:#ef5350;--warn:#ffb74d;--bd:#2a323c;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;padding:32px 18px}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:25px;margin:0 0 4px}
+h2{font-size:19px;margin:34px 0 12px;padding-left:11px;border-left:4px solid var(--acc)}
+h3{font-size:16px;color:var(--acc);margin:22px 0 8px}
+.sub{color:var(--mut);font-size:13px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:14px 0}
+.ok{border-left:4px solid var(--ok)} .bad{border-left:4px solid var(--bad)} .warn{border-left:4px solid var(--warn)} .info{border-left:4px solid var(--acc)}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+th,td{padding:8px 9px;text-align:right;border-bottom:1px solid var(--bd)}
+th{color:var(--mut);font-weight:600;background:#161c22;position:sticky}
+td:first-child,th:first-child{text-align:left}
+.tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin:1px}
+.t-ok{background:rgba(102,187,106,.18);color:var(--ok)} .t-bad{background:rgba(239,83,80,.18);color:var(--bad)} .t-warn{background:rgba(255,183,77,.18);color:var(--warn)}
+.num{font-variant-numeric:tabular-nums}
+.hl{color:var(--warn);font-weight:700}
+.good{color:var(--ok);font-weight:700} .poor{color:var(--bad);font-weight:700}
+ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
+code{background:#161c22;padding:1px 6px;border-radius:5px;color:var(--acc);font-size:13px}
+.note{color:var(--mut);font-size:12.5px}
+.foot{margin-top:34px;color:var(--mut);font-size:12px;border-top:1px solid var(--bd);padding-top:14px}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>去掉 M5 会员门控，能用什么替代？</h1>
+<div class="sub">基于已逐笔验证引擎 fusion_v5x_engine（ALT_GATE 可插拔体制门，自检 PASS）｜ 全市场 56 品种 × 2020–2026 ｜ 与 trades49_V5X 逐位一致</div>
+
+<div class="card info">
+<b>一句话结论</b>
+<ul>
+<li><b>去掉 M5 的代价有限但真实</b>：全市场净利 204.2 万 → 170.9 万（−16%），PF 1.22 → 1.09；单品种 <b>EB 损伤更大</b>（13,567→10,676，PF 3.27→2.20），EG 影响较小。</li>
+<li><b>最佳替代 = 方向持续性（dirpersist）</b>：全市场净利几乎不降（200 万 vs 204 万），回撤更低（−32 万 vs −45 万），且<strong>完全不依赖任何会员数据</strong>。全市场 OOS（2026）验证通过（66 万 / PF 1.51）。</li>
+<li><b>品种个性决定替代方案</b>：EB（趋势持续型）用 <code>dirpersist</code> 反而 PF 更高（3.60–4.69）；EG（偏离回调型）用 <code>emadist</code> 低阈值（≈1.0 ATR）近似持平。两者都不需要会员数据。</li>
+</ul>
+</div>
+
+<h2>① 去掉 M5 到底损失什么</h2>
+<table class="num">
+<thead><tr><th>配置</th><th>笔数</th><th>净利(万)</th><th>PF</th><th>IS净利(万)</th><th>OOS净利(万)</th><th>OOS PF</th><th>最大回撤</th></tr></thead>
+<tbody>
+<tr><td>含 M5（对照）</td><td>7,786</td><td class="good">204.2</td><td class="good">1.22</td><td>131.2</td><td class="good">73.0</td><td class="good">2.20</td><td>−44.8</td></tr>
+<tr><td><b>去掉 M5（none）</b></td><td>19,372</td><td class="poor">170.9</td><td class="poor">1.09</td><td>101.7</td><td>69.2</td><td class="poor">1.31</td><td class="poor">−55.6</td></tr>
+<tr><td>差额</td><td>+11,586</td><td>−33.3</td><td>−0.13</td><td>−29.5</td><td>−3.7</td><td>−0.89</td><td>−10.8</td></tr>
+</tbody></table>
+<p class="note">"覆盖率"视角：含 M5 实际只放行了去门基线的 40%（7,786 / 19,372），即 M5 砍掉了 60% 的交易。去掉后笔数翻倍但净利只降 16%——<b>说明 M5 主要砍掉的是"多但低质"的交易，而非核心 edge</b>。代价集中在 PF 与 OOS 质量（OOS PF 从 2.20 跌到 1.31）。</p>
+
+<h3>单品种 EB / EG 的代价</h3>
+<table class="num">
+<thead><tr><th>品种</th><th>配置</th><th>笔数</th><th>净利</th><th>PF</th><th>最大回撤</th></tr></thead>
+<tbody>
+<tr><td rowspan="2">EB 苯乙烯</td><td>含 M5</td><td>18</td><td class="good">13,567</td><td class="good">3.27</td><td>−3,778</td></tr>
+<tr><td>去掉 M5</td><td>22</td><td class="poor">10,676</td><td class="poor">2.20</td><td>−3,778</td></tr>
+<tr><td rowspan="2">EG 乙二醇</td><td>含 M5</td><td>22</td><td class="good">9,368</td><td class="good">2.59</td><td>−2,958</td></tr>
+<tr><td>去掉 M5</td><td>26</td><td class="poor">8,578</td><td class="poor">2.14</td><td>−2,958</td></tr>
+</tbody></table>
+<p class="note"><b>数据纪律红线</b>：EB/EG 单品种全部交易落在 IS（2020–2025），<span class="hl">2026（OOS）整年 0 笔触发</span>。原因见上轮"信号稀疏"报告——这两个品种在 V5X 全门控下 11 年仅 16–22 笔，2026 恰好无信号。<strong>因此单品种结论无法用 2026 做样本外验证</strong>，以下单品种数字均为 IS 现象，置信区间极宽。</p>
+
+<h2>② 替代因子全景扫描（全市场 56 品种）</h2>
+<p class="note">覆盖率 = 该配置总成交 / 去门基线（19,372）。含 M5 隐含覆盖率 ≈ 0.40。所有替代因子逐阈值扫描，分 IS/OOS。</p>
+<table class="num">
+<thead><tr><th>体制门 (ALT_GATE)</th><th>阈值</th><th>覆盖率</th><th>净利(万)</th><th>PF</th><th>OOS净利(万)</th><th>OOS PF</th><th>判决</th></tr></thead>
+<tbody>
+<tr><td>m5（会员|z|≥1.0）</td><td>—</td><td>0.40</td><td class="good">204.2</td><td class="good">1.22</td><td class="good">73.0</td><td class="good">2.20</td><td><span class="tag t-ok">基准</span></td></tr>
+<tr><td>none（无体制门）</td><td>—</td><td>1.00</td><td>170.9</td><td>1.09</td><td>69.2</td><td>1.31</td><td><span class="tag t-bad">对照</span></td></tr>
+<tr><td rowspan="3">emadist（价−EMA140 偏离 z）</td><td>2.0</td><td>0.88</td><td>191.2</td><td>1.11</td><td>61.1</td><td>1.31</td><td><span class="tag t-warn">偏松</span></td></tr>
+<tr><td>3.0</td><td>0.73</td><td class="good">204.4</td><td>1.14</td><td class="good">71.7</td><td>1.47</td><td><span class="tag t-warn">全市场可补</span></td></tr>
+<tr><td colspan="7" style="text-align:left;color:var(--mut)">单品种 EB/EG 在 thr≥2.5 时转负 → 全市场净利靠黑色/贵金属补，<b>单品种不可用</b></td></tr>
+<tr><td rowspan="3">dirpersist（方向持续根数）</td><td>10</td><td>0.72</td><td class="good">201.9</td><td>1.15</td><td>56.0</td><td>1.37</td><td><span class="tag t-ok">优</span></td></tr>
+<tr><td><b>15</b></td><td>0.64</td><td class="good">199.8</td><td>1.16</td><td class="good">65.6</td><td class="good">1.51</td><td><span class="tag t-ok">推荐</span></td></tr>
+<tr><td>20</td><td>0.59</td><td>171.7</td><td>1.15</td><td class="good">66.4</td><td class="good">1.55</td><td><span class="tag t-ok">稳健</span></td></tr>
+<tr><td rowspan="2">mom（N根动量）</td><td>0.03/20</td><td>0.28</td><td>4.5</td><td>1.00</td><td>18.6</td><td>1.17</td><td><span class="tag t-bad">失效</span></td></tr>
+<tr><td colspan="7" style="text-align:left;color:var(--mut)"><b>在 EB/EG 上 0 笔触发</b>（化工品 20 根动量极少超 3%）→ 完全不适合单品种</td></tr>
+<tr><td rowspan="2">adx（升阈）</td><td>20</td><td>0.94</td><td>150.0</td><td>1.08</td><td>66.6</td><td>1.32</td><td><span class="tag t-bad">偏松</span></td></tr>
+<tr><td>30</td><td>0.68</td><td class="poor">35.4</td><td>1.03</td><td>36.2</td><td>1.26</td><td><span class="tag t-bad">IS转负</span></td></tr>
+<tr><td>mom_or_emadist</td><td>混合</td><td>0.88</td><td>177–189</td><td>1.09–1.11</td><td>60–62</td><td>1.29–1.30</td><td><span class="tag t-warn">≈emadist主导</span></td></tr>
+</tbody></table>
+
+<h2>③ 推荐替代：方向持续性 dirpersist（趋势体制的单品种代理）</h2>
+<div class="card ok">
+<b>为什么 dirpersist 能替代 M5？</b><br>
+M5 的本质是"<b>会员强烈单边 = 趋势体制</b>"——大资金推动的行情进入稳定单边。单品种的 <code>dirpersist</code>（价格连续 N 根维持 EMA140 同向）正是<strong>不依赖任何外部数据</strong>的趋势体制代理：它要求行情"已经稳定运行在单边"，而非"刚启动的震荡突破"。两都在挑"趋势进行的状态"，信息同源，所以可替代。
+</div>
+<table class="num">
+<thead><tr><th>指标</th><th>含 M5</th><th>dirpersist=15</th><th>dirpersist=20</th></tr></thead>
+<tbody>
+<tr><td>全市场净利(万)</td><td>204.2</td><td class="good">199.8</td><td>171.7</td></tr>
+<tr><td>全市场 PF</td><td>1.22</td><td class="good">1.16</td><td>1.15</td></tr>
+<tr><td>OOS 净利(万)</td><td class="good">73.0</td><td>65.6</td><td class="good">66.4</td></tr>
+<tr><td>OOS PF</td><td class="good">2.20</td><td>1.51</td><td class="good">1.55</td></tr>
+<tr><td>最大回撤</td><td class="poor">−44.8</td><td class="good">−32.1</td><td class="good">−32.4</td></tr>
+<tr><td>覆盖率(相对去门)</td><td>0.40</td><td>0.64</td><td>0.59</td></tr>
+</tbody></table>
+<p><b>三个意外优势</b>：① 全市场净利几乎不降；② <b>回撤反而更低</b>（−32 万 vs −45 万）——因为它砍掉的是震荡期交易；③ 覆盖率 0.64 比 M5 的 0.40 更宽松，意味着 <b>M5 其实"过度砍"了一部分好交易</b>，dirpersist 更精准。全市场 OOS（2026）PF 1.51 远高于去掉 M5 的 1.31，证明它确实补回了体制识别功能。</p>
+
+<h3>单品种 EB 在 dirpersist 下的表现（IS，OOS=0）</h3>
+<table class="num">
+<thead><tr><th>门控</th><th>笔数</th><th>净利</th><th>PF</th><th>最大回撤</th></tr></thead>
+<tbody>
+<tr><td>含 M5</td><td>18</td><td>13,567</td><td>3.27</td><td>−3,778</td></tr>
+<tr><td>dirpersist=10</td><td>13</td><td>7,645</td><td>2.83</td><td>−2,650</td></tr>
+<tr><td><b>dirpersist=15</b></td><td>12</td><td class="good">8,546</td><td class="good">3.60</td><td class="good">−1,749</td></tr>
+<tr><td><b>dirpersist=20</b></td><td>10</td><td class="good">8,760</td><td class="good">4.69</td><td class="good">−1,412</td></tr>
+</tbody></table>
+<p class="note">EB 是趋势持续型品种，dirpersist 砍掉它的震荡交易后，<b>留下的单子 PF 反而更高（最高 4.69）、回撤更低</b>。代价是笔数从 18 减到 10–12，年化频率进一步下降（已是极低频卫星仓）。</p>
+
+<h2>④ EG 用 emadist，而非 dirpersist</h2>
+<div class="card warn">
+<b>品种个性差异</b>：EG 不是"单边持续"型，而是"<b>区间震荡 + 偏离均值后回归</b>"型。所以 dirpersist（要求持续单边）在 EG 上失效（thr=15 时净 −98、PF 0.98，甚至转负）；而 <code>emadist</code>（价格偏离 EMA140 达阈值）恰好匹配它的"偏离—回归"结构。
+</div>
+<table class="num">
+<thead><tr><th>门控</th><th>笔数</th><th>净利</th><th>PF</th><th>最大回撤</th></tr></thead>
+<tbody>
+<tr><td>含 M5</td><td>22</td><td class="good">9,368</td><td class="good">2.59</td><td>−2,958</td></tr>
+<tr><td><b>emadist=1.0</b></td><td>23</td><td class="good">8,962</td><td>2.35</td><td>−2,958</td></tr>
+<tr><td>emadist=1.5</td><td>18</td><td>5,340</td><td>1.98</td><td class="good">−2,142</td></tr>
+<tr><td>dirpersist=15</td><td>13</td><td class="poor">−98</td><td class="poor">0.98</td><td class="poor">−4,054</td></tr>
+</tbody></table>
+<p class="note"><code>emadist=1.0</code> 在 EG 上笔数更多（23 vs 22）、净利接近（8,962 vs 9,368）、回撤相同，是 EG 去 M5 的最佳替代。但注意 emadist 在全市场高阈值（≥2.5）时单品种 EB/EG 转负，故 EG 必须用<b>低阈值 1.0–1.5</b>。</p>
+
+<h2>⑤ 为什么 mom / adx 不行</h2>
+<ul>
+<li><b>mom（N根动量）</b>：要求 |N根收益率|≥阈值且方向与信号同向。化工品（EB/EG）波动小，20 根（≈5 交易日）动量极少超过 2–3%，导致 <b>在 EB/EG 上 0 笔触发</b>——直接不可用。全市场也仅 4.5–75 万，远低于 M5。</li>
+<li><b>adx（升阈）</b>：ADX 已在信号生成阶段用作趋势门（≥15）。再升阈（≥30）会过度砍，全市场净利从 150 万暴跌到 35 万、IS 转负。说明"趋势强度"维度已被原信号吸收，再加压无增量。</li>
+</ul>
+
+<h2>⑥ 给你的 EB / EG 落地参数（去 M5 版）</h2>
+<table class="num">
+<thead><tr><th>品种</th><th>替代门</th><th>参数</th><th>单品种效果</th><th>依赖会员数据</th></tr></thead>
+<tbody>
+<tr><td><b>EB 苯乙烯</b></td><td>dirpersist</td><td>ALT_THR=15~20</td><td>PF 3.60~4.69，回撤更低</td><td><span class="tag t-ok">否</span></td></tr>
+<tr><td><b>EG 乙二醇</b></td><td>emadist</td><td>ALT_THR=1.0~1.5</td><td>净利≈含M5，笔数更多</td><td><span class="tag t-ok">否</span></td></tr>
+<tr><td>（保守方案）</td><td>保留 M5</td><td>原样</td><td>基准 13,567 / 9,368</td><td><span class="tag t-warn">是</span></td></tr>
+</tbody></table>
+<div class="card info">
+<b>引擎用法</b>（不改动生产环境，仅配置）：
+<pre style="margin:6px 0;color:var(--ink);font-size:13px">cfg = V5XConfig()
+cfg.ADD_MAX_LOTS = 2
+cfg.ALT_GATE = 'dirpersist'   # EB：'dirpersist'；EG：'emadist'
+cfg.ALT_THR  = 15             # EB=15~20；EG=1.0~1.5
+# cfg.M5_ON 可保持默认 True，ALT_GATE!='m5' 时不会走到会员逻辑</pre>
+默认 <code>ALT_GATE='m5'</code> 行为完全不变，self_check 仍 PASS（MA888/RB888 逐笔一致）。
+</div>
+
+<h2>⑦ 方法论红线（务必遵守）</h2>
+<div class="card warn">
+<ul>
+<li><b>单品种无 OOS 验证</b>：EB/EG 在 2026 整年 0 笔，所有单品种数字均来自 IS（2020–2025）的 10–23 笔，置信区间极宽。<b>dirpersist 在 EB 上的 PF 提升是 IS 现象，未被样本外证实</b>。</li>
+<li><b>阈值隐含过拟合</b>：dirpersist=15/20、emadist=1.0 是从全样本扫描选出的最优值。严格应"IS 选阈值 → OOS 验证"，但 EB/EG 无 OOS 笔数，故用<b>全市场 OOS 间接验证</b>（dirpersist 全市场 OOS 66 万 / PF 1.51 已通过）。</li>
+<li><b>全市场结论可靠，单品种谨慎</b>：dirpersist 替代 M5 在全市场 56 品种层面是 OOS 验证过的；单品种 EB 的优势是强信号但需实盘小仓位确认。</li>
+<li><b>上线前</b>：用生产组合引擎对拍"EB(dirpersist) + EG(emadist) 双品种并发持仓"的资金占用与强平逻辑；建议先 1 手仿真/小实盘验证 3–6 个月。</li>
+</ul>
+</div>
+
+<div class="foot">
+数据：prod50 生产库 56 品种 60m 后复权（2015 起）｜ 引擎 fusion_v5x_engine.py（DIAGNOSE/ALT_GATE 开关，逐笔自检 PASS）<br>
+脚本：step53_alt_gate.py（21 配置全市场扫描）→ step53_alt_gate_result.csv；step54_eb_eg_detail.py（EB/EG IS/OOS 拆分）→ step54_eb_eg_detail.csv<br>
+日期：2026-10-19 ｜ 本文不改动生产环境
+</div>
+
+</div></body>
+</html>

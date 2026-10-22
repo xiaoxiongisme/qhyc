@@ -1,0 +1,89 @@
+<svg viewBox="0 0 680 370" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度三 · 图论：转移图的社区结构就是「阴阳两族」</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">节点大小 ∝ PageRank；紫实线=显著偏好边(z>3)，绿虚线=显著回避边(z<-3)，灰细线=其余边</text>
+<rect x="90.0" y="66.0" width="520.0" height="96.0" rx="10" fill="#CFC6E6" fill-opacity="0.35"/>
+<rect x="90.0" y="214.0" width="520.0" height="96.0" rx="10" fill="#DCE8F0" fill-opacity="0.5"/>
+<text x="96.0" y="80.0" font-size="9.5" fill="#3E3480" text-anchor="start" font-weight="600">阳族（实体向上 4 态）</text>
+<text x="96.0" y="228.0" font-size="9.5" fill="#3A6A8A" text-anchor="start" font-weight="600">阴族（实体向下 4 态）</text>
+<line x1="140.0" y1="258.0" x2="270.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5355114329888518" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="258.0" x2="400.0" y2="258.0" stroke="#3E3480" stroke-width="0.8710838961673041"/>
+<line x1="140.0" y1="258.0" x2="530.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6069248921799983" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="258.0" x2="140.0" y2="110.0" stroke="#3E3480" stroke-width="1.0874318496216129"/>
+<line x1="140.0" y1="258.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6029864106111157" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="258.0" x2="400.0" y2="110.0" stroke="#3E3480" stroke-width="1.3170721783709007"/>
+<line x1="140.0" y1="258.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7484498331841485" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="140.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5460531642153555"/>
+<line x1="270.0" y1="258.0" x2="400.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6447308055593037" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="530.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5356092295236811"/>
+<line x1="270.0" y1="258.0" x2="140.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6235730670624747" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="270.0" y2="110.0" stroke="#3E3480" stroke-width="0.9565982998245851"/>
+<line x1="270.0" y1="258.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7190527594116853" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="258.0" x2="530.0" y2="110.0" stroke="#3E3480" stroke-width="1.1196464714613412"/>
+<line x1="400.0" y1="258.0" x2="270.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5462718675163372" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="258.0" x2="530.0" y2="258.0" stroke="#3E3480" stroke-width="0.8156066079473963"/>
+<line x1="400.0" y1="258.0" x2="140.0" y2="110.0" stroke="#3E3480" stroke-width="0.9738848074034988"/>
+<line x1="400.0" y1="258.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6067337744043512" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="258.0" x2="400.0" y2="110.0" stroke="#3E3480" stroke-width="1.3100418070381947"/>
+<line x1="400.0" y1="258.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7828266428542436" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="140.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.58445228850453" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="270.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5851323685139429"/>
+<line x1="530.0" y1="258.0" x2="400.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5487986821979056"/>
+<line x1="530.0" y1="258.0" x2="140.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.5973667490292975" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6995152370867161" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.746428991646076" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="258.0" x2="530.0" y2="110.0" stroke="#3E3480" stroke-width="1.183974585245323"/>
+<line x1="140.0" y1="110.0" x2="140.0" y2="258.0" stroke="#3E3480" stroke-width="1.0845556411928619"/>
+<line x1="140.0" y1="110.0" x2="270.0" y2="258.0" stroke="#3E3480" stroke-width="1.0271654710381217"/>
+<line x1="140.0" y1="110.0" x2="400.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5829074524218889" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="110.0" x2="530.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.554544376593348" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="110.0" x2="270.0" y2="110.0" stroke="#3E3480" stroke-width="1.1362937491353926"/>
+<line x1="140.0" y1="110.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.5497065275389814" stroke-dasharray="3,3"/>
+<line x1="140.0" y1="110.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7867295112744808" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="140.0" y2="258.0" stroke="#3E3480" stroke-width="1.024367109568535"/>
+<line x1="270.0" y1="110.0" x2="270.0" y2="258.0" stroke="#3E3480" stroke-width="1.0598937565408613"/>
+<line x1="270.0" y1="110.0" x2="400.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5858213997112085" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="530.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5724893027938586" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.5541338243671096" stroke-dasharray="3,3"/>
+<line x1="270.0" y1="110.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.8209453283346801" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="140.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.5946861939381168" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="270.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6224645570657582" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="400.0" y2="258.0" stroke="#3E3480" stroke-width="0.8680621407415212"/>
+<line x1="400.0" y1="110.0" x2="530.0" y2="258.0" stroke="#3E3480" stroke-width="0.7903581170465588"/>
+<line x1="400.0" y1="110.0" x2="140.0" y2="110.0" stroke="#3E3480" stroke-width="0.9040166707641157"/>
+<line x1="400.0" y1="110.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.661912455074398" stroke-dasharray="3,3"/>
+<line x1="400.0" y1="110.0" x2="530.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.8165010126552641" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="140.0" y2="258.0" stroke="#2E7D4F" stroke-width="0.6352509191261587" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="270.0" y2="258.0" stroke="#C9C7BD" stroke-width="0.5847550077326987"/>
+<line x1="530.0" y1="110.0" x2="400.0" y2="258.0" stroke="#3E3480" stroke-width="0.8248224257522018"/>
+<line x1="530.0" y1="110.0" x2="530.0" y2="258.0" stroke="#3E3480" stroke-width="0.8119259513071502"/>
+<line x1="530.0" y1="110.0" x2="140.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.6305835177759462" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="270.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7229980645101544" stroke-dasharray="3,3"/>
+<line x1="530.0" y1="110.0" x2="400.0" y2="110.0" stroke="#2E7D4F" stroke-width="0.7382597260679922" stroke-dasharray="3,3"/>
+<circle cx="140.0" cy="258.0" r="24.9" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="140.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">离☲</text>
+<text x="140.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000000</text>
+<text x="140.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.099</text>
+<circle cx="270.0" cy="258.0" r="26.4" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="270.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">艮☶</text>
+<text x="270.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000001</text>
+<text x="270.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.115</text>
+<circle cx="400.0" cy="258.0" r="25.0" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="400.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">震☳</text>
+<text x="400.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000100</text>
+<text x="400.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.100</text>
+<circle cx="530.0" cy="258.0" r="23.8" fill="#5E84A8" stroke="#FFFFFF" stroke-width="1.6"/><text x="530.0" y="256.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">坤☷</text>
+<text x="530.0" y="269.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">000101</text>
+<text x="530.0" y="282.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.087</text>
+<circle cx="140.0" cy="110.0" r="25.2" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="140.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">乾☰</text>
+<text x="140.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010000</text>
+<text x="140.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.102</text>
+<circle cx="270.0" cy="110.0" r="28.8" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="270.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">巽☴</text>
+<text x="270.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010001</text>
+<text x="270.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.143</text>
+<circle cx="400.0" cy="110.0" r="30.3" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="400.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">兑☱</text>
+<text x="400.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010100</text>
+<text x="400.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.159</text>
+<circle cx="530.0" cy="110.0" r="33.5" fill="#6E5FB8" stroke="#FFFFFF" stroke-width="1.6"/><text x="530.0" y="108.0" font-size="11" fill="#FFFFFF" text-anchor="middle" font-weight="600">坎☵</text>
+<text x="530.0" y="121.0" font-size="7.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">010101</text>
+<text x="530.0" y="134.0" font-size="8" fill="#888780" text-anchor="middle" font-weight="400">PR=0.195</text>
+<text x="40.0" y="330.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">64 条边中 59 条显著（偏好 25 / 回避 34）　强连通=是（任意态可达任意态）</text>
+<text x="40.0" y="346.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">贪心模块度社区 = [离艮震坤 | 乾巽兑坎]，Q=0.093　加权平均路径 = 1.96 bit</text>
+<text x="40.0" y="362.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">距离矩阵的「两家族」在图拓扑中独立复现；EG 社区划分逐位相同</text>
+</svg>

@@ -1,0 +1,87 @@
+<svg viewBox="0 0 680 340" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">协方差矩阵 Σ（标准化后的 5×5 相关矩阵）— MA</text>
+<text x="40.0" y="46.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">矩阵的谱决定“一根K线实际是几维物体”；条件数/谱熵/参与率是三个刻度</text>
+<text x="154.0" y="66.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">涨跌幅</text>
+<text x="206.0" y="66.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">振幅</text>
+<text x="258.0" y="66.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">CLV</text>
+<text x="310.0" y="66.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">上影</text>
+<text x="362.0" y="66.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">下影</text>
+<text x="120.0" y="104.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">涨跌幅</text>
+<rect x="128" y="74" width="50" height="50" rx="4" fill="#3E3480"/>
+<text x="153.0" y="104.0" font-size="10" fill="#FFFFFF" text-anchor="middle" font-weight="400">1</text>
+<rect x="180" y="74" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.00"/>
+<text x="205.0" y="104.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.00</text>
+<rect x="232" y="74" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.69"/>
+<text x="257.0" y="104.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">+0.63</text>
+<rect x="284" y="74" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.04"/>
+<text x="309.0" y="104.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.03</text>
+<rect x="336" y="74" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.04"/>
+<text x="361.0" y="104.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.04</text>
+<text x="120.0" y="156.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">振幅</text>
+<rect x="128" y="126" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.00"/>
+<text x="153.0" y="156.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.00</text>
+<rect x="180" y="126" width="50" height="50" rx="4" fill="#3E3480"/>
+<text x="205.0" y="156.0" font-size="10" fill="#FFFFFF" text-anchor="middle" font-weight="400">1</text>
+<rect x="232" y="126" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.01"/>
+<text x="257.0" y="156.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.01</text>
+<rect x="284" y="126" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.07"/>
+<text x="309.0" y="156.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.07</text>
+<rect x="336" y="126" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.06"/>
+<text x="361.0" y="156.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.05</text>
+<text x="120.0" y="208.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">CLV</text>
+<rect x="128" y="178" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.69"/>
+<text x="153.0" y="208.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">+0.63</text>
+<rect x="180" y="178" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.01"/>
+<text x="205.0" y="208.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.01</text>
+<rect x="232" y="178" width="50" height="50" rx="4" fill="#3E3480"/>
+<text x="257.0" y="208.0" font-size="10" fill="#FFFFFF" text-anchor="middle" font-weight="400">1</text>
+<rect x="284" y="178" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.51"/>
+<text x="309.0" y="208.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.46</text>
+<rect x="336" y="178" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.51"/>
+<text x="361.0" y="208.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.46</text>
+<text x="120.0" y="260.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">上影</text>
+<rect x="128" y="230" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.04"/>
+<text x="153.0" y="260.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.03</text>
+<rect x="180" y="230" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.07"/>
+<text x="205.0" y="260.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.07</text>
+<rect x="232" y="230" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.51"/>
+<text x="257.0" y="260.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.46</text>
+<rect x="284" y="230" width="50" height="50" rx="4" fill="#3E3480"/>
+<text x="309.0" y="260.0" font-size="10" fill="#FFFFFF" text-anchor="middle" font-weight="400">1</text>
+<rect x="336" y="230" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.27"/>
+<text x="361.0" y="260.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.25</text>
+<text x="120.0" y="312.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">下影</text>
+<rect x="128" y="282" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.04"/>
+<text x="153.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.04</text>
+<rect x="180" y="282" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.06"/>
+<text x="205.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.05</text>
+<rect x="232" y="282" width="50" height="50" rx="4" fill="#C4372E" fill-opacity="0.51"/>
+<text x="257.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.46</text>
+<rect x="284" y="282" width="50" height="50" rx="4" fill="#2E7D4F" fill-opacity="0.27"/>
+<text x="309.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.25</text>
+<rect x="336" y="282" width="50" height="50" rx="4" fill="#3E3480"/>
+<text x="361.0" y="312.0" font-size="10" fill="#FFFFFF" text-anchor="middle" font-weight="400">1</text>
+<text x="420.0" y="74.0" font-size="11.5" fill="#26215C" text-anchor="start" font-weight="700">特征值谱</text>
+<text x="420.0" y="102.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">λ1</text>
+<rect x="454" y="92" width="176" height="14" rx="3" fill="#3E3480"/>
+<text x="636.3" y="103.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">1.96</text>
+<text x="420.0" y="126.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">λ2</text>
+<rect x="454" y="116" width="105" height="14" rx="3" fill="#A397D2"/>
+<text x="565.1" y="127.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">1.17</text>
+<text x="420.0" y="150.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">λ3</text>
+<rect x="454" y="140" width="92" height="14" rx="3" fill="#A397D2"/>
+<text x="552.4" y="151.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">1.03</text>
+<text x="420.0" y="174.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">λ4</text>
+<rect x="454" y="164" width="65" height="14" rx="3" fill="#CFC6E6"/>
+<text x="525.1" y="175.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">0.72</text>
+<text x="420.0" y="198.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">λ5</text>
+<rect x="454" y="188" width="11" height="14" rx="3" fill="#F6F4EE"/>
+<text x="471.2" y="199.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">0.12</text>
+<line x1="454" y1="212" x2="640" y2="212" stroke="#D3D1C7"/>
+<text x="420.0" y="232.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="600">条件数 = 15.8</text>
+<text x="420.0" y="250.0" font-size="10" fill="#5F5E5A" text-anchor="start" font-weight="400">谱熵 = 2.02 bit（上限2.32）</text>
+<text x="420.0" y="266.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">参与率（有效维度）= 3.68</text>
+<text x="420.0" y="288.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">解读：5个坐标没有严格共线，</text>
+<text x="420.0" y="302.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">但有效维度只有 3.7——真正</text>
+<text x="420.0" y="316.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">“活着”的主轴是前 3 个</text>
+</svg>

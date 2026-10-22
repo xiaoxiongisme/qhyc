@@ -1,0 +1,130 @@
+<svg viewBox="0 0 680 380" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">字段互信息矩阵（比特）— MA</text>
+<text x="40.0" y="46.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">同一根K线内部：哪些字段在说同一件事（对角=各自熵）</text>
+<text x="154.0" y="58.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">实体3态</text>
+<text x="198.0" y="58.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">上影</text>
+<text x="242.0" y="58.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">下影</text>
+<text x="286.0" y="58.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">CLV8</text>
+<text x="330.0" y="58.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">涨跌幅5档</text>
+<text x="374.0" y="58.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">振幅5档</text>
+<text x="124.0" y="92.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">实体3态</text>
+<rect x="132" y="66" width="42" height="42" rx="4" fill="#3E3480"/>
+<text x="153.0" y="92.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">1.55</text>
+<rect x="176" y="66" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="197.0" y="92.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.05</text>
+<rect x="220" y="66" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="241.0" y="92.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.05</text>
+<rect x="264" y="66" width="42" height="42" rx="4" fill="#CFC6E6"/>
+<text x="285.0" y="92.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.55</text>
+<rect x="308" y="66" width="42" height="42" rx="4" fill="#6E5FB8"/>
+<text x="329.0" y="92.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">1.14</text>
+<rect x="352" y="66" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="373.0" y="92.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.09</text>
+<text x="124.0" y="136.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">上影</text>
+<rect x="132" y="110" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="153.0" y="136.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.05</text>
+<rect x="176" y="110" width="42" height="42" rx="4" fill="#A397D2"/>
+<text x="197.0" y="136.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">0.99</text>
+<rect x="220" y="110" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="241.0" y="136.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.00</text>
+<rect x="264" y="110" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="285.0" y="136.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.35</text>
+<rect x="308" y="110" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="329.0" y="136.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.03</text>
+<rect x="352" y="110" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="373.0" y="136.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.04</text>
+<text x="124.0" y="180.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">下影</text>
+<rect x="132" y="154" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="153.0" y="180.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.05</text>
+<rect x="176" y="154" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="197.0" y="180.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.00</text>
+<rect x="220" y="154" width="42" height="42" rx="4" fill="#A397D2"/>
+<text x="241.0" y="180.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">0.99</text>
+<rect x="264" y="154" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="285.0" y="180.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.36</text>
+<rect x="308" y="154" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="329.0" y="180.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.03</text>
+<rect x="352" y="154" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="373.0" y="180.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.05</text>
+<text x="124.0" y="224.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">CLV8</text>
+<rect x="132" y="198" width="42" height="42" rx="4" fill="#CFC6E6"/>
+<text x="153.0" y="224.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.55</text>
+<rect x="176" y="198" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="197.0" y="224.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.35</text>
+<rect x="220" y="198" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="241.0" y="224.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.36</text>
+<rect x="264" y="198" width="42" height="42" rx="4" fill="#3E3480"/>
+<text x="285.0" y="224.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">2.57</text>
+<rect x="308" y="198" width="42" height="42" rx="4" fill="#CFC6E6"/>
+<text x="329.0" y="224.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.59</text>
+<rect x="352" y="198" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="373.0" y="224.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.43</text>
+<text x="124.0" y="268.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">涨跌幅5档</text>
+<rect x="132" y="242" width="42" height="42" rx="4" fill="#6E5FB8"/>
+<text x="153.0" y="268.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">1.14</text>
+<rect x="176" y="242" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="197.0" y="268.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.03</text>
+<rect x="220" y="242" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="241.0" y="268.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.03</text>
+<rect x="264" y="242" width="42" height="42" rx="4" fill="#CFC6E6"/>
+<text x="285.0" y="268.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.59</text>
+<rect x="308" y="242" width="42" height="42" rx="4" fill="#3E3480"/>
+<text x="329.0" y="268.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">1.90</text>
+<rect x="352" y="242" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="373.0" y="268.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.25</text>
+<text x="124.0" y="312.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">振幅5档</text>
+<rect x="132" y="286" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="153.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.09</text>
+<rect x="176" y="286" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="197.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.04</text>
+<rect x="220" y="286" width="42" height="42" rx="4" fill="#F6F4EE"/>
+<text x="241.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.05</text>
+<rect x="264" y="286" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="285.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.43</text>
+<rect x="308" y="286" width="42" height="42" rx="4" fill="#EAE6F4"/>
+<text x="329.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">0.25</text>
+<rect x="352" y="286" width="42" height="42" rx="4" fill="#3E3480"/>
+<text x="373.0" y="312.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">2.32</text>
+<text x="420.0" y="66.0" font-size="11.5" fill="#26215C" text-anchor="start" font-weight="700">对下一根的预测性互信息（比特）</text>
+<text x="420.0" y="92.0" font-size="9.5" fill="#888780" text-anchor="start" font-weight="400">字段</text>
+<text x="570.0" y="92.0" font-size="9.5" fill="#888780" text-anchor="start" font-weight="400">→下一根涨跌</text>
+<text x="652.0" y="92.0" font-size="9.5" fill="#888780" text-anchor="start" font-weight="400">→下一根振幅</text>
+<text x="420.0" y="116.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="400">实体3态</text>
+<rect x="516" y="105" width="14.1" height="12" rx="2" fill="#C4372E" fill-opacity="0.75"/>
+<rect x="516" y="120" width="10.7" height="12" rx="2" fill="#5C4FA1" fill-opacity="0.75"/>
+<text x="538.1" y="115.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.016</text>
+<text x="534.7" y="130.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.012</text>
+<text x="420.0" y="158.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="400">上影</text>
+<rect x="516" y="147" width="4.4" height="12" rx="2" fill="#C4372E" fill-opacity="0.75"/>
+<rect x="516" y="162" width="7.9" height="12" rx="2" fill="#5C4FA1" fill-opacity="0.75"/>
+<text x="528.4" y="157.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.005</text>
+<text x="531.9" y="172.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.009</text>
+<text x="420.0" y="200.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="400">下影</text>
+<rect x="516" y="189" width="5.5" height="12" rx="2" fill="#C4372E" fill-opacity="0.75"/>
+<rect x="516" y="204" width="9.2" height="12" rx="2" fill="#5C4FA1" fill-opacity="0.75"/>
+<text x="529.5" y="199.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.006</text>
+<text x="533.2" y="214.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.010</text>
+<text x="420.0" y="242.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="400">CLV8</text>
+<rect x="516" y="231" width="32.9" height="12" rx="2" fill="#C4372E" fill-opacity="0.75"/>
+<rect x="516" y="246" width="43.6" height="12" rx="2" fill="#5C4FA1" fill-opacity="0.75"/>
+<text x="556.9" y="241.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.037</text>
+<text x="567.6" y="256.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.048</text>
+<text x="420.0" y="284.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="400">涨跌幅5档</text>
+<rect x="516" y="273" width="17.1" height="12" rx="2" fill="#C4372E" fill-opacity="0.75"/>
+<rect x="516" y="288" width="36.1" height="12" rx="2" fill="#5C4FA1" fill-opacity="0.75"/>
+<text x="541.1" y="283.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.019</text>
+<text x="560.1" y="298.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.040</text>
+<text x="420.0" y="326.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="400">振幅5档</text>
+<rect x="516" y="315" width="41.2" height="12" rx="2" fill="#C4372E" fill-opacity="0.75"/>
+<rect x="516" y="330" width="138.6" height="12" rx="2" fill="#5C4FA1" fill-opacity="0.75"/>
+<text x="565.2" y="325.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.046</text>
+<text x="662.6" y="340.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.154</text>
+<text x="420.0" y="368.0" font-size="10" fill="#5C4FA1" text-anchor="start" font-weight="600">形态8态</text>
+<rect x="516" y="357" width="28.0" height="12" rx="2" fill="#C4372E" fill-opacity="0.75"/>
+<rect x="516" y="372" width="24.9" height="12" rx="2" fill="#5C4FA1" fill-opacity="0.75"/>
+<text x="552.0" y="367.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.031</text>
+<text x="548.9" y="382.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">0.028</text>
+<text x="420.0" y="410.0" font-size="9.5" fill="#888780" text-anchor="start" font-weight="400">红=预测方向  紫=预测幅度</text>
+<text x="420.0" y="428.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">“当前振幅5档”预测下一根振幅（0.154）</text>
+<text x="420.0" y="442.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">是形态8态（0.028）的 5.5 倍</text>
+</svg>

@@ -1,0 +1,347 @@
+[
+ {
+  "ts": "2026-10-22T22:18:31",
+  "version_before": "V5X.1",
+  "drift": {
+   "trigger": false,
+   "mode": "monitor-only",
+   "reason": "未提供实盘成交（live_trades），仅做监控，不触发重扫"
+  },
+  "candidate_params": {
+   "EMA_DIR": 140,
+   "BK_N": 10,
+   "REGIME_P2_AUTO": false,
+   "TRAIL_ATR": 3.0,
+   "COOLDOWN": 7,
+   "BE_R": 1.0,
+   "M5_Z_THR": 1.0,
+   "SL_ATR": 1.5,
+   "ATR_N": 14,
+   "ADD_THR": 1.5,
+   "ADD_MAX_LOTS": 2,
+   "REGIME_POS_SCALE": false,
+   "MA_N": 20,
+   "W_PIVOT": 60,
+   "ALT_THR": 1.0,
+   "ALT_N": 20,
+   "FIB_TOL": 0.5,
+   "ADX_MIN": 15.0,
+   "ALT_GATE": "m5"
+  },
+  "guard": {
+   "overall_pass": true,
+   "gates": {
+    "selfcheck": {
+     "pass": true,
+     "detail": [
+      {
+       "sym": "MA888",
+       "n_mine": 17,
+       "n_ref": 17,
+       "net_mine": 1906.638,
+       "net_ref": 1906.638,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      },
+      {
+       "sym": "RB888",
+       "n_mine": 335,
+       "n_ref": 335,
+       "net_mine": 27206.182999999997,
+       "net_ref": 27206.182999999997,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      }
+     ]
+    },
+    "oos": {
+     "pass": true,
+     "problems": [],
+     "cur_mar": 7.504651912331466,
+     "cand_mar": 7.504651912331466
+    },
+    "fingerprint": {
+     "pass": true,
+     "problems": []
+    },
+    "no_lookahead": {
+     "pass": true,
+     "problems": [],
+     "warnings": []
+    }
+   }
+  },
+  "decision": "PROPOSED (dry-run)",
+  "overall_pass": true,
+  "version": "V5X.1",
+  "action": "proposed"
+ },
+ {
+  "ts": "2026-10-22T22:18:46",
+  "version_before": "V5X.1",
+  "drift": {
+   "trigger": false,
+   "mode": "monitor-only",
+   "reason": "未提供实盘成交（live_trades），仅做监控，不触发重扫"
+  },
+  "candidate_params": {
+   "ADD_MAX_LOTS": 2,
+   "EMA_DIR": 140,
+   "W_PIVOT": 60,
+   "BE_R": 1.0,
+   "ATR_N": 14,
+   "TRAIL_ATR": 3.0,
+   "MA_N": 20,
+   "ALT_N": 20,
+   "ADX_MIN": 15.0,
+   "BK_N": 10,
+   "REGIME_POS_SCALE": false,
+   "FIB_TOL": 0.5,
+   "M5_Z_THR": 1.0,
+   "SL_ATR": 1.5,
+   "ALT_THR": 1.0,
+   "ADD_THR": 1.5,
+   "ALT_GATE": "m5",
+   "COOLDOWN": 7,
+   "REGIME_P2_AUTO": false,
+   "FOO_BAR": 1.0
+  },
+  "guard": {
+   "overall_pass": false,
+   "gates": {
+    "selfcheck": {
+     "pass": true,
+     "detail": [
+      {
+       "sym": "MA888",
+       "n_mine": 17,
+       "n_ref": 17,
+       "net_mine": 1906.638,
+       "net_ref": 1906.638,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      },
+      {
+       "sym": "RB888",
+       "n_mine": 335,
+       "n_ref": 335,
+       "net_mine": 27206.182999999997,
+       "net_ref": 27206.182999999997,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      }
+     ]
+    },
+    "oos": {
+     "pass": true,
+     "problems": [],
+     "cur_mar": 7.504651912331466,
+     "cand_mar": 7.504651912331466
+    },
+    "fingerprint": {
+     "pass": false,
+     "problems": [
+      "参数已变但 metrics 与基线逐位相同 → 疑似数据退化（全 NaN 等）指纹"
+     ]
+    },
+    "no_lookahead": {
+     "pass": true,
+     "problems": [
+      "参数 FOO_BAR 不在安全白名单（可能引入前视/未审计逻辑）"
+     ],
+     "warnings": []
+    }
+   }
+  },
+  "decision": "REJECTED (guard fail)",
+  "overall_pass": false,
+  "version": "V5X.1",
+  "action": "rejected"
+ },
+ {
+  "ts": "2026-10-22T22:27:32",
+  "version_before": "V5X.1",
+  "drift": {
+   "trigger": false,
+   "mode": "monitor-only",
+   "reason": "未提供实盘成交（live_trades），仅做监控，不触发重扫"
+  },
+  "candidate_params": {
+   "W_PIVOT": 60,
+   "REGIME_POS_SCALE": false,
+   "MA_N": 20,
+   "BE_R": 1.0,
+   "ALT_THR": 1.0,
+   "ALT_N": 20,
+   "BK_N": 10,
+   "ALT_GATE": "m5",
+   "REGIME_P2_AUTO": false,
+   "ADD_MAX_LOTS": 2,
+   "TRAIL_ATR": 3.0,
+   "SL_ATR": 1.5,
+   "EMA_DIR": 140,
+   "ADD_THR": 1.5,
+   "FIB_TOL": 0.5,
+   "COOLDOWN": 7,
+   "M5_Z_THR": 1.0,
+   "ADX_MIN": 15.0,
+   "ATR_N": 14
+  },
+  "guard": null,
+  "decision": "ALREADY-CURRENT (no-op)",
+  "version": "V5X.1",
+  "action": "noop-same"
+ },
+ {
+  "ts": "2026-10-22T22:54:24",
+  "version_before": "V5X.1",
+  "drift": {
+   "trigger": false,
+   "mode": "monitor-only",
+   "reason": "未提供实盘成交（live_trades），仅做监控，不触发重扫"
+  },
+  "candidate_params": {
+   "SL_ATR": 1.75,
+   "TRAIL_ATR": 2.0,
+   "BE_R": 1.0,
+   "COOLDOWN": 7,
+   "ADD_MAX_LOTS": 2,
+   "ADD_THR": 1.5
+  },
+  "guard": {
+   "overall_pass": true,
+   "gates": {
+    "selfcheck": {
+     "pass": true,
+     "detail": [
+      {
+       "sym": "MA888",
+       "n_mine": 17,
+       "n_ref": 17,
+       "net_mine": 1906.638,
+       "net_ref": 1906.638,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      },
+      {
+       "sym": "RB888",
+       "n_mine": 335,
+       "n_ref": 335,
+       "net_mine": 27206.182999999997,
+       "net_ref": 27206.182999999997,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      }
+     ]
+    },
+    "oos": {
+     "pass": true,
+     "problems": [],
+     "cur_mar": 7.504651912331466,
+     "cand_mar": 8.489126879688312
+    },
+    "fingerprint": {
+     "pass": true,
+     "problems": []
+    },
+    "no_lookahead": {
+     "pass": true,
+     "problems": [],
+     "warnings": []
+    }
+   }
+  },
+  "decision": "PROPOSED (dry-run)",
+  "overall_pass": true,
+  "version": "V5X.1",
+  "action": "proposed"
+ },
+ {
+  "ts": "2026-10-22T22:54:42",
+  "version_before": "V5X.1",
+  "drift": {
+   "trigger": false,
+   "mode": "monitor-only",
+   "reason": "未提供实盘成交（live_trades），仅做监控，不触发重扫"
+  },
+  "candidate_params": {
+   "SL_ATR": 1.75,
+   "TRAIL_ATR": 2.0,
+   "BE_R": 1.0,
+   "COOLDOWN": 7,
+   "ADD_MAX_LOTS": 2,
+   "ADD_THR": 1.5
+  },
+  "guard": {
+   "overall_pass": true,
+   "gates": {
+    "selfcheck": {
+     "pass": true,
+     "detail": [
+      {
+       "sym": "MA888",
+       "n_mine": 17,
+       "n_ref": 17,
+       "net_mine": 1906.638,
+       "net_ref": 1906.638,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      },
+      {
+       "sym": "RB888",
+       "n_mine": 335,
+       "n_ref": 335,
+       "net_mine": 27206.182999999997,
+       "net_ref": 27206.182999999997,
+       "max_exit_dev": 0.0,
+       "pass_": true
+      }
+     ]
+    },
+    "oos": {
+     "pass": true,
+     "problems": [],
+     "cur_mar": 7.504651912331466,
+     "cand_mar": 8.489126879688312
+    },
+    "fingerprint": {
+     "pass": true,
+     "problems": []
+    },
+    "no_lookahead": {
+     "pass": true,
+     "problems": [],
+     "warnings": []
+    }
+   }
+  },
+  "decision": "APPLIED V5X.2",
+  "overall_pass": true,
+  "version_after": "V5X.2",
+  "patch": {
+   "backup_ts": "20261022_225448",
+   "step46_counts": {
+    "SL_ATR/TRAIL_ATR/BE_R": 1,
+    "W_PIVOT/COOLDOWN": 1,
+    "ADD_MAX_LOTS/ADD_THR": 1
+   },
+   "engine_counts": {
+    "SL_ATR": 1,
+    "TRAIL_ATR": 1,
+    "BE_R": 1,
+    "COOLDOWN": 1,
+    "ADD_MAX_LOTS": 1,
+    "ADD_THR": 1
+   },
+   "self_check": "PASS",
+   "backups": {
+    "step46_prod_bt.py": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_step46_prod_bt.py",
+    "fusion_v5x_engine.py": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_fusion_v5x_engine.py",
+    "trades46_V5X.csv": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_trades46_V5X.csv",
+    "results_step46.json": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_results_step46.json"
+   }
+  },
+  "version": "V5X.2",
+  "action": "applied"
+ }
+]

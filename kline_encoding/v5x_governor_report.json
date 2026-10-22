@@ -1,0 +1,86 @@
+{
+ "ts": "2026-10-22T22:54:42",
+ "version_before": "V5X.1",
+ "drift": {
+  "trigger": false,
+  "mode": "monitor-only",
+  "reason": "未提供实盘成交（live_trades），仅做监控，不触发重扫"
+ },
+ "candidate_params": {
+  "SL_ATR": 1.75,
+  "TRAIL_ATR": 2.0,
+  "BE_R": 1.0,
+  "COOLDOWN": 7,
+  "ADD_MAX_LOTS": 2,
+  "ADD_THR": 1.5
+ },
+ "guard": {
+  "overall_pass": true,
+  "gates": {
+   "selfcheck": {
+    "pass": true,
+    "detail": [
+     {
+      "sym": "MA888",
+      "n_mine": 17,
+      "n_ref": 17,
+      "net_mine": 1906.638,
+      "net_ref": 1906.638,
+      "max_exit_dev": 0.0,
+      "pass_": true
+     },
+     {
+      "sym": "RB888",
+      "n_mine": 335,
+      "n_ref": 335,
+      "net_mine": 27206.182999999997,
+      "net_ref": 27206.182999999997,
+      "max_exit_dev": 0.0,
+      "pass_": true
+     }
+    ]
+   },
+   "oos": {
+    "pass": true,
+    "problems": [],
+    "cur_mar": 7.504651912331466,
+    "cand_mar": 8.489126879688312
+   },
+   "fingerprint": {
+    "pass": true,
+    "problems": []
+   },
+   "no_lookahead": {
+    "pass": true,
+    "problems": [],
+    "warnings": []
+   }
+  }
+ },
+ "decision": "APPLIED V5X.2",
+ "overall_pass": true,
+ "version_after": "V5X.2",
+ "patch": {
+  "backup_ts": "20261022_225448",
+  "step46_counts": {
+   "SL_ATR/TRAIL_ATR/BE_R": 1,
+   "W_PIVOT/COOLDOWN": 1,
+   "ADD_MAX_LOTS/ADD_THR": 1
+  },
+  "engine_counts": {
+   "SL_ATR": 1,
+   "TRAIL_ATR": 1,
+   "BE_R": 1,
+   "COOLDOWN": 1,
+   "ADD_MAX_LOTS": 1,
+   "ADD_THR": 1
+  },
+  "self_check": "PASS",
+  "backups": {
+   "step46_prod_bt.py": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_step46_prod_bt.py",
+   "fusion_v5x_engine.py": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_fusion_v5x_engine.py",
+   "trades46_V5X.csv": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_trades46_V5X.csv",
+   "results_step46.json": "E:\\抖音分析\\2026-10-16-19-50-44\\kline_encoding\\.bak_apply_20261022_225448_results_step46.json"
+  }
+ }
+}

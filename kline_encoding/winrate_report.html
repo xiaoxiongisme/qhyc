@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V5X 胜率结构解剖：保本胜率 21%，以及「提高胜率」的实证代价</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#fff;--ink:#1f2329;--sub:#5c6470;--line:#e3e6eb;
+        --red:#d43030;--green:#0e9f6e;--blue:#2563eb;--amber:#b45309;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif;}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 24px 80px}
+  h1{font-size:24px;margin:0 0 6px}
+  h2{font-size:19px;margin:40px 0 12px;padding-left:12px;border-left:4px solid var(--blue)}
+  .sub{color:var(--sub);font-size:13px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 22px;margin:14px 0}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin:10px 0}
+  th,td{border:1px solid var(--line);padding:6px 10px;text-align:left}
+  th{background:#eef2f7}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+  .up{color:var(--red);font-weight:600}
+  .bad{color:var(--green);font-weight:600}
+  .big{font-size:34px;font-weight:800;color:var(--blue)}
+  .formula{background:#f2f4f8;border:1px solid var(--line);border-radius:6px;padding:10px 14px;
+           font-family:Consolas,monospace;font-size:13.5px;margin:8px 0}
+  .warn{background:#fdf2f2;border-left:3px solid var(--red);padding:10px 14px;margin:10px 0;font-size:13.5px}
+  .ok{background:#f0f9f4;border-left:3px solid var(--green);padding:10px 14px;margin:10px 0;font-size:13.5px}
+  .note{background:#fffbf0;border-left:3px solid var(--amber);padding:10px 14px;margin:10px 0;font-size:13.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi .v{font-size:22px;font-weight:700}.kpi .k{font-size:12.5px;color:var(--sub)}
+  code{background:#eef1f5;padding:1px 5px;border-radius:4px;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V5X 胜率结构解剖</h1>
+<div class="sub">2026-10-18 ｜ 数据：僵尸仓修复后的干净口径（trades49_V5X.csv，7,786 笔，56 品种 2015–2026）｜ 脚本 step49_winrate.py</div>
+
+<div class="warn"><b>先报告一个重要勘误（本轮发现）：</b>step46 回测存在一个隐藏 bug——25 个品种的 60m 数据含 NaN 缺数 bar，手写 ATR 递推遇 NaN 会<b>永久污染</b>（后续值全为 NaN），导致以 NaN-ATR 进场的仓位止损价恒为 NaN、<b>永不触发</b>，形成持仓 1.4~8 年的「僵尸仓」（SC888 一笔空单从 2018 扛到 2026），共 6 笔 artifact 合计 −27.1 万，且占着仓位使这 6 个品种数年无法开新仓。已在参考引擎 <code>fusion_v5x_engine.py</code> 中修复（NaN 跳过语义 + 进场断言指标有限）。
+<b>修复后 V5X 真实水平：净利 134.0 万 → 204.2 万，MAR 2.25 → 4.54，holdout +19.2 万 → +73.0 万。</b>此前各报告中的绝对数以此为最新口径；门控采纳/否决的方向性结论不受影响（均为大边际差）。</div>
+
+<h2>一、保本胜率：20.9%</h2>
+<div class="grid">
+  <div class="kpi"><div class="v">7,786 笔</div><div class="k">总成交（固定 1 手，真实费率+滑点）</div></div>
+  <div class="kpi"><div class="v">24.35%</div><div class="k">当前胜率（net&gt;0 占比）</div></div>
+  <div class="kpi"><div class="v up">+6,073 元</div><div class="k">平均盈利单</div></div>
+  <div class="kpi"><div class="v bad">−1,608 元</div><div class="k">平均亏损单</div></div>
+  <div class="kpi"><div class="v">3.78</div><div class="k">盈亏比（均盈/均亏）</div></div>
+  <div class="kpi"><div class="v">+262 元</div><div class="k">单笔期望</div></div>
+</div>
+<div class="card">
+<div class="formula">期望 = 胜率 × 平均盈利 − (1 − 胜率) × 平均亏损 = 0
+⇒ 保本胜率 p* = 平均亏损 ÷ (平均盈利 + 平均亏损)
+            = 1,608 ÷ (6,073 + 1,608) = <b>20.9%</b></div>
+<p>当前胜率 24.35%，比保本线高 <b>3.4 个百分点</b>——这就是全部利润的来源。或者说：这个策略只需要每 100 笔多赢 3.4 笔，就能覆盖其余 75 笔的亏损还有富余。</p>
+<p>如果把保本规则（浮盈 0.5ATR 后止损抬到入场价）制造的「不输单」（|r|&lt;0.15，占 8.8%，合计约打平）也算进去，<b>不输率为 32.2%</b>——大约三笔里有一笔不亏钱。</p>
+</div>
+
+<h2>二、钱到底在哪：右尾是命脉</h2>
+<div class="card">
+<table>
+<tr><th>r 区间（r=净利/初始风险）</th><th class="n">笔数</th><th class="n">占比</th><th class="n">合计净利(元)</th><th>读法</th></tr>
+<tr><td>r &lt; −1.05（止损+加码放大）</td><td class="n">3,045</td><td class="n">39.1%</td><td class="n bad">−6,816,077</td><td>被止损扫出（2 手时亏损按 2 倍计）</td></tr>
+<tr><td>−1.05 ~ −0.5</td><td class="n">1,288</td><td class="n">16.5%</td><td class="n bad">−1,939,581</td><td>浅亏</td></tr>
+<tr><td>−0.5 ~ 0（含保本微亏）</td><td class="n">1,540</td><td class="n">19.8%</td><td class="n">−472,996</td><td>保本规则救下的单子</td></tr>
+<tr><td>0 ~ 2</td><td class="n">799</td><td class="n">10.3%</td><td class="n">+1,085,523</td><td>小赢</td></tr>
+<tr><td>2 ~ 3</td><td class="n">269</td><td class="n">3.5%</td><td class="n">+1,095,637</td><td>像样趋势</td></tr>
+<tr><td><b>r &gt; 3（趋势尾）</b></td><td class="n"><b>828</b></td><td class="n"><b>10.6%</b></td><td class="n up"><b>+9,331,106</b></td><td><b>10.6% 的单子贡献 933 万</b></td></tr>
+</table>
+<p><b>总净利只有 204 万，而 r&gt;3 的尾单贡献 933 万</b>——意味着其余 89.4% 的交易合计净亏 729 万。这个策略的本质：用大量小额亏损买「趋势彩票」，右尾是唯一兑付窗口。</p>
+<div class="note"><b>推论：</b>任何「把盈利提前落袋」的改法，都是在剪右尾补贴左尾——胜率数字变好看了，但兑付窗口被关小。下面用真实回测验证这句话。</div>
+</div>
+
+<h2>三、「提高胜率」四条路径的实证代价（56 品种全量重跑）</h2>
+<div class="card">
+<table>
+<tr><th>变体</th><th class="n">胜率</th><th class="n">盈亏比</th><th class="n">保本胜率</th><th class="n">PF</th><th class="n">净利(万)</th><th class="n">MAR</th><th class="n">holdout(万)</th><th>判决</th></tr>
+<tr><td><b>V5X 基准</b></td><td class="n">24.4%</td><td class="n">3.78</td><td class="n">20.9%</td><td class="n">1.216</td><td class="n up">204.2</td><td class="n">4.54</td><td class="n">+73.0</td><td>—</td></tr>
+<tr><td>TP1.0（赚 1R 就跑）</td><td class="n up">38.4%</td><td class="n">1.73</td><td class="n">36.6%</td><td class="n bad">1.080</td><td class="n bad">73.3</td><td class="n">2.05</td><td class="n">+14.9</td><td>❌ 胜率+14pp，净利−64%</td></tr>
+<tr><td>TP1.5</td><td class="n">29.0%</td><td class="n">2.60</td><td class="n">27.8%</td><td class="n bad">1.063</td><td class="n bad">65.0</td><td class="n">1.57</td><td class="n">+12.7</td><td>❌ 全场最差</td></tr>
+<tr><td>TP2.0</td><td class="n">25.6%</td><td class="n">3.27</td><td class="n">23.4%</td><td class="n">1.129</td><td class="n">131.8</td><td class="n">3.14</td><td class="n">+31.8</td><td>❌ 仍砍尾</td></tr>
+<tr><td>TP3.0</td><td class="n">24.7%</td><td class="n">3.75</td><td class="n">21.1%</td><td class="n">1.232</td><td class="n">225.2</td><td class="n">8.42</td><td class="n">+61.2</td><td>⚠ 见下方存疑说明</td></tr>
+<tr><td>TRAIL1.5（吊灯收紧）</td><td class="n">24.7%</td><td class="n">3.60</td><td class="n">21.7%</td><td class="n">1.182</td><td class="n">162.3</td><td class="n">3.53</td><td class="n">+60.0</td><td>❌ 胜率没动、净利−21%</td></tr>
+<tr><td>BE0.3（更早保本）</td><td class="n bad">22.5%</td><td class="n">4.15</td><td class="n">19.4%</td><td class="n">1.203</td><td class="n">186.8</td><td class="n">4.72</td><td class="n">+69.3</td><td>❌ 胜率反降（被噪声扫出）</td></tr>
+</table>
+<div class="warn"><b>TP3.0 存疑，不采纳：</b>它是唯一净利不降的止盈点（225 万/MAR 8.42），但两个危险信号：① 非单调——TP2.0 只有 131.8 万，TP3.0 跳到 225 万，甜点两侧悬崖是过拟合指纹；② holdout 反而更差（+61.2 万 &lt; 基准 +73.0 万）。若要采用，需先做按簇/按年份的拆分稳健性验证，本轮不采纳。</div>
+</div>
+
+<h2>四、结论：怎么正确地「提高胜率」</h2>
+<div class="card">
+<ol>
+<li><b>先回答数字：</b>保本胜率 <b>20.9%</b>，当前 24.35%，安全边际 3.4pp；含保本单的不输率 32.2%。</li>
+<li><b>离场端动不得。</b>四条离场路径（止盈×4 / 紧吊灯 / 早保本）全部降低期望——这策略的钱在 10.6% 的右尾单里，胜率与期望在此结构下互斥。TP1.0 把胜率抬到 38% 的代价是 PF 1.08，退回「不赚钱基线」水平。</li>
+<li><b>入场端才是提高胜率的合法通道。</b>已采纳的 M1a/M5 门控正是这个原理：基线胜率 22.1% → V5X 24.4%，同时期望上升（砍掉的是左尾单子）。若未来还要抬胜率，方向是<b>更严的入场过滤</b>（更少但更准的单子），而不是更早离场。</li>
+<li><b>心理层的正确做法：</b>把关注指标从「胜率」换成「不输率 32.2% + 单笔期望 +262 元 + PF 1.22」。连亏 8–12 笔是该分布的常态（亏损笔占 75.6%），它不是策略失效的信号；真正的失效信号是说明书 ⑦ 的停机线（滚动 60 笔 PF&lt;0.7 等）。</li>
+<li><b>遗留线索：</b>TP3.0 的 MAR 8.42 值得一次独立稳健性验证（按簇/年份拆分 + 阈值 2.5/3.0/3.5 单调性检查），通过才有资格进入候选。</li>
+</ol>
+<div class="ok"><b>附： zombie bug 修复的附带收益</b>——6 个新品种解除数年仓位封锁后，V5X 干净口径净利 204.2 万（+52%）、MAR 4.54（翻倍）、holdout +73.0 万。引擎已内置 NaN 防护与进场指标断言，同类 zombie 不会再发生。建议后续把 step46 的 26 变体按干净口径重跑一遍以刷新排行榜（方向性结论预计不变，因采纳/否决均为大边际差）。</div>
+</div>
+
+<div class="sub">配套：step49_winrate.py（变体扫描）｜results_step49.json｜trades49_*.csv（各变体逐笔明细）｜fusion_v5x_engine.py（已修复 NaN 语义，MA888/RB888 自检仍 PASS）</div>
+</div>
+</body>
+</html>

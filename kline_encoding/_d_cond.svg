@@ -1,0 +1,119 @@
+<svg viewBox="0 0 680 340" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度七 · 条件结构：综卦「貌离神合」——静态最远，动态最近</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: P(下一根振幅5档 | 当前态)，MA；右: 条件分布的 JS 距离（比特，越小越像）</text>
+<text x="40.0" y="64.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">行=当前态 → 列=下一根振幅档(低→高)</text>
+<text x="142.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档1</text>
+<text x="186.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档2</text>
+<text x="230.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档3</text>
+<text x="274.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档4</text>
+<text x="318.0" y="68.0" font-size="9" fill="#888780" text-anchor="middle" font-weight="400">档5</text>
+<text x="112.0" y="94.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">离☲ 000000</text>
+<rect x="120.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="141.0" y="94.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">26</text>
+<rect x="164.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="185.0" y="94.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">25</text>
+<rect x="208.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="94.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="273.0" y="94.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="296.0" y="76.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="317.0" y="94.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">12</text>
+<text x="112.0" y="124.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">艮☶ 000001</text>
+<rect x="120.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="141.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="164.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="185.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">18</text>
+<rect x="208.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="252.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="296.0" y="106.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="317.0" y="124.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<text x="112.0" y="154.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">震☳ 000100</text>
+<rect x="120.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="141.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<rect x="164.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="185.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="208.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="252.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="296.0" y="136.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="317.0" y="154.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<text x="112.0" y="184.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">坤☷ 000101</text>
+<rect x="120.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="141.0" y="184.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">10</text>
+<rect x="164.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="185.0" y="184.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">12</text>
+<rect x="208.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="229.0" y="184.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">18</text>
+<rect x="252.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="273.0" y="184.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">24</text>
+<rect x="296.0" y="166.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="317.0" y="184.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">36</text>
+<text x="112.0" y="214.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">乾☰ 010000</text>
+<rect x="120.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="141.0" y="214.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">28</text>
+<rect x="164.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="185.0" y="214.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">24</text>
+<rect x="208.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="214.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="273.0" y="214.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="296.0" y="196.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="317.0" y="214.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">11</text>
+<text x="112.0" y="244.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">巽☴ 010001</text>
+<rect x="120.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="141.0" y="244.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">23</text>
+<rect x="164.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="185.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="208.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="252.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<rect x="296.0" y="226.0" width="42.0" height="28.0" rx="3" fill="#CFC6E6" fill-opacity="1.0"/>
+<text x="317.0" y="244.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">15</text>
+<text x="112.0" y="274.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">兑☱ 010100</text>
+<rect x="120.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="141.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="164.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="185.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">22</text>
+<rect x="208.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">19</text>
+<rect x="296.0" y="256.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="317.0" y="274.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<text x="112.0" y="304.0" font-size="9.5" fill="#26215C" text-anchor="end" font-weight="400">坎☵ 010101</text>
+<rect x="120.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="141.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">17</text>
+<rect x="164.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="185.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">18</text>
+<rect x="208.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="229.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">20</text>
+<rect x="252.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#6E5FB8" fill-opacity="1.0"/>
+<text x="273.0" y="304.0" font-size="8.5" fill="#26215C" text-anchor="middle" font-weight="400">21</text>
+<rect x="296.0" y="286.0" width="42.0" height="28.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="317.0" y="304.0" font-size="8.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">24</text>
+<text x="40.0" y="336.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">各行集中度最高仅 36%：给定当前态，下一根振幅仍接近边缘分布（20%）</text>
+<text x="430.0" y="76.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">条件分布 JS 距离（比特）</text>
+<text x="424.0" y="112.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="600">综卦对（影线换边）</text>
+<rect x="430.0" y="100.0" width="3.0" height="16.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="438.0" y="112.0" font-size="9" fill="#26215C" text-anchor="start" font-weight="600">0.0011</text>
+<rect x="430.0" y="118.0" width="4.4" height="16.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="439.4" y="130.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">0.0017</text>
+<text x="424.0" y="168.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="600">错卦对（三爻全反）</text>
+<rect x="430.0" y="156.0" width="92.1" height="16.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="527.1" y="168.0" font-size="9" fill="#26215C" text-anchor="start" font-weight="600">0.0354</text>
+<rect x="430.0" y="174.0" width="118.0" height="16.0" rx="3" fill="#E5B8B0" fill-opacity="1.0"/>
+<text x="553.0" y="186.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">0.0454</text>
+<rect x="430.0" y="216.0" width="9.0" height="9.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="443.0" y="224.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">MA</text>
+<rect x="470.0" y="216.0" width="9.0" height="9.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="483.0" y="224.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">EG</text>
+<text x="430.0" y="248.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">综卦对条件分布几乎相同（JS 0.001–0.002），</text>
+<text x="430.0" y="264.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">比错卦对近 30 倍。</text>
+<text x="430.0" y="288.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">距离矩阵说「综卦=大变动」（3.28 > 均值2.89），</text>
+<text x="430.0" y="304.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">条件动态说「综卦=小变动」——预测问题里，</text>
+<text x="430.0" y="320.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">动态口径才是该信的那个。</text>
+</svg>

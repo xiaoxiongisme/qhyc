@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V5X 信号为什么这么少？——全市场漏斗归因</title>
+<style>
+  :root{ --bg:#fafafa; --card:#fff; --ink:#1c2430; --mut:#6b7785; --line:#e3e8ef;
+         --blue:#2f6df0; --red:#e0413e; --grn:#1f9d55; --amber:#e08a00; --vio:#7a4fd0; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 60px;}
+  h1{font-size:25px;margin:0 0 4px} h2{font-size:19px;margin:34px 0 12px;border-left:4px solid var(--blue);padding-left:10px}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 3px rgba(20,30,50,.04)}
+  .kpi{display:flex;flex-wrap:wrap;gap:14px;margin:6px 0}
+  .kpi .b{flex:1;min-width:200px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi .n{font-size:26px;font-weight:700} .kpi .l{color:var(--mut);font-size:12.5px;margin-top:2px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin-top:6px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:right}
+  th{background:#f3f6fb;font-weight:600} td:first-child,th:first-child{text-align:left}
+  .ok{color:var(--grn);font-weight:600} .bad{color:var(--red);font-weight:600} .warn{color:var(--amber);font-weight:600}
+  .bar{height:22px;border-radius:5px;background:linear-gradient(90deg,var(--blue),#5b8cf6);color:#fff;font-size:12px;line-height:22px;padding-left:8px;margin:3px 0;white-space:nowrap;overflow:hidden}
+  .b2{background:linear-gradient(90deg,#5b8cf6,#8fb0fa)} .b3{background:linear-gradient(90deg,var(--vio),#a98fe0)}
+  .b4{background:linear-gradient(90deg,var(--amber),#f0b454)} .b5{background:linear-gradient(90deg,var(--red),#ef7a78)}
+  .tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:20px;background:#eef3fb;color:var(--blue);margin:1px}
+  .tag.r{background:#fdecec;color:var(--red)} .tag.g{background:#e8f6ee;color:var(--grn)}
+  ul{margin:6px 0 6px 18px} li{margin:5px 0}
+  .note{font-size:12.5px;color:var(--mut);margin-top:8px}
+  .hl{background:#fff6e0;padding:2px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>V5X 信号为什么这么少？——全市场漏斗归因</h1>
+<div class="sub">基于已验证引擎 fusion_v5x_engine.py 的 DIAGNOSE 漏斗（全市场 56 品种真实 60m 数据回放，诊断计数与 trades49_V5X.csv 逐位吻合：m5 总和 7786 = 实际成交 7786）</div>
+
+<div class="kpi">
+  <div class="b"><div class="n">7,786</div><div class="l">全市场成交笔数 / 11年（45 个有信号品种）</div></div>
+  <div class="b"><div class="n">574 / 1</div><div class="l">单品种成交最多(M888) vs 最少(AO888)，差 500 倍</div></div>
+  <div class="b"><div class="n">17.5%</div><div class="l">全市场平均 |会员z|≥1.0 的交易日占比（M5 放行率）</div></div>
+  <div class="b"><div class="n">75.8%</div><div class="l">M5 会员门砍掉的候选比例（漏斗最大一刀）</div></div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:4px">一、全市场漏斗：从原始候选到成交，每道门砍多少</h2>
+<div class="sub">注：flip（EMA140 方向翻转）与 raw（过 P6/ADX/P4/支路确认后的候选）口径不同，仅作背景；真正漏斗自 raw 起。</div>
+<div class="bar" style="width:100%">raw 候选（过 P6尾盘/ADX门/P4化工只回踩/斐波确认）：43,157 笔</div>
+<div class="bar b2" style="width:81.5%">P2 高波日禁开仓后存活：35,127（本阶段砍 18.5%）</div>
+<div class="bar b2" style="width:81.5%">簇冲击日封禁后：35,127（本阶段砍 0% — 几乎不拦）</div>
+<div class="bar b3" style="width:74.7%">M1a MACD柱同号门后：32,239（本阶段砍 25.3%）</div>
+<div class="bar b5" style="width:24.2%">M5 会员净持仓 |z|≥1.0 后：7,786（本阶段砍 75.8% ⚠ 最大一刀）</div>
+<table>
+<tr><th>阶段</th><th>笔数</th><th>相对上阶存活</th><th>本阶段砍幅</th></tr>
+<tr><td>raw 候选</td><td>43,157</td><td>—</td><td>—</td></tr>
+<tr><td>P2 高波日</td><td>35,127</td><td>81.5%</td><td class="warn">砍 18.5%</td></tr>
+<tr><td>簇冲击日</td><td>35,127</td><td>100.0%</td><td>不砍</td></tr>
+<tr><td>M1a MACD同号</td><td>32,239</td><td>74.7%</td><td class="warn">砍 25.3%</td></tr>
+<tr><td>M5 会员门</td><td class="bad">7,786</td><td>24.2%</td><td class="bad">砍 75.8%</td></tr>
+</table>
+<div class="note">结论：全市场层面，<span class="hl">M5 会员体制门是信号稀疏的绝对主因</span>。它要求「整个板块会员持仓强烈单边」——这是低频体制状态（详见《七步推导书》波动扎堆+均值回归特性），全市场平均仅 17.5% 的交易日放行。</div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:4px">二、但单品种差异的第二刀：M1a（MACD柱同号）砍幅严重分化</h2>
+<table>
+<tr><th>品种组</th><th>raw</th><th>m1a后</th><th>成交m5</th><th>M1a砍幅</th><th>M5砍幅</th><th>会员|z|≥1 覆盖率</th><th>判决</th></tr>
+<tr><td colspan="8" style="text-align:left;background:#f3f6fb;font-weight:600">你选的 6 个候选（稀疏端）</td></tr>
+<tr><td>EB 苯乙烯</td><td>219</td><td>22</td><td class="bad">18</td><td class="bad">88%</td><td>18%</td><td>0（NaN放行）</td><td>少但 PF 3.3</td></tr>
+<tr><td>EG 乙二醇</td><td>200</td><td>26</td><td class="bad">22</td><td class="bad">87%</td><td>15%</td><td>1.4%</td><td>少但 PF 2.6</td></tr>
+<tr><td>MA 甲醇</td><td>367</td><td>36</td><td class="bad">17</td><td class="bad">90%</td><td>53%</td><td>46.8%</td><td>太稀</td></tr>
+<tr><td>SA 纯碱</td><td>231</td><td>30</td><td class="bad">17</td><td class="bad">87%</td><td>43%</td><td>54.3%</td><td>太稀</td></tr>
+<tr><td>SI 工业硅</td><td>349</td><td>221</td><td class="bad">16</td><td>25%</td><td class="bad">93%</td><td>4.1%</td><td>M5全砍+脏数据</td></tr>
+<tr><td>BR 合成橡胶</td><td>425</td><td>282</td><td class="bad">0</td><td>17%</td><td class="bad">100%</td><td>0（恒中性）</td><td>会员门全拦</td></tr>
+<tr><td colspan="8" style="text-align:left;background:#f3f6fb;font-weight:600">活跃品种（信号密集端，供对照）</td></tr>
+<tr><td>M 豆粕</td><td>1,002</td><td>574</td><td class="ok">574</td><td class="ok">28%</td><td>0%</td><td>100%</td><td>—</td></tr>
+<tr><td>AU 黄金</td><td>1,684</td><td>1,019</td><td class="ok">384</td><td class="ok">40%</td><td class="warn">62%</td><td>54.5%</td><td>—</td></tr>
+<tr><td>RB 螺纹</td><td>1,377</td><td>847</td><td class="ok">377</td><td class="ok">39%</td><td class="warn">56%</td><td>64.2%</td><td>—</td></tr>
+<tr><td>SC 原油</td><td>999</td><td>551</td><td class="ok">551</td><td class="ok">45%</td><td>0%</td><td>NaN放行</td><td>—</td></tr>
+</table>
+<div class="note">关键对比：活跃品种（黑色/贵金属）趋势性强，回踩时 MACD 柱<span class="tag g">多同号</span>，M1a 只砍 28–45%；而你选的化工小品种（MA/EB/EG）回踩常发生在 MACD 柱<span class="tag r">反向</span>（震荡/假突破），M1a 砍掉 83–90%。<br>
+另一类（SI/BR）则是<span class="tag r">会员数据缺失或恒中性</span>，直接被 M5 全砍——数据本身不支持体制判断，被策略自然排除。</div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:4px">三、"为什么少"的三层归因</h2>
+<ul>
+<li><b>① 结构性主因（全市场）= M5 会员体制门。</b>策略的 edge 绑在「板块会员强烈单边」这个低频体制状态上（均值回归+波动扎堆，见七步推导书）。会员净持仓 |z| 大部分时间贴近 0，只有约 17.5% 的交易日达到 ≥1.0。<b>信号少是「靠体制赚钱」的代价，不是 bug。</b></li>
+<li><b>② 单品种第二刀 = M1a，且分化严重。</b>黑色/贵金属趋势连贯，回踩信号 MACD 柱多同号，M1a 只筛掉 28–45%；化工小品种回踩多假突破，M1a 砍 83–90%——这其实是 M1a 在「筛质量」，砍掉的正是不该做的单子（留下来的 EB/EG 反而 PF 高达 3.3/2.6）。</li>
+<li><b>③ 第三类 = 会员数据缺失/恒中性（SI/BR）。</b>这类品种没有可用的体制信号，M5 全砍（BR 0 笔、SI 仅 16 笔且净负），被策略自然淘汰。</li>
+</ul>
+<div class="note">澄清：会员 |z| 覆盖率 与 成交数 的相关系数仅 <b>0.317</b>——覆盖率不是唯一决定。raw 基数（品种自身波动活跃度）和 M1a 砍幅同样重要。例如 M888 覆盖率 100% 但 raw 基数才 1002；AU888 覆盖率 54% 但 raw 基数 1684、且 M1a 砍幅 40%。</div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:4px">四、给你的结论与可行建议</h2>
+<ul>
+<li><span class="tag">事实</span> 你挑的 6 个品种恰巧都在信号最稀疏那一档（EB 18 / EG 22 / MA 17 / SA 17 / SI 16 / BR 0 笔），而全市场最密的是 M888(574)/SC(551)/AU(384) 等黑色+贵金属。</li>
+<li><span class="tag g">接受低频</span> EB/EG 信号少是因为门控严，留下的都是高质单（PF 3.3/2.6，见单品种报告）。这是「卫星仓」定位，年化约 2.7%、回撤 &lt;9%。<b>不要用拆门控换频率</b>——此前已验证拆 M5 后 EB 的 PF 从 3.27→1.08，拆 M1a 更差。</li>
+<li><span class="tag">若想增频</span> 唯一「合法」方向是<span class="hl">放宽 M1a</span>（如只要求「非反向」而非「同号」），但会引入假突破、降质量——须先做样本外验证再动，不建议直接上。</li>
+<li><span class="tag">正确增频法</span> 多铺同逻辑品种（V5X 全市场 ≈708 笔/年），而非单押一个。你这 6 个里只有 <b>EB / EG 值得做</b>；要凑频率应加活跃品种（但那已超出「从这 6 个选」的初衷，需你重新界定）。</li>
+</ul>
+<div class="note">边界：单品种 16–22 笔/11年 置信区间宽；M1a「质量筛」假设、M5 覆盖率与成交的弱相关，均需样本外（尤其 2026 holdout）进一步验证。本漏斗基于全周期（含 train 2020–2025 + holdout 2026）合并统计。</div>
+</div>
+
+<div class="sub" style="margin-top:18px">交付：signal_sparsity_report.html（本报告）｜ step52_funnel.py（漏斗诊断脚本，复用已验证引擎 DIAGNOSE 开关）｜ step52_funnel.csv（56 品种逐品种漏斗明细）</div>
+</div>
+</body>
+</html>

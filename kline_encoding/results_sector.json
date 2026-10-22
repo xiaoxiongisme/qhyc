@@ -1,0 +1,2114 @@
+{
+ "cotail": {
+  "MA-EG": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.40418886643395185,
+   "p_joint_train": 0.003138935659982652,
+   "mult_naive_train": 31.39256033092968,
+   "mult_slot_train": 4.1006461470623865,
+   "p_joint_holdout": 0.01982434127979925,
+   "mult_naive_holdout": 11.480308356398986,
+   "mult_slot_holdout": 25.89814430522857,
+   "mult_same_dir": 7.886878162137763,
+   "mult_opp_dir": 5.656640475907968
+  },
+  "MA-TA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.3634242879956328,
+   "p_joint_train": 0.0023225674779325475,
+   "mult_naive_train": 23.223304872969596,
+   "mult_slot_train": 2.683366896576007,
+   "p_joint_holdout": 0.017900460058552906,
+   "mult_naive_holdout": 9.823667168260261,
+   "mult_slot_holdout": 20.681208365734673,
+   "mult_same_dir": 5.031999255344653,
+   "mult_opp_dir": 3.979616128343483
+  },
+  "MA-PP": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.27472527472527475,
+   "p_joint_train": 0.002965457421297005,
+   "mult_naive_train": 29.65760088481198,
+   "mult_slot_train": 3.614524610748748,
+   "p_joint_holdout": 0.022528927924160044,
+   "mult_naive_holdout": 10.583030584564415,
+   "mult_slot_holdout": 27.459967508164546,
+   "mult_same_dir": 6.487979570221989,
+   "mult_opp_dir": 5.3599583845826375
+  },
+  "MA-L": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.30991735537190085,
+   "p_joint_train": 0.002473595591611817,
+   "mult_naive_train": 24.738480572878267,
+   "mult_slot_train": 3.7683522660879736,
+   "p_joint_holdout": 0.018179283423950927,
+   "mult_naive_holdout": 13.190898137116864,
+   "mult_slot_holdout": 27.69488436946232,
+   "mult_same_dir": 7.183373169377858,
+   "mult_opp_dir": 4.670777332573756
+  },
+  "MA-V": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.37593984962406013,
+   "p_joint_train": 0.002873616000816368,
+   "mult_naive_train": 28.762577390506767,
+   "mult_slot_train": 4.388745223887942,
+   "p_joint_holdout": 0.010483758538965566,
+   "mult_naive_holdout": 13.947934842531293,
+   "mult_slot_holdout": 16.01137563376888,
+   "mult_same_dir": 8.832668264641777,
+   "mult_opp_dir": 5.409293331321985
+  },
+  "MA-UR": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.4276622301245169,
+   "thb": 0.554128628176414,
+   "p_joint_train": 0.0023703703703703703,
+   "mult_naive_train": 23.700083850510996,
+   "mult_slot_train": 2.3587720295430805,
+   "p_joint_holdout": 0.001947089947089947,
+   "mult_naive_holdout": 19.222265459176455,
+   "mult_slot_holdout": 1.9375627385532448,
+   "mult_same_dir": 5.707761328625686,
+   "mult_opp_dir": 2.919462858297129
+  },
+  "MA-FG": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.5429020989889316,
+   "p_joint_train": 0.0019796928414715035,
+   "mult_naive_train": 19.79490837151187,
+   "mult_slot_train": 2.5321077334734623,
+   "p_joint_holdout": 0.0028439983270598075,
+   "mult_naive_holdout": 12.84021986353298,
+   "mult_slot_holdout": 3.6375896336428646,
+   "mult_same_dir": 5.802240181111177,
+   "mult_opp_dir": 3.30750740493081
+  },
+  "MA-SA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.5704971475142625,
+   "p_joint_train": 0.0019409153528241237,
+   "mult_naive_train": 19.411134508916856,
+   "mult_slot_train": 2.873959494879589,
+   "p_joint_holdout": 0.002119057577024955,
+   "mult_naive_holdout": 17.512882126932322,
+   "mult_slot_holdout": 3.1377389203635504,
+   "mult_same_dir": 6.480873058397453,
+   "mult_opp_dir": 3.598341640880767
+  },
+  "MA-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.4230118443316413,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.0025505564955169598,
+   "mult_naive_train": 25.51907959247457,
+   "mult_slot_train": 2.3345504890200317,
+   "p_joint_holdout": 0.015669873135368745,
+   "mult_naive_holdout": 11.737268790805905,
+   "mult_slot_holdout": 14.342795407730152,
+   "mult_same_dir": 4.8143104999608894,
+   "mult_opp_dir": 3.389630843916516
+  },
+  "MA-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.2808988764044944,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.00276789244760775,
+   "mult_naive_train": 27.744711113835386,
+   "mult_slot_train": 1.544384027175953,
+   "p_joint_holdout": 0.054900320646870206,
+   "mult_naive_holdout": 4.799961460661327,
+   "mult_slot_holdout": 30.632396272169057,
+   "mult_same_dir": 3.1517297964706987,
+   "mult_opp_dir": 2.2181359062195374
+  },
+  "MA-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.28294603823102865,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.002863595302619693,
+   "mult_naive_train": 28.635953026196926,
+   "mult_slot_train": 1.606199270745181,
+   "p_joint_holdout": 0.05372926251219852,
+   "mult_naive_holdout": 4.5373209083274375,
+   "mult_slot_holdout": 30.13690593283912,
+   "mult_same_dir": 3.3130156084095126,
+   "mult_opp_dir": 2.3367438303477615
+  },
+  "MA-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.0021817439665289045,
+   "mult_naive_train": 21.81521345272803,
+   "mult_slot_train": 2.321381512712872,
+   "p_joint_holdout": 0.01410846228913983,
+   "mult_naive_holdout": 10.77421553429991,
+   "mult_slot_holdout": 15.011442237616029,
+   "mult_same_dir": 4.663139980480215,
+   "mult_opp_dir": 3.757925999082107
+  },
+  "MA-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.4296076023676653,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.0016347772845553344,
+   "mult_naive_train": 16.346104748021656,
+   "mult_slot_train": 2.3969203185938666,
+   "p_joint_holdout": 0.019852223616339048,
+   "mult_naive_holdout": 7.316715920636639,
+   "mult_slot_holdout": 29.107450051347612,
+   "mult_same_dir": 4.936914678797728,
+   "mult_opp_dir": 3.4347140850265
+  },
+  "MA-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.3904863329783458,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.00019032513877874702,
+   "mult_naive_train": 1.9029160869542534,
+   "mult_slot_train": 1.7223354942684619,
+   "p_joint_holdout": 0.00029304029304029304,
+   "mult_naive_holdout": 2.1056149732620324,
+   "mult_slot_holdout": 2.651849888000648,
+   "mult_same_dir": 4.108731763386734,
+   "mult_opp_dir": 2.4203718203075932
+  },
+  "EG-TA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.3634242879956328,
+   "p_joint_train": 0.002777692739425481,
+   "mult_naive_train": 27.779762425484588,
+   "mult_slot_train": 2.9271616659421458,
+   "p_joint_holdout": 0.02400669176076955,
+   "mult_naive_holdout": 10.319162978518065,
+   "mult_slot_holdout": 25.29850290883802,
+   "mult_same_dir": 5.483595828126174,
+   "mult_opp_dir": 4.424437284418828
+  },
+  "EG-PP": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.27472527472527475,
+   "p_joint_train": 0.003302209296392673,
+   "mult_naive_train": 33.03220460528643,
+   "mult_slot_train": 3.4936576699162347,
+   "p_joint_holdout": 0.02726892513592639,
+   "mult_naive_holdout": 10.033218115414716,
+   "mult_slot_holdout": 28.84986410630354,
+   "mult_same_dir": 6.57619906184618,
+   "mult_opp_dir": 5.39110639414537
+  },
+  "EG-L": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.30991735537190085,
+   "p_joint_train": 0.002932802694015001,
+   "mult_naive_train": 29.3370074275628,
+   "mult_slot_train": 3.8966834158396986,
+   "p_joint_holdout": 0.02124634044332915,
+   "mult_naive_holdout": 12.074925241771291,
+   "mult_slot_holdout": 28.229059739257558,
+   "mult_same_dir": 7.905783886700363,
+   "mult_opp_dir": 4.8721473734293355
+  },
+  "EG-V": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.37593984962406013,
+   "p_joint_train": 0.002932802694015001,
+   "mult_naive_train": 29.36098046734017,
+   "mult_slot_train": 3.8000877709516865,
+   "p_joint_holdout": 0.012128816394813885,
+   "mult_naive_holdout": 12.639038312599443,
+   "mult_slot_holdout": 15.715536183906282,
+   "mult_same_dir": 7.967201174754231,
+   "mult_opp_dir": 4.86452497911483
+  },
+  "EG-UR": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.39296170600879227,
+   "thb": 0.554128628176414,
+   "p_joint_train": 0.002092401680030546,
+   "mult_naive_train": 20.920821440206225,
+   "mult_slot_train": 2.246744922103016,
+   "p_joint_holdout": 0.001312169312169312,
+   "mult_naive_holdout": 8.805124074252188,
+   "mult_slot_holdout": 1.4089597457275846,
+   "mult_same_dir": 5.244930058754128,
+   "mult_opp_dir": 3.1539995744913503
+  },
+  "EG-FG": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.5429020989889316,
+   "p_joint_train": 0.0017715189550487269,
+   "mult_naive_train": 17.716997638001924,
+   "mult_slot_train": 1.9708133358966635,
+   "p_joint_holdout": 0.002537292625121985,
+   "mult_naive_holdout": 8.972560372129848,
+   "mult_slot_holdout": 2.8227358947593757,
+   "mult_same_dir": 4.63494045638292,
+   "mult_opp_dir": 2.694429978035417
+  },
+  "EG-SA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.5704971475142625,
+   "p_joint_train": 0.0017429460686769734,
+   "mult_naive_train": 17.434797733568985,
+   "mult_slot_train": 2.2597350255340247,
+   "p_joint_holdout": 0.0018402342116269343,
+   "mult_naive_holdout": 11.912164338338902,
+   "mult_slot_holdout": 2.3858694069380726,
+   "mult_same_dir": 5.103790157878477,
+   "mult_opp_dir": 3.1041310498823718
+  },
+  "EG-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.3932100096545003,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.0032158189749433145,
+   "mult_naive_train": 32.14560894961471,
+   "mult_slot_train": 2.499351048982987,
+   "p_joint_holdout": 0.020772340722152515,
+   "mult_naive_holdout": 11.609811979567683,
+   "mult_slot_holdout": 16.144370058846068,
+   "mult_same_dir": 4.775724700650675,
+   "mult_opp_dir": 3.8905784421967446
+  },
+  "EG-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.23789373238682998,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.0028206142085145645,
+   "mult_naive_train": 28.22846933708689,
+   "mult_slot_train": 1.7078712698676348,
+   "p_joint_holdout": 0.07313536874390074,
+   "mult_naive_holdout": 4.104177082651659,
+   "mult_slot_holdout": 44.28319006258687,
+   "mult_same_dir": 3.2308283480096116,
+   "mult_opp_dir": 2.845026087424385
+  },
+  "EG-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.23463217899271033,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.0033242999096657635,
+   "mult_naive_train": 33.242999096657634,
+   "mult_slot_train": 1.9886645759098978,
+   "p_joint_holdout": 0.07561689669594313,
+   "mult_naive_holdout": 3.8919696785633864,
+   "mult_slot_holdout": 45.23558279510938,
+   "mult_same_dir": 3.5699840526628415,
+   "mult_opp_dir": 3.222247534331673
+  },
+  "EG-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.0029899484667585082,
+   "mult_naive_train": 29.902536336028597,
+   "mult_slot_train": 2.6909267494650395,
+   "p_joint_holdout": 0.018095636414331522,
+   "mult_naive_holdout": 10.823869501894473,
+   "mult_slot_holdout": 16.285910147712002,
+   "mult_same_dir": 5.4036074554413105,
+   "mult_opp_dir": 4.041229036529921
+  },
+  "EG-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.40418886643395185,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.001965406398285627,
+   "mult_naive_train": 19.656069960133475,
+   "mult_slot_train": 2.5385308805930027,
+   "p_joint_holdout": 0.023504809703053117,
+   "mult_naive_holdout": 6.785259828396916,
+   "mult_slot_holdout": 30.358955443367318,
+   "mult_same_dir": 5.5924103808785635,
+   "mult_opp_dir": 3.7275843530298145
+  },
+  "EG-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.35105984972646576,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.0002502423120979822,
+   "mult_naive_train": 2.501100661961569,
+   "mult_slot_train": 2.108186922257234,
+   "p_joint_holdout": 0.00043956043956043956,
+   "mult_naive_holdout": 1.8763746334310851,
+   "mult_slot_holdout": 3.7031130445283003,
+   "mult_same_dir": 4.030919450843261,
+   "mult_opp_dir": 4.15252286750562
+  },
+  "TA-PP": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.3634242879956328,
+   "thb": 0.27472527472527475,
+   "p_joint_train": 0.002457268227970815,
+   "mult_naive_train": 24.575190272067186,
+   "mult_slot_train": 2.4156531706885955,
+   "p_joint_holdout": 0.027491983828244807,
+   "mult_naive_holdout": 9.585901743862651,
+   "mult_slot_holdout": 27.026393434493198,
+   "mult_same_dir": 4.638135921513883,
+   "mult_opp_dir": 3.8274944368728705
+  },
+  "TA-L": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.3634242879956328,
+   "thb": 0.30991735537190085,
+   "p_joint_train": 0.0021429664778815248,
+   "mult_naive_train": 21.431851981453946,
+   "mult_slot_train": 2.6557935328609505,
+   "p_joint_holdout": 0.021357869789488358,
+   "mult_naive_holdout": 11.503047371171315,
+   "mult_slot_holdout": 26.468959289873396,
+   "mult_same_dir": 5.299968171096755,
+   "mult_opp_dir": 3.641536988222106
+  },
+  "TA-V": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.3634242879956328,
+   "thb": 0.37593984962406013,
+   "p_joint_train": 0.002000102046022756,
+   "mult_naive_train": 20.019407558733402,
+   "mult_slot_train": 2.4878186607071573,
+   "p_joint_holdout": 0.012630698452530321,
+   "mult_naive_holdout": 12.473192782415294,
+   "mult_slot_holdout": 15.710642049716915,
+   "mult_same_dir": 5.005601848973365,
+   "mult_opp_dir": 3.688414621599698
+  },
+  "TA-UR": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.3548895899053628,
+   "thb": 0.554128628176414,
+   "p_joint_train": 0.0019366170294005346,
+   "mult_naive_train": 19.36912888088078,
+   "mult_slot_train": 1.4261371537809975,
+   "p_joint_holdout": 0.0013544973544973545,
+   "mult_naive_holdout": 8.891397925340485,
+   "mult_slot_holdout": 0.9974605059342533,
+   "mult_same_dir": 3.195592505017328,
+   "mult_opp_dir": 2.2415851269427023
+  },
+  "TA-FG": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.3634242879956328,
+   "thb": 0.5429020989889316,
+   "p_joint_train": 0.0016592683300168376,
+   "mult_naive_train": 16.590990212411494,
+   "mult_slot_train": 1.7110484086894402,
+   "p_joint_holdout": 0.0026767043078209955,
+   "mult_naive_holdout": 8.970174451322452,
+   "mult_slot_holdout": 2.76023507685632,
+   "mult_same_dir": 3.7556775360197734,
+   "mult_opp_dir": 2.449165541397096
+  },
+  "TA-SA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.3634242879956328,
+   "thb": 0.5704971475142625,
+   "p_joint_train": 0.0015327312617990714,
+   "mult_naive_train": 15.328876988639916,
+   "mult_slot_train": 1.834499720869153,
+   "p_joint_holdout": 0.0020075282308657464,
+   "mult_naive_holdout": 12.314985263679977,
+   "mult_slot_holdout": 2.402776057974697,
+   "mult_same_dir": 4.09439117490061,
+   "mult_opp_dir": 2.735428110151427
+  },
+  "TA-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.36036036036036034,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.004382905746808927,
+   "mult_naive_train": 43.83208671176214,
+   "mult_slot_train": 3.192302918523303,
+   "p_joint_holdout": 0.028997630001394117,
+   "mult_naive_holdout": 16.36816029559547,
+   "mult_slot_holdout": 21.120513246516065,
+   "mult_same_dir": 4.66726117767293,
+   "mult_opp_dir": 5.399601634290557
+  },
+  "TA-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.27212259709482595,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.00608936338473705,
+   "mult_naive_train": 60.94183567165487,
+   "mult_slot_train": 3.3995271778706764,
+   "p_joint_holdout": 0.07692736651331382,
+   "mult_naive_holdout": 7.264140077169739,
+   "mult_slot_holdout": 42.94647184950709,
+   "mult_same_dir": 4.864127793612165,
+   "mult_opp_dir": 3.835162196237724
+  },
+  "TA-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.29093931837073983,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.005221318879855465,
+   "mult_naive_train": 52.40253853127833,
+   "mult_slot_train": 2.7593155923899166,
+   "p_joint_holdout": 0.06240066917607696,
+   "mult_naive_holdout": 6.44879201250264,
+   "mult_slot_holdout": 32.97694383260505,
+   "mult_same_dir": 3.970325272204882,
+   "mult_opp_dir": 3.9702504641302174
+  },
+  "TA-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.3634242879956328,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.0024878820347976937,
+   "mult_naive_train": 24.876281757601,
+   "mult_slot_train": 2.1344139999492495,
+   "p_joint_holdout": 0.020800223058692318,
+   "mult_naive_holdout": 11.790475972235503,
+   "mult_slot_holdout": 17.845013018131404,
+   "mult_same_dir": 4.01672740923918,
+   "mult_opp_dir": 3.5809013974474713
+  },
+  "TA-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.3634242879956328,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.0023593040461248023,
+   "mult_naive_train": 23.590633069554354,
+   "mult_slot_train": 2.789246608456718,
+   "p_joint_holdout": 0.025986337655095497,
+   "mult_naive_holdout": 7.10901580666031,
+   "mult_slot_holdout": 30.721900506948078,
+   "mult_same_dir": 5.386784256250155,
+   "mult_opp_dir": 3.8891416033405593
+  },
+  "TA-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.3100647018454584,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.00029606132698916206,
+   "mult_naive_train": 2.9590486704897443,
+   "mult_slot_train": 2.4371373837574293,
+   "p_joint_holdout": 0.0007326007326007326,
+   "mult_naive_holdout": 2.8236705648720215,
+   "mult_slot_holdout": 6.0306715873589445,
+   "mult_same_dir": 5.968710731097144,
+   "mult_opp_dir": 2.9721680931243686
+  },
+  "PP-L": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.27472527472527475,
+   "thb": 0.30991735537190085,
+   "p_joint_train": 0.005232920046941171,
+   "mult_naive_train": 52.3452241087481,
+   "mult_slot_train": 6.515915509010638,
+   "p_joint_holdout": 0.0342395092708769,
+   "mult_naive_holdout": 15.784927229562346,
+   "mult_slot_holdout": 42.63427445436153,
+   "mult_same_dir": 8.905673446591853,
+   "mult_opp_dir": 11.052664764441268
+  },
+  "PP-V": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.27472527472527475,
+   "thb": 0.37593984962406013,
+   "p_joint_train": 0.002959334659931629,
+   "mult_naive_train": 29.626598244706503,
+   "mult_slot_train": 3.6520743431598026,
+   "p_joint_holdout": 0.014052697616060227,
+   "mult_naive_holdout": 11.87873100489713,
+   "mult_slot_holdout": 17.342241521606812,
+   "mult_same_dir": 6.957710566104089,
+   "mult_opp_dir": 4.709063951959274
+  },
+  "PP-UR": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.27527716067269825,
+   "thb": 0.554128628176414,
+   "p_joint_train": 0.0017502863688430698,
+   "mult_naive_train": 17.500190781369586,
+   "mult_slot_train": 1.7483476737376327,
+   "p_joint_holdout": 0.0015238095238095239,
+   "mult_naive_holdout": 9.412975629191846,
+   "mult_slot_holdout": 1.5221216845404673,
+   "mult_same_dir": 3.8777204411900024,
+   "mult_opp_dir": 2.744715610294579
+  },
+  "PP-FG": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.27472527472527475,
+   "thb": 0.5429020989889316,
+   "p_joint_train": 0.0016327363641002093,
+   "mult_naive_train": 16.329030081107767,
+   "mult_slot_train": 1.7186917479534394,
+   "p_joint_holdout": 0.0025930572982015895,
+   "mult_naive_holdout": 7.438282755298652,
+   "mult_slot_holdout": 2.7295687646704394,
+   "mult_same_dir": 3.718865641878024,
+   "mult_opp_dir": 2.628152447004988
+  },
+  "PP-SA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.27472527472527475,
+   "thb": 0.5704971475142625,
+   "p_joint_train": 0.0015123220572478189,
+   "mult_naive_train": 15.127851429244282,
+   "mult_slot_train": 1.8539472284477252,
+   "p_joint_holdout": 0.0018681165481667364,
+   "mult_naive_holdout": 9.809260801410797,
+   "mult_slot_holdout": 2.2901137229948625,
+   "mult_same_dir": 4.213117546068456,
+   "mult_opp_dir": 2.722856024151425
+  },
+  "PP-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.25620444183459024,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.0030270593787046947,
+   "mult_naive_train": 30.25875144505608,
+   "mult_slot_train": 2.1989170441777546,
+   "p_joint_holdout": 0.024843161856963614,
+   "mult_naive_holdout": 10.124380883644937,
+   "mult_slot_holdout": 18.046574316596256,
+   "mult_same_dir": 4.260337030895336,
+   "mult_opp_dir": 3.8269004007189613
+  },
+  "PP-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.1411871457713665,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.0033214709371293,
+   "mult_naive_train": 33.24100127544811,
+   "mult_slot_train": 1.5278799697749161,
+   "p_joint_holdout": 0.08353548027324689,
+   "mult_naive_holdout": 3.4139627008077107,
+   "mult_slot_holdout": 38.42640489437257,
+   "mult_same_dir": 3.1381103220828943,
+   "mult_opp_dir": 2.065993758264742
+  },
+  "PP-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.14080560521717236,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.0034688346883468835,
+   "mult_naive_train": 34.68834688346883,
+   "mult_slot_train": 1.6594839710910352,
+   "p_joint_holdout": 0.08721594869650076,
+   "mult_naive_holdout": 3.326538266108544,
+   "mult_slot_holdout": 41.72394532710223,
+   "mult_same_dir": 3.168734524110176,
+   "mult_opp_dir": 2.6614141608460518
+  },
+  "PP-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.27472527472527475,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.0030532170008673912,
+   "mult_naive_train": 30.535286251671522,
+   "mult_slot_train": 2.6037648934309208,
+   "p_joint_holdout": 0.021357869789488358,
+   "mult_naive_holdout": 10.362901218082483,
+   "mult_slot_holdout": 18.21386149118785,
+   "mult_same_dir": 4.84525622584142,
+   "mult_opp_dir": 4.575802079493797
+  },
+  "PP-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.27472527472527475,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.002045002296035512,
+   "mult_naive_train": 20.452110176587475,
+   "mult_slot_train": 2.4916728805695803,
+   "p_joint_holdout": 0.029276453366792136,
+   "mult_naive_holdout": 6.855560143132396,
+   "mult_slot_holdout": 35.67103324759749,
+   "mult_same_dir": 5.020019177828685,
+   "mult_opp_dir": 4.124070416257227
+  },
+  "PP-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.2459890041398906,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.0002079478368138162,
+   "mult_naive_train": 2.0783794233201776,
+   "mult_slot_train": 1.5581609331963924,
+   "p_joint_holdout": 0.0005372405372405372,
+   "mult_naive_holdout": 2.2178292894280762,
+   "mult_slot_holdout": 4.025563476320946,
+   "mult_same_dir": 3.2960851721431053,
+   "mult_opp_dir": 2.3510505859807607
+  },
+  "L-V": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.30991735537190085,
+   "thb": 0.37593984962406013,
+   "p_joint_train": 0.0028940252053676206,
+   "mult_naive_train": 28.97276986965091,
+   "mult_slot_train": 4.453850587381631,
+   "p_joint_holdout": 0.012351875087132301,
+   "mult_naive_holdout": 16.127658473007212,
+   "mult_slot_holdout": 19.009304414506826,
+   "mult_same_dir": 7.7544432077034875,
+   "mult_opp_dir": 5.495507802674214
+  },
+  "L-UR": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.31607294390662133,
+   "thb": 0.554128628176414,
+   "p_joint_train": 0.0013959526536846125,
+   "mult_naive_train": 13.957394741860213,
+   "mult_slot_train": 1.8409702192102468,
+   "p_joint_holdout": 0.0013968253968253967,
+   "mult_naive_holdout": 13.844248321909294,
+   "mult_slot_holdout": 1.842121185274148,
+   "mult_same_dir": 4.367099505635259,
+   "mult_opp_dir": 2.4840153271582226
+  },
+  "L-FG": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.30991735537190085,
+   "thb": 0.5429020989889316,
+   "p_joint_train": 0.0013225164549211695,
+   "mult_naive_train": 13.226514365697291,
+   "mult_slot_train": 1.7499835572269815,
+   "p_joint_holdout": 0.002481527952042381,
+   "mult_naive_holdout": 10.995318700396824,
+   "mult_slot_holdout": 3.283613672037193,
+   "mult_same_dir": 3.9556352988015466,
+   "mult_opp_dir": 2.4539479213150543
+  },
+  "L-SA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.30991735537190085,
+   "thb": 0.5704971475142625,
+   "p_joint_train": 0.0012306750344405328,
+   "mult_naive_train": 12.310518774405267,
+   "mult_slot_train": 1.888715339361995,
+   "p_joint_holdout": 0.001617175519308518,
+   "mult_naive_holdout": 13.116487590799032,
+   "mult_slot_holdout": 2.481877119695718,
+   "mult_same_dir": 4.405466278472038,
+   "mult_opp_dir": 2.6186169357111013
+  },
+  "L-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.2777777777777778,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.00275542971582473,
+   "mult_naive_train": 27.607055000975546,
+   "mult_slot_train": 2.389635834144205,
+   "p_joint_holdout": 0.02180398717412519,
+   "mult_naive_holdout": 12.093784685120552,
+   "mult_slot_holdout": 18.909424101538015,
+   "mult_same_dir": 4.754714288748325,
+   "mult_opp_dir": 3.871420379083981
+  },
+  "L-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.1430703874261452,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.00339528140239884,
+   "mult_naive_train": 33.97969019268029,
+   "mult_slot_train": 1.635731305978083,
+   "p_joint_holdout": 0.08239230447511502,
+   "mult_naive_holdout": 3.6004999133687337,
+   "mult_slot_holdout": 39.6938149828773,
+   "mult_same_dir": 3.4289405580862247,
+   "mult_opp_dir": 2.4015812442740945
+  },
+  "L-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.15230378515411158,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.0032068654019873533,
+   "mult_naive_train": 32.068654019873534,
+   "mult_slot_train": 1.5981127388710834,
+   "p_joint_holdout": 0.08214136344625679,
+   "mult_naive_holdout": 3.756893082340653,
+   "mult_slot_holdout": 40.93441503043795,
+   "mult_same_dir": 3.113781397570961,
+   "mult_opp_dir": 2.6260327769156335
+  },
+  "L-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.30991735537190085,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.002824633909893362,
+   "mult_naive_train": 28.249222040316436,
+   "mult_slot_train": 3.0379012067395443,
+   "p_joint_holdout": 0.01764951902969469,
+   "mult_naive_holdout": 13.227701294887574,
+   "mult_slot_holdout": 18.982104183797137,
+   "mult_same_dir": 6.000547907940175,
+   "mult_opp_dir": 4.469264545319336
+  },
+  "L-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.30991735537190085,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.001983774682381754,
+   "mult_naive_train": 19.839771548545936,
+   "mult_slot_train": 3.0234193395371496,
+   "p_joint_holdout": 0.021859751847204796,
+   "mult_naive_holdout": 7.906746031746032,
+   "mult_slot_holdout": 33.31587860218666,
+   "mult_same_dir": 6.346682002595514,
+   "mult_opp_dir": 4.280749675101633
+  },
+  "L-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.281214848143982,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.00019032513877874702,
+   "mult_naive_train": 1.906949112924485,
+   "mult_slot_train": 1.5776043681010277,
+   "p_joint_holdout": 0.00029304029304029304,
+   "mult_naive_holdout": 1.963463751438435,
+   "mult_slot_holdout": 2.429009900092059,
+   "mult_same_dir": 3.599254451817713,
+   "mult_opp_dir": 2.224849037353413
+  },
+  "V-UR": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.36094862331258304,
+   "thb": 0.554128628176414,
+   "p_joint_train": 0.0019549446353570063,
+   "mult_naive_train": 19.546460907637933,
+   "mult_slot_train": 2.7258187550897945,
+   "p_joint_holdout": 0.0011005291005291005,
+   "mult_naive_holdout": 18.084260731319556,
+   "mult_slot_holdout": 1.5344899331108175,
+   "mult_same_dir": 6.624371723966172,
+   "mult_opp_dir": 3.3691299003958664
+  },
+  "V-FG": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.37593984962406013,
+   "thb": 0.5429020989889316,
+   "p_joint_train": 0.0017817235573243534,
+   "mult_naive_train": 17.833615100790063,
+   "mult_slot_train": 2.3018251498951616,
+   "p_joint_holdout": 0.002481527952042381,
+   "mult_naive_holdout": 20.16058435652569,
+   "mult_slot_holdout": 3.205908922682072,
+   "mult_same_dir": 4.948530587933058,
+   "mult_opp_dir": 3.1843066124791672
+  },
+  "V-SA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.37593984962406013,
+   "thb": 0.5704971475142625,
+   "p_joint_train": 0.0017123322618500943,
+   "mult_naive_train": 17.142562708488796,
+   "mult_slot_train": 2.5801926123368464,
+   "p_joint_holdout": 0.0018123518750871323,
+   "mult_naive_holdout": 26.952447568617476,
+   "mult_slot_holdout": 2.730905107167821,
+   "mult_same_dir": 5.847925733784076,
+   "mult_opp_dir": 3.213381043608558
+  },
+  "V-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.3731343283582089,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.0024722903214668,
+   "mult_naive_train": 24.753109645751064,
+   "mult_slot_train": 2.275032737505167,
+   "p_joint_holdout": 0.011599052000557646,
+   "mult_naive_holdout": 15.821826507357972,
+   "mult_slot_holdout": 10.673593953010107,
+   "mult_same_dir": 4.68899635070087,
+   "mult_opp_dir": 3.4889543532707434
+  },
+  "V-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.22921752442456086,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.0028258863846052458,
+   "mult_naive_train": 28.2812328311749,
+   "mult_slot_train": 1.5907456456179478,
+   "p_joint_holdout": 0.04731632510804405,
+   "mult_naive_holdout": 5.192664154922728,
+   "mult_slot_holdout": 26.63526691742019,
+   "mult_same_dir": 3.323022066439249,
+   "mult_opp_dir": 2.4444483075044605
+  },
+  "V-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.24213123926476277,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.0032610659439927733,
+   "mult_naive_train": 32.61065943992773,
+   "mult_slot_train": 1.7729569037033635,
+   "p_joint_holdout": 0.044081974069427016,
+   "mult_naive_holdout": 5.260688734953441,
+   "mult_slot_holdout": 23.966225031184614,
+   "mult_same_dir": 3.430257714847756,
+   "mult_opp_dir": 2.641432343349835
+  },
+  "V-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.37593984962406013,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.002138884636971274,
+   "mult_naive_train": 21.40850930770674,
+   "mult_slot_train": 2.2369411156555343,
+   "p_joint_holdout": 0.010985640596682002,
+   "mult_naive_holdout": 15.096357958679162,
+   "mult_slot_holdout": 11.489273758742982,
+   "mult_same_dir": 4.623251116287758,
+   "mult_opp_dir": 3.5288560941417697
+  },
+  "V-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.37593984962406013,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.0013490484208377978,
+   "mult_naive_train": 13.502886118696713,
+   "mult_slot_train": 2.030590559539472,
+   "p_joint_holdout": 0.011710581346716854,
+   "mult_naive_holdout": 7.766517248099785,
+   "mult_slot_holdout": 17.626792012843094,
+   "mult_same_dir": 4.239332211587189,
+   "mult_opp_dir": 3.1820829830244106
+  },
+  "V-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.33147915620291357,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.00020442329720680237,
+   "mult_naive_train": 2.0431526534333946,
+   "mult_slot_train": 1.699972071169174,
+   "p_joint_holdout": 0.0,
+   "mult_naive_holdout": 0.0,
+   "mult_slot_holdout": 0.0,
+   "mult_same_dir": 3.3655802173563742,
+   "mult_opp_dir": 3.307918752532203
+  },
+  "UR-FG": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.554128628176414,
+   "thb": 0.5253940455341506,
+   "p_joint_train": 0.0019457808323787705,
+   "mult_naive_train": 19.460780910285578,
+   "mult_slot_train": 1.9321756977108515,
+   "p_joint_holdout": 0.0008042328042328043,
+   "mult_naive_holdout": 47.38967483108109,
+   "mult_slot_holdout": 0.798609511298744,
+   "mult_same_dir": 4.465386266884255,
+   "mult_opp_dir": 2.6267115428236836
+  },
+  "UR-SA": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.554128628176414,
+   "thb": 0.5594405594405595,
+   "p_joint_train": 0.0019243986254295533,
+   "mult_naive_train": 19.246926175007715,
+   "mult_slot_train": 2.205708155986679,
+   "p_joint_holdout": 0.0005502645502645502,
+   "mult_naive_holdout": 66.94093286835223,
+   "mult_slot_holdout": 0.6307024908614971,
+   "mult_same_dir": 5.526956939791406,
+   "mult_opp_dir": 2.6198953695373093
+  },
+  "UR-PF": {
+   "n": 309600,
+   "n_holdout": 23625,
+   "tha": 0.5666957279860506,
+   "thb": 0.31023143739703213,
+   "p_joint_train": 0.0023183844741673223,
+   "mult_naive_train": 23.187899456262517,
+   "mult_slot_train": 1.5724930275258557,
+   "p_joint_holdout": 0.0014391534391534392,
+   "mult_naive_holdout": 12.437290969899665,
+   "mult_slot_holdout": 0.976136086928138,
+   "mult_same_dir": 3.775943498064525,
+   "mult_opp_dir": 2.2675952698890436
+  },
+  "UR-PX": {
+   "n": 148500,
+   "n_holdout": 23625,
+   "tha": 0.4381410591773511,
+   "thb": 0.2831326556843998,
+   "p_joint_train": 0.002178178178178178,
+   "mult_naive_train": 21.77306296598528,
+   "mult_slot_train": 1.265972497640856,
+   "p_joint_holdout": 0.002962962962962963,
+   "mult_naive_holdout": 4.004780309194467,
+   "mult_slot_holdout": 1.7220949416438112,
+   "mult_same_dir": 2.624736911729568,
+   "mult_opp_dir": 2.1522901341689376
+  },
+  "UR-PR": {
+   "n": 96525,
+   "n_holdout": 23625,
+   "tha": 0.3800258461974203,
+   "thb": 0.24973421270600094,
+   "p_joint_train": 0.002551440329218107,
+   "mult_naive_train": 25.51440329218107,
+   "mult_slot_train": 1.4989545094017869,
+   "p_joint_holdout": 0.0043597883597883596,
+   "mult_naive_holdout": 3.6516984609104877,
+   "mult_slot_holdout": 2.5613471524708875,
+   "mult_same_dir": 3.58703430319478,
+   "mult_opp_dir": 2.2008845691315697
+  },
+  "UR-EB": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.554128628176414,
+   "thb": 0.4127893665916623,
+   "p_joint_train": 0.0015120274914089348,
+   "mult_naive_train": 15.117965858251216,
+   "mult_slot_train": 1.4210070179048635,
+   "p_joint_holdout": 0.0012275132275132276,
+   "mult_naive_holdout": 12.07098558793474,
+   "mult_slot_holdout": 1.1536198387781764,
+   "mult_same_dir": 2.846787558822122,
+   "mult_opp_dir": 2.5714554637280194
+  },
+  "UR-SC": {
+   "n": 351000,
+   "n_holdout": 23625,
+   "tha": 0.554128628176414,
+   "thb": 0.3674830576840536,
+   "p_joint_train": 0.001145475372279496,
+   "mult_naive_train": 11.453004438069103,
+   "mult_slot_train": 1.2019866548012084,
+   "p_joint_holdout": 0.001566137566137566,
+   "mult_naive_holdout": 7.010385756676557,
+   "mult_slot_holdout": 1.643401944412014,
+   "mult_same_dir": 2.7345705248697656,
+   "mult_opp_dir": 1.8415998416559112
+  },
+  "UR-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.4498645268500501,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.0001762269803506917,
+   "mult_naive_train": 1.7613384943391333,
+   "mult_slot_train": 1.3437396489013624,
+   "p_joint_holdout": 0.0,
+   "mult_naive_holdout": 0.0,
+   "mult_slot_holdout": 0.0,
+   "mult_same_dir": 3.0185164671059193,
+   "mult_opp_dir": 2.398867940436601
+  },
+  "FG-SA": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.5429020989889316,
+   "thb": 0.5704971475142625,
+   "p_joint_train": 0.00331649573957855,
+   "mult_naive_train": 33.16834235225015,
+   "mult_slot_train": 4.246573766899252,
+   "p_joint_holdout": 0.002091175240485153,
+   "mult_naive_holdout": 105.53495762711864,
+   "mult_slot_holdout": 2.677624401037817,
+   "mult_same_dir": 7.566006646529687,
+   "mult_opp_dir": 4.675941968586377
+  },
+  "FG-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.5546689660567475,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.0020487322030777024,
+   "mult_naive_train": 20.47930706167294,
+   "mult_slot_train": 1.592398390129542,
+   "p_joint_holdout": 0.002258469259723965,
+   "mult_naive_holdout": 11.894012593860289,
+   "mult_slot_holdout": 1.7554186964693794,
+   "mult_same_dir": 3.4282963305172465,
+   "mult_opp_dir": 2.462617994378614
+  },
+  "FG-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.5388760585065435,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.002277580071174377,
+   "mult_naive_train": 22.805851507965667,
+   "mult_slot_train": 1.5398487671615477,
+   "p_joint_holdout": 0.0035131744040150566,
+   "mult_naive_holdout": 5.7762481785413,
+   "mult_slot_holdout": 2.3752215534871115,
+   "mult_same_dir": 3.4803001937596805,
+   "mult_opp_dir": 2.317685327113199
+  },
+  "FG-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.5847953216374269,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.0023306233062330623,
+   "mult_naive_train": 23.327305605786616,
+   "mult_slot_train": 1.803635797405971,
+   "p_joint_holdout": 0.002509410288582183,
+   "mult_naive_holdout": 5.778960598117991,
+   "mult_slot_holdout": 1.9419964671086436,
+   "mult_same_dir": 4.199551746671904,
+   "mult_opp_dir": 2.153321120923148
+  },
+  "FG-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.5429020989889316,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.0015755905913567019,
+   "mult_naive_train": 15.75429820907955,
+   "mult_slot_train": 1.4135775197605367,
+   "p_joint_holdout": 0.002481527952042381,
+   "mult_naive_holdout": 11.572206995562516,
+   "mult_slot_holdout": 2.226360164187072,
+   "mult_same_dir": 3.0690594925579253,
+   "mult_opp_dir": 2.3511283794884728
+  },
+  "FG-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.5429020989889316,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.0010837287616715138,
+   "mult_naive_train": 10.836181799250312,
+   "mult_slot_train": 1.3855118914212745,
+   "p_joint_holdout": 0.002258469259723965,
+   "mult_naive_holdout": 5.082908163265305,
+   "mult_slot_holdout": 2.887379320754265,
+   "mult_same_dir": 3.0985085527400362,
+   "mult_opp_dir": 2.1563221839548556
+  },
+  "FG-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.4873294346978557,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.0006449907480835316,
+   "mult_naive_train": 6.448771183567192,
+   "mult_slot_train": 5.778701105922813,
+   "p_joint_holdout": 4.884004884004884e-05,
+   "mult_naive_holdout": 2.9451956271576525,
+   "mult_slot_holdout": 0.4375753374508297,
+   "mult_same_dir": 13.543471879713476,
+   "mult_opp_dir": 6.878198825020487
+  },
+  "SA-PF": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.5778072247902751,
+   "thb": 0.335942197568802,
+   "p_joint_train": 0.0018208395198140027,
+   "mult_naive_train": 18.20127178177898,
+   "mult_slot_train": 1.6831085435927635,
+   "p_joint_holdout": 0.001561410846228914,
+   "mult_naive_holdout": 14.371766524268512,
+   "mult_slot_holdout": 1.4433034359967882,
+   "mult_same_dir": 3.775859305118437,
+   "mult_opp_dir": 2.448027921550235
+  },
+  "SA-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.5722460658082975,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.0017661789903782787,
+   "mult_naive_train": 17.694425686259493,
+   "mult_slot_train": 1.411746450605801,
+   "p_joint_holdout": 0.002230586923184163,
+   "mult_naive_holdout": 6.987142022209235,
+   "mult_slot_holdout": 1.78295811960627,
+   "mult_same_dir": 3.330483136673778,
+   "mult_opp_dir": 1.9998178846368357
+  },
+  "SA-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.5212211466865228,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.002312556458897922,
+   "mult_naive_train": 23.167420814479637,
+   "mult_slot_train": 1.858460933302597,
+   "p_joint_holdout": 0.0025930572982015895,
+   "mult_naive_holdout": 6.053395256658756,
+   "mult_slot_holdout": 2.0838823925706174,
+   "mult_same_dir": 4.507673562774436,
+   "mult_opp_dir": 2.241846982887245
+  },
+  "SA-EB": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.5704971475142625,
+   "thb": 0.421174233785162,
+   "p_joint_train": 0.0014470126026838103,
+   "mult_naive_train": 14.471602909381756,
+   "mult_slot_train": 1.524360427416524,
+   "p_joint_holdout": 0.001589293182768716,
+   "mult_naive_holdout": 13.56665516371793,
+   "mult_slot_holdout": 1.674246396252616,
+   "mult_same_dir": 3.195040516172604,
+   "mult_opp_dir": 2.6499286005138805
+  },
+  "SA-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.5704971475142625,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.001061278636665136,
+   "mult_naive_train": 10.613869552720047,
+   "mult_slot_train": 1.5767132115263516,
+   "p_joint_holdout": 0.0013941168269901018,
+   "mult_naive_holdout": 5.743399054537068,
+   "mult_slot_holdout": 2.071201985591331,
+   "mult_same_dir": 3.4128015537836602,
+   "mult_opp_dir": 2.6069691350607966
+  },
+  "SA-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.5148951820522251,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.000507533703409992,
+   "mult_naive_train": 5.076232194348112,
+   "mult_slot_train": 4.64748172081126,
+   "p_joint_holdout": 0.0,
+   "mult_naive_holdout": 0.0,
+   "mult_slot_holdout": 0.0,
+   "mult_same_dir": 10.369078594365739,
+   "mult_opp_dir": 6.802063045558334
+  },
+  "PF-PX": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.22976772392527725,
+   "thb": 0.2971768202080238,
+   "p_joint_train": 0.005087649927507579,
+   "mult_naive_train": 50.91677179493243,
+   "mult_slot_train": 2.1675871396022917,
+   "p_joint_holdout": 0.06728007807054232,
+   "mult_naive_holdout": 7.269390979603563,
+   "mult_slot_holdout": 28.66459643550788,
+   "mult_same_dir": 3.549684473440535,
+   "mult_opp_dir": 3.060471681270025
+  },
+  "PF-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.2520316559589833,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.004995483288166215,
+   "mult_naive_train": 49.95483288166215,
+   "mult_slot_train": 2.16595193494854,
+   "p_joint_holdout": 0.05517914401226823,
+   "mult_naive_holdout": 7.145437890509856,
+   "mult_slot_holdout": 23.924686931752156,
+   "mult_same_dir": 3.5409461518935577,
+   "mult_opp_dir": 3.1829571398924297
+  },
+  "PF-EB": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.335942197568802,
+   "thb": 0.39811764528031784,
+   "p_joint_train": 0.002990228237975208,
+   "mult_naive_train": 29.890584127093422,
+   "mult_slot_train": 1.7309502963055676,
+   "p_joint_holdout": 0.019768576606719643,
+   "mult_naive_holdout": 13.84318581334338,
+   "mult_slot_holdout": 11.443415288630682,
+   "mult_same_dir": 3.3557555921242295,
+   "mult_opp_dir": 3.059454707103661
+  },
+  "PF-SC": {
+   "n": 470280,
+   "n_holdout": 35865,
+   "tha": 0.335942197568802,
+   "thb": 0.3461681589721387,
+   "p_joint_train": 0.00236179689927834,
+   "mult_naive_train": 23.608729264355546,
+   "mult_slot_train": 1.9164451048189577,
+   "p_joint_holdout": 0.023755750731911333,
+   "mult_naive_holdout": 7.299498945935132,
+   "mult_slot_holdout": 19.27625199922218,
+   "mult_same_dir": 4.025591870919632,
+   "mult_opp_dir": 2.7604601800405573
+  },
+  "PF-IF": {
+   "n": 268320,
+   "n_holdout": 20475,
+   "tha": 0.27058099246914635,
+   "thb": 0.2873152055574362,
+   "p_joint_train": 0.0002501563477173233,
+   "mult_naive_train": 2.500453588277879,
+   "mult_slot_train": 1.9187675576154009,
+   "p_joint_holdout": 0.00043956043956043956,
+   "mult_naive_holdout": 1.9020168448866688,
+   "mult_slot_holdout": 3.3715487083813476,
+   "mult_same_dir": 4.305869125878948,
+   "mult_opp_dir": 2.7570613365848984
+  },
+  "PX-PR": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.32068521721618876,
+   "thb": 0.26160975047243806,
+   "p_joint_train": 0.005004516711833785,
+   "mult_naive_train": 50.04516711833785,
+   "mult_slot_train": 2.3187353369201875,
+   "p_joint_holdout": 0.05715878990659417,
+   "mult_naive_holdout": 6.606143873512672,
+   "mult_slot_holdout": 26.483297709570873,
+   "mult_same_dir": 3.557161361814643,
+   "mult_opp_dir": 3.4158344490147114
+  },
+  "PX-EB": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.2971768202080238,
+   "thb": 0.2681426159114958,
+   "p_joint_train": 0.003353103993673389,
+   "mult_naive_train": 33.55758223997619,
+   "mult_slot_train": 1.6016486370282526,
+   "p_joint_holdout": 0.06072772898368883,
+   "mult_naive_holdout": 5.404382370888802,
+   "mult_slot_holdout": 29.007297280389817,
+   "mult_same_dir": 3.253183949092483,
+   "mult_opp_dir": 2.38908918374943
+  },
+  "PX-SC": {
+   "n": 225540,
+   "n_holdout": 35865,
+   "tha": 0.2971768202080238,
+   "thb": 0.2667852378835012,
+   "p_joint_train": 0.00276789244760775,
+   "mult_naive_train": 27.715444540930495,
+   "mult_slot_train": 1.7672003107927277,
+   "p_joint_holdout": 0.06368325665690786,
+   "mult_naive_holdout": 4.198878052831164,
+   "mult_slot_holdout": 40.65948120695522,
+   "mult_same_dir": 3.383287244582048,
+   "mult_opp_dir": 2.729395794023009
+  },
+  "PX-IF": {
+   "n": 128700,
+   "n_holdout": 20475,
+   "tha": 0.24524430440862235,
+   "thb": 0.3145700793521106,
+   "p_joint_train": 0.0008223608223608224,
+   "mult_naive_train": 8.212222128436705,
+   "mult_slot_train": 7.181982388705917,
+   "p_joint_holdout": 0.0008791208791208791,
+   "mult_naive_holdout": 1.9354381321485963,
+   "mult_slot_holdout": 7.6776890383276735,
+   "mult_same_dir": 15.025458711726923,
+   "mult_opp_dir": 7.748404712823787
+  },
+  "PR-EB": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.26160975047243806,
+   "thb": 0.2660754574363711,
+   "p_joint_train": 0.0034869015356820236,
+   "mult_naive_train": 34.869015356820235,
+   "mult_slot_train": 1.8030603696008745,
+   "p_joint_holdout": 0.06248431618569636,
+   "mult_naive_holdout": 5.108329478576258,
+   "mult_slot_holdout": 32.31034575629425,
+   "mult_same_dir": 3.494491059611599,
+   "mult_opp_dir": 2.692910269783228
+  },
+  "PR-SC": {
+   "n": 146565,
+   "n_holdout": 35865,
+   "tha": 0.26160975047243806,
+   "thb": 0.2773158048788204,
+   "p_joint_train": 0.0026467931345980126,
+   "mult_naive_train": 26.467931345980123,
+   "mult_slot_train": 1.8692839216128827,
+   "p_joint_holdout": 0.06346019796458943,
+   "mult_naive_holdout": 4.192525079267836,
+   "mult_slot_holdout": 44.818435625719594,
+   "mult_same_dir": 3.9074055920640336,
+   "mult_opp_dir": 2.6478612764727583
+  },
+  "PR-IF": {
+   "n": 83655,
+   "n_holdout": 20475,
+   "tha": 0.21484354774826878,
+   "thb": 0.36911058966233307,
+   "p_joint_train": 0.0010921177587844254,
+   "mult_naive_train": 10.914266543823105,
+   "mult_slot_train": 9.160706592142684,
+   "p_joint_holdout": 0.0005860805860805861,
+   "mult_naive_holdout": 2.295918367346939,
+   "mult_slot_holdout": 4.916056208454211,
+   "mult_same_dir": 18.40315855125359,
+   "mult_opp_dir": 11.620609909615608
+  },
+  "EB-SC": {
+   "n": 525840,
+   "n_holdout": 35865,
+   "tha": 0.421174233785162,
+   "thb": 0.3854162792828406,
+   "p_joint_train": 0.0021674575233430276,
+   "mult_naive_train": 21.672363598500624,
+   "mult_slot_train": 2.274120325297679,
+   "p_joint_holdout": 0.021664575491426183,
+   "mult_naive_holdout": 8.247287168587091,
+   "mult_slot_holdout": 22.7307114134393,
+   "mult_same_dir": 4.990324093094319,
+   "mult_opp_dir": 3.445250337195895
+  },
+  "EB-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.3642490589815122,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.0002643404705260375,
+   "mult_naive_train": 2.6420077415086998,
+   "mult_slot_train": 2.0360116175473806,
+   "p_joint_holdout": 0.00029304029304029304,
+   "mult_naive_holdout": 1.810665015917934,
+   "mult_slot_holdout": 2.257064307452525,
+   "mult_same_dir": 4.393817318687702,
+   "mult_opp_dir": 2.938335525371825
+  },
+  "SC-IF": {
+   "n": 304200,
+   "n_holdout": 20475,
+   "tha": 0.3285714753276178,
+   "thb": 0.2999976394216603,
+   "p_joint_train": 0.0005815490351572826,
+   "mult_naive_train": 5.81241703131914,
+   "mult_slot_train": 4.9431894280777895,
+   "p_joint_holdout": 0.000927960927960928,
+   "mult_naive_holdout": 2.8211478215466728,
+   "mult_slot_holdout": 7.887703996491226,
+   "mult_same_dir": 10.60499034841177,
+   "mult_opp_dir": 7.656501569571736
+  }
+ },
+ "homog": {
+  "MA-EG": {
+   "tv": 1.047257145060599,
+   "z": 41.08137507556027
+  },
+  "MA-TA": {
+   "tv": 0.15613725645418094,
+   "z": 3.220432366459503
+  },
+  "MA-PP": {
+   "tv": 1.4762745511149218,
+   "z": 59.30900486983119
+  },
+  "MA-L": {
+   "tv": 0.6990791312713192,
+   "z": 26.28836237189399
+  },
+  "MA-V": {
+   "tv": 0.6597715648579758,
+   "z": 24.61830479710781
+  },
+  "MA-UR": {
+   "tv": 0.48055372142291086,
+   "z": 17.00388995854451
+  },
+  "MA-FG": {
+   "tv": 0.47282244470557966,
+   "z": 16.675411794600887
+  },
+  "MA-SA": {
+   "tv": 0.2875634614475606,
+   "z": 8.804327509357162
+  },
+  "MA-PF": {
+   "tv": 0.5348744208054237,
+   "z": 19.31180936819418
+  },
+  "MA-PX": {
+   "tv": 0.6661791339721336,
+   "z": 24.890542697122715
+  },
+  "MA-PR": {
+   "tv": 1.800045557708086,
+   "z": 73.06503892116612
+  },
+  "MA-EB": {
+   "tv": 1.9955402405309925,
+   "z": 81.37100659277418
+  },
+  "MA-SC": {
+   "tv": 1.1975538835975659,
+   "z": 47.46702113718248
+  },
+  "MA-IF": {
+   "tv": 2.96633691982399,
+   "z": 122.61717102792932
+  },
+  "EG-TA": {
+   "tv": 1.0069418150904412,
+   "z": 39.36850072743449
+  },
+  "EG-PP": {
+   "tv": 0.4664717320408631,
+   "z": 16.405589550214877
+  },
+  "EG-L": {
+   "tv": 0.4406469237066615,
+   "z": 15.308372889116923
+  },
+  "EG-V": {
+   "tv": 0.5687135776468363,
+   "z": 20.749531042772198
+  },
+  "EG-UR": {
+   "tv": 1.279101740923618,
+   "z": 50.93173872877384
+  },
+  "EG-FG": {
+   "tv": 1.470004331164099,
+   "z": 59.04260251323828
+  },
+  "EG-SA": {
+   "tv": 1.04791003591929,
+   "z": 41.10911439965375
+  },
+  "EG-PF": {
+   "tv": 0.8577023251714155,
+   "z": 33.02777390716794
+  },
+  "EG-PX": {
+   "tv": 0.9505247248624681,
+   "z": 36.9715121199017
+  },
+  "EG-PR": {
+   "tv": 2.280689175173979,
+   "z": 93.48610762027187
+  },
+  "EG-EB": {
+   "tv": 0.9888095931102568,
+   "z": 38.59811839576635
+  },
+  "EG-SC": {
+   "tv": 0.5388067075005138,
+   "z": 19.478880132949968
+  },
+  "EG-IF": {
+   "tv": 2.084094739018536,
+   "z": 85.1334148127425
+  },
+  "TA-PP": {
+   "tv": 1.4356527219431467,
+   "z": 57.58310831351414
+  },
+  "TA-L": {
+   "tv": 0.6564350702451278,
+   "z": 24.476547405087516
+  },
+  "TA-V": {
+   "tv": 0.6245606024928223,
+   "z": 23.122299325920103
+  },
+  "TA-UR": {
+   "tv": 0.5169375094286319,
+   "z": 18.549725183228947
+  },
+  "TA-FG": {
+   "tv": 0.5140370889661301,
+   "z": 18.426495240359174
+  },
+  "TA-SA": {
+   "tv": 0.35583723818920143,
+   "z": 11.705070252055478
+  },
+  "TA-PF": {
+   "tv": 0.5457922979543204,
+   "z": 19.775676381515826
+  },
+  "TA-PX": {
+   "tv": 0.6638082460845489,
+   "z": 24.789810964356747
+  },
+  "TA-PR": {
+   "tv": 1.8169956181620752,
+   "z": 73.78519484627725
+  },
+  "TA-EB": {
+   "tv": 1.9346960226004888,
+   "z": 78.78592294836201
+  },
+  "TA-SC": {
+   "tv": 1.1505557702770453,
+   "z": 45.47021588278874
+  },
+  "TA-IF": {
+   "tv": 2.921029850645623,
+   "z": 120.69221303696584
+  },
+  "PP-L": {
+   "tv": 0.8457170301292858,
+   "z": 32.51855559126728
+  },
+  "PP-V": {
+   "tv": 0.8938044634502157,
+   "z": 34.56164270139635
+  },
+  "PP-UR": {
+   "tv": 1.69291725178123,
+   "z": 68.51348676182349
+  },
+  "PP-FG": {
+   "tv": 1.8819858766358712,
+   "z": 76.54643099888298
+  },
+  "PP-SA": {
+   "tv": 1.4740112228471292,
+   "z": 59.21284301442384
+  },
+  "PP-PF": {
+   "tv": 1.2710262005687647,
+   "z": 50.588633861932315
+  },
+  "PP-PX": {
+   "tv": 1.3712538760702975,
+   "z": 54.846999462956276
+  },
+  "PP-PR": {
+   "tv": 2.656711548215226,
+   "z": 109.46214149077461
+  },
+  "PP-EB": {
+   "tv": 0.5561219086234346,
+   "z": 20.21454976179943
+  },
+  "PP-SC": {
+   "tv": 0.8480575222921706,
+   "z": 32.61799590319731
+  },
+  "PP-IF": {
+   "tv": 1.6306376615299096,
+   "z": 65.86741856314482
+  },
+  "L-V": {
+   "tv": 0.2655168580672582,
+   "z": 7.867635153834434
+  },
+  "L-UR": {
+   "tv": 0.8789419384045813,
+   "z": 33.93017973388776
+  },
+  "L-FG": {
+   "tv": 1.0904690467117646,
+   "z": 42.91731584367017
+  },
+  "L-SA": {
+   "tv": 0.6856859723469984,
+   "z": 25.719328250659654
+  },
+  "L-PF": {
+   "tv": 0.5367408557536018,
+   "z": 19.391108447416553
+  },
+  "L-PX": {
+   "tv": 0.7289800964633809,
+   "z": 27.558762398375126
+  },
+  "L-PR": {
+   "tv": 2.0051638893397454,
+   "z": 81.77988582536601
+  },
+  "L-EB": {
+   "tv": 1.3714094804564925,
+   "z": 54.85361061463894
+  },
+  "L-SC": {
+   "tv": 0.5993135961452725,
+   "z": 22.049631693739055
+  },
+  "L-IF": {
+   "tv": 2.370603558360438,
+   "z": 97.30629315767513
+  },
+  "V-UR": {
+   "tv": 0.8308201312581603,
+   "z": 31.885632185657983
+  },
+  "V-FG": {
+   "tv": 1.0403528692338138,
+   "z": 40.78803363534784
+  },
+  "V-SA": {
+   "tv": 0.6216123500377972,
+   "z": 22.997037148833886
+  },
+  "V-PF": {
+   "tv": 0.6691010466480931,
+   "z": 25.014685778025676
+  },
+  "V-PX": {
+   "tv": 0.8881471867083535,
+   "z": 34.321282416151085
+  },
+  "V-PR": {
+   "tv": 2.060550732521901,
+   "z": 84.13310240527754
+  },
+  "V-EB": {
+   "tv": 1.3851218475367086,
+   "z": 55.43620690843518
+  },
+  "V-SC": {
+   "tv": 0.7581823473963663,
+   "z": 28.79947620544724
+  },
+  "V-IF": {
+   "tv": 2.3752481925814735,
+   "z": 97.50362937740911
+  },
+  "UR-FG": {
+   "tv": 0.3635754179283414,
+   "z": 12.033841704159945
+  },
+  "UR-SA": {
+   "tv": 0.35043359059581686,
+   "z": 11.475485889088056
+  },
+  "UR-PF": {
+   "tv": 0.5530124305418925,
+   "z": 20.082437603821926
+  },
+  "UR-PX": {
+   "tv": 0.6347988258548318,
+   "z": 23.557289940660187
+  },
+  "UR-PR": {
+   "tv": 1.3695090405774524,
+   "z": 54.77286677051382
+  },
+  "UR-EB": {
+   "tv": 2.168836718837165,
+   "z": 88.73384084294409
+  },
+  "UR-SC": {
+   "tv": 1.2570764795081963,
+   "z": 49.995953127684466
+  },
+  "UR-IF": {
+   "tv": 3.171534722486519,
+   "z": 131.3353944117536
+  },
+  "FG-SA": {
+   "tv": 0.484920176654278,
+   "z": 17.189407208771275
+  },
+  "FG-PF": {
+   "tv": 0.8348019283163822,
+   "z": 32.05480649343419
+  },
+  "FG-PX": {
+   "tv": 0.8599429766902704,
+   "z": 33.122972297273556
+  },
+  "FG-PR": {
+   "tv": 1.54403344884732,
+   "z": 62.18787198735236
+  },
+  "FG-EB": {
+   "tv": 2.3824731132042727,
+   "z": 97.81059402860255
+  },
+  "FG-SC": {
+   "tv": 1.571859353032179,
+   "z": 63.370109055160846
+  },
+  "FG-IF": {
+   "tv": 3.3270366796338644,
+   "z": 137.94219419928365
+  },
+  "SA-PF": {
+   "tv": 0.5042125985859702,
+   "z": 18.009082867248477
+  },
+  "SA-PX": {
+   "tv": 0.667828540573559,
+   "z": 24.96062090953725
+  },
+  "SA-PR": {
+   "tv": 1.6513537623919257,
+   "z": 66.74758195969893
+  },
+  "SA-EB": {
+   "tv": 1.9531371239328545,
+   "z": 79.56942861349683
+  },
+  "SA-SC": {
+   "tv": 1.10160316801967,
+   "z": 43.390370406074815
+  },
+  "SA-IF": {
+   "tv": 2.974521727702374,
+   "z": 122.96491833570528
+  },
+  "PF-PX": {
+   "tv": 0.23294413528267358,
+   "z": 6.483720366391883
+  },
+  "PF-PR": {
+   "tv": 1.5211029590869627,
+   "z": 61.2136260186464
+  },
+  "PF-EB": {
+   "tv": 1.7611222768363908,
+   "z": 71.4113084568645
+  },
+  "PF-SC": {
+   "tv": 0.7526564976705226,
+   "z": 28.56469984980283
+  },
+  "PF-IF": {
+   "tv": 2.8117417542115932,
+   "z": 116.04889802315066
+  },
+  "PX-PR": {
+   "tv": 1.4063075126443423,
+   "z": 56.336320645262106
+  },
+  "PX-EB": {
+   "tv": 1.8670262056177978,
+   "z": 75.91084059785622
+  },
+  "PX-SC": {
+   "tv": 0.8456565660549393,
+   "z": 32.515986658754315
+  },
+  "PX-IF": {
+   "tv": 2.9488123240887933,
+   "z": 121.87260486616623
+  },
+  "PR-EB": {
+   "tv": 3.0699146704684375,
+   "z": 127.01787101591823
+  },
+  "PR-SC": {
+   "tv": 1.927035922923517,
+   "z": 78.46046887790088
+  },
+  "PR-IF": {
+   "tv": 3.991029536102586,
+   "z": 166.1532080251885
+  },
+  "EB-SC": {
+   "tv": 1.2210996048734706,
+   "z": 48.46740640034343
+  },
+  "EB-IF": {
+   "tv": 1.151056524414872,
+   "z": 45.49149138563186
+  },
+  "SC-IF": {
+   "tv": 2.316495003141021,
+   "z": 95.00738710089497
+  }
+ },
+ "self_dist": {
+  "mean": 0.08033905581999351,
+  "sd": 0.02353665347039065
+ },
+ "corr_raw": {
+  "MA-EG": 0.5800476813074417,
+  "MA-TA": 0.46442533310159045,
+  "MA-PP": 0.5836179627001966,
+  "MA-L": 0.5241999522769553,
+  "MA-V": 0.5178050783080921,
+  "MA-UR": 0.38843243536576505,
+  "MA-FG": 0.3376056578639868,
+  "MA-SA": 0.33178341516914156,
+  "MA-PF": 0.4866998594715509,
+  "MA-PX": 0.41965373242747434,
+  "MA-PR": 0.41035643607214956,
+  "MA-EB": 0.4642057002229205,
+  "MA-SC": 0.36476026784020765,
+  "MA-IF": 0.10056614995760889,
+  "EG-TA": 0.528364907812237,
+  "EG-PP": 0.6148943371721607,
+  "EG-L": 0.5755975385790982,
+  "EG-V": 0.5509067051196398,
+  "EG-UR": 0.3484046057027116,
+  "EG-FG": 0.2947298259886218,
+  "EG-SA": 0.2955350308623833,
+  "EG-PF": 0.575359951140436,
+  "EG-PX": 0.4298199563525992,
+  "EG-PR": 0.47482054010089414,
+  "EG-EB": 0.5612592576044869,
+  "EG-SC": 0.4213832437275208,
+  "EG-IF": 0.13010503871218762,
+  "TA-PP": 0.4936425926223424,
+  "TA-L": 0.4593853392693849,
+  "TA-V": 0.42881997865504856,
+  "TA-UR": 0.3053668687104222,
+  "TA-FG": 0.2807897469899851,
+  "TA-SA": 0.2582993254896885,
+  "TA-PF": 0.7085031483098654,
+  "TA-PX": 0.7957591856884492,
+  "TA-PR": 0.6739822707700612,
+  "TA-EB": 0.4756393251791316,
+  "TA-SC": 0.46896461730032574,
+  "TA-IF": 0.13062357672936897,
+  "PP-L": 0.8056473527866743,
+  "PP-V": 0.6142694295616218,
+  "PP-UR": 0.3084323637270494,
+  "PP-FG": 0.2736694768549354,
+  "PP-SA": 0.26127238105174116,
+  "PP-PF": 0.5500147680846109,
+  "PP-PX": 0.4412059789990156,
+  "PP-PR": 0.4492834076446913,
+  "PP-EB": 0.5727255254981062,
+  "PP-SC": 0.43862689884868605,
+  "PP-IF": 0.13711268436533527,
+  "L-V": 0.624186600513526,
+  "L-UR": 0.24092943579621665,
+  "L-FG": 0.20878624849897667,
+  "L-SA": 0.1891602509525255,
+  "L-PF": 0.527983938354615,
+  "L-PX": 0.4659518757743279,
+  "L-PR": 0.4413962680024014,
+  "L-EB": 0.5485297909274486,
+  "L-SC": 0.41969930980407044,
+  "L-IF": 0.14407958636855556,
+  "V-UR": 0.32923671251661185,
+  "V-FG": 0.3117213769637209,
+  "V-SA": 0.30008051923046947,
+  "V-PF": 0.4896600118625366,
+  "V-PX": 0.4065322134858589,
+  "V-PR": 0.4172385714933345,
+  "V-EB": 0.4748195855844286,
+  "V-SC": 0.3438961046170818,
+  "V-IF": 0.12600762014462522,
+  "UR-FG": 0.3483392414839622,
+  "UR-SA": 0.37278661478615405,
+  "UR-PF": 0.3641078619008539,
+  "UR-PX": 0.29146249442236744,
+  "UR-PR": 0.29562031795400273,
+  "UR-EB": 0.2889069258906974,
+  "UR-SC": 0.19877322867202588,
+  "UR-IF": 0.04703984489734708,
+  "FG-SA": 0.579902243772456,
+  "FG-PF": 0.31263933289810797,
+  "FG-PX": 0.325936027691151,
+  "FG-PR": 0.3360166852306118,
+  "FG-EB": 0.254375070566709,
+  "FG-SC": 0.17075581572135956,
+  "FG-IF": 0.08826639331934472,
+  "SA-PF": 0.29359586644463787,
+  "SA-PX": 0.27372938335172015,
+  "SA-PR": 0.3461677525275821,
+  "SA-EB": 0.25176637474023283,
+  "SA-SC": 0.16685907691893323,
+  "SA-IF": 0.07188859919798364,
+  "PF-PX": 0.7143843948203956,
+  "PF-PR": 0.6509750652136664,
+  "PF-EB": 0.5183247420826673,
+  "PF-SC": 0.4617410565387874,
+  "PF-IF": 0.14080847430316665,
+  "PX-PR": 0.6709805880480091,
+  "PX-EB": 0.5023918253651298,
+  "PX-SC": 0.4202059748768725,
+  "PX-IF": 0.14056224097871828,
+  "PR-EB": 0.49622839965040305,
+  "PR-SC": 0.397594657932889,
+  "PR-IF": 0.13977226459984204,
+  "EB-SC": 0.43251070178905593,
+  "EB-IF": 0.11267217218025419,
+  "SC-IF": 0.16930790108995575
+ },
+ "corr_dm": {
+  "MA-EG": 0.5216259229349953,
+  "MA-TA": 0.3871121788065929,
+  "MA-PP": 0.5227141677685889,
+  "MA-L": 0.46658692324413864,
+  "MA-V": 0.4564885047253324,
+  "MA-UR": 0.2921640975182441,
+  "MA-FG": 0.24818980651524908,
+  "MA-SA": 0.25061868245601193,
+  "MA-PF": 0.4005187934173588,
+  "MA-PX": 0.28574095209747297,
+  "MA-PR": 0.27340145882439515,
+  "MA-EB": 0.3772825451433918,
+  "MA-SC": 0.3006488043868965,
+  "MA-IF": 0.08334977599751063,
+  "EG-TA": 0.4556887912996845,
+  "EG-PP": 0.5550399265412278,
+  "EG-L": 0.522338355766878,
+  "EG-V": 0.4888692473799035,
+  "EG-UR": 0.2437983046968529,
+  "EG-FG": 0.19138561247991268,
+  "EG-SA": 0.20234835127424064,
+  "EG-PF": 0.4943248505304538,
+  "EG-PX": 0.3010145874717159,
+  "EG-PR": 0.357411424599515,
+  "EG-EB": 0.48256142187641343,
+  "EG-SC": 0.35498079191601883,
+  "EG-IF": 0.11346048037920169,
+  "TA-PP": 0.41469501636726824,
+  "TA-L": 0.39187787452260564,
+  "TA-V": 0.350692547073054,
+  "TA-UR": 0.162436701954463,
+  "TA-FG": 0.1738322670912675,
+  "TA-SA": 0.1585467656324753,
+  "TA-PF": 0.6531582904917764,
+  "TA-PX": 0.748932885484878,
+  "TA-PR": 0.5972724404697617,
+  "TA-EB": 0.38089977165100175,
+  "TA-SC": 0.3990280897037581,
+  "TA-IF": 0.10997834086235507,
+  "PP-L": 0.7809914110546187,
+  "PP-V": 0.5598531649640861,
+  "PP-UR": 0.19522370648122028,
+  "PP-FG": 0.16525004775167307,
+  "PP-SA": 0.16246353003131167,
+  "PP-PF": 0.4622050418449157,
+  "PP-PX": 0.2914205439282307,
+  "PP-PR": 0.3078235606105475,
+  "PP-EB": 0.4943356656438046,
+  "PP-SC": 0.38211737113641675,
+  "PP-IF": 0.11553595494034277,
+  "L-V": 0.5804304249473208,
+  "L-UR": 0.1412151381141418,
+  "L-FG": 0.11167713361553165,
+  "L-SA": 0.09948438729379921,
+  "L-PF": 0.45432387553184445,
+  "L-PX": 0.32657301023456786,
+  "L-PR": 0.3003185070503202,
+  "L-EB": 0.48432805582605615,
+  "L-SC": 0.3763388922696492,
+  "L-IF": 0.12925067174152938,
+  "V-UR": 0.2404895168659453,
+  "V-FG": 0.22001388737994496,
+  "V-SA": 0.21615617911667667,
+  "V-PF": 0.40354717745371665,
+  "V-PX": 0.2680082874004486,
+  "V-PR": 0.28069620660612093,
+  "V-EB": 0.3902257146034341,
+  "V-SC": 0.27728174068451417,
+  "V-IF": 0.1097874099810546,
+  "UR-FG": 0.2513385789813276,
+  "UR-SA": 0.290884614909296,
+  "UR-PF": 0.2187968042325968,
+  "UR-PX": 0.11695914153487448,
+  "UR-PR": 0.13986163707703006,
+  "UR-EB": 0.1537400902728245,
+  "UR-SC": 0.054706336121186444,
+  "UR-IF": 0.02430970614911639,
+  "FG-SA": 0.5258116321756036,
+  "FG-PF": 0.18260481562581923,
+  "FG-PX": 0.19388154995235785,
+  "FG-PR": 0.21918870239756208,
+  "FG-EB": 0.12505337061906507,
+  "FG-SC": 0.06861866486223814,
+  "FG-IF": 0.08457139916734178,
+  "SA-PF": 0.17436221523529952,
+  "SA-PX": 0.14374669097490206,
+  "SA-PR": 0.23829130127234996,
+  "SA-EB": 0.13556889849082512,
+  "SA-SC": 0.07273080837530814,
+  "SA-IF": 0.0680000315148273,
+  "PF-PX": 0.6295598386160458,
+  "PF-PR": 0.5534586561285072,
+  "PF-EB": 0.39866537706984306,
+  "PF-SC": 0.3744085199633605,
+  "PF-IF": 0.12337528209100376,
+  "PX-PR": 0.583488795310119,
+  "PX-EB": 0.36656782355341194,
+  "PX-SC": 0.31962215124301285,
+  "PX-IF": 0.12776090749227237,
+  "PR-EB": 0.3689216174280806,
+  "PR-SC": 0.3005023633600783,
+  "PR-IF": 0.13394424717107845,
+  "EB-SC": 0.35607868024702294,
+  "EB-IF": 0.08977171017396883,
+  "SC-IF": 0.15818466942755632
+ }
+}

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V5X 自我学习与进化设计</title>
+<style>
+  :root{--bg:#fff;--fg:#2C2C2A;--mut:#5F5E5A;--line:#D3D1C7;--bd:#534AB7;--teal:#0F6E56;--amber:#854F0B;--grn:#3B6D11;--red:#A32D2D;}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--fg);background:#F1EFE8;margin:0;padding:24px;line-height:1.6}
+  .wrap{max-width:920px;margin:0 auto;background:#fff;border:1px solid var(--line);border-radius:12px;padding:28px 32px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--mut);font-size:13px;margin:0 0 20px}
+  h2{font-size:16px;margin:26px 0 8px;border-left:4px solid var(--bd);padding-left:10px}
+  h3{font-size:14px;margin:16px 0 6px;color:var(--bd)}
+  p,li{font-size:13.5px}
+  code{background:#F1EFE8;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:12px 0;background:#FBFAF7}
+  .teal{border-left:4px solid var(--teal)} .amber{border-left:4px solid var(--amber)}
+  .grn{border-left:4px solid var(--grn)} .red{border-left:4px solid var(--red)} .bd{border-left:4px solid var(--bd)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:#F1EFE8;font-weight:500}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;color:#fff;margin-right:4px}
+  .t1{background:var(--teal)} .t2{background:var(--amber)} .t3{background:var(--bd)} .t4{background:var(--red)}
+  ol li{margin:4px 0}
+  .foot{color:var(--mut);font-size:12px;margin-top:24px;border-top:1px solid var(--line);padding-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>V5X 策略系统：自我学习与进化设计</h1>
+<p class="sub">版本 2026-10-22 ｜ 基于现有三源对拍主干（step46 回测 == fusion_v5x_engine 生产 == 云端规格冻结表）</p>
+
+<h2>0. 设计原则（先定调）</h2>
+<div class="card bd">
+<p style="margin:0"><b>这不是上深度学习，而是把我们已经手动做过的「扫描 → 对照 → 重锁 → 对拍」闭环自动化，并加上护栏。</b>
+当前系统的 edge 来自规则与参数，不在于"学出一个模型"。所以"进化" = ①在已知有效处（波动体制）做在线自适应；②周期性用样本外窗口重扫参数；③用硬护栏防止重扫把 bug 当 edge。任何"学到的东西"都必须先过 <code>step46 == 引擎 逐笔偏差 0</code> 这道关，否则不准落地。</p>
+</div>
+
+<h2>1. 当前系统解剖（进化的地基）</h2>
+<table>
+<tr><th>组件</th><th>角色</th><th>进化时的用途</th></tr>
+<tr><td><code>fusion_v5x_engine.py</code><br>V5XConfig / SymbolEngine</td><td>生产信号生成器（<code>set_daily_ctx</code> + <code>on_bar</code>）</td><td>在线体制层直接改它的运行时状态；重锁时同步 V5XConfig</td></tr>
+<tr><td><code>step46_prod_bt.py</code></td><td>研究回测（产出 <code>trades46_V5X.csv</code> / <code>results_step46.json</code>）</td><td>重扫与对拍的"真值"来源</td></tr>
+<tr><td><code>fusion_v5x_spec.html</code></td><td>云端架构 + 数据契约 + 冻结参数表</td><td>重锁时版本号 +n，写入勘误</td></tr>
+<tr><td>云端库 <code>qhyc-timescaledb</code></td><td><code>bar_60m_ba</code>(后复权) / <code>daily_bar</code> / <code>factor_value</code>(会员净持仓 z)</td><td>漂移监控的实盘/准实盘数据源</td></tr>
+<tr><td><code>step73 / step74</code></td><td>参数网格扫描 + reco 挑选</td><td>滚动重扫的引擎</td></tr>
+</table>
+<p>已验证的关键事实（来自本项目研究）：<b>可预测性集中在"波动体制"维度</b>——HMM(K=3) 三态波动体制（高/中/低波）在 holdout 的 log₂/bar 1.6–1.8，大幅优于六位 K 线形态链 2.2。这意味着"在线体制学习"是收益最高的进化方向，且风险远低于改 alpha。</p>
+
+<h2>2. 三层自进化</h2>
+
+<h3><span class="tag t1">A</span>在线体制学习（最低风险、最早做）</h3>
+<div class="card teal">
+<ul>
+<li><b>把固定门控换成体制感知。</b>当前 ADX≥15 是写死的阈值；改为在线估计每个品种当日所处的波动体制（高/中/低波三态，用已实现波动率 + 区间幅度 + ADX 分布做轻量 HMM/贝叶斯更新）。</li>
+<li><b>体制驱动两件事：</b>①门控开关（高波态自动触发 P2 高波日禁开仓，低波态放宽）；②仓位缩放（高波态降仓、低波态加仓），不碰方向 alpha。</li>
+<li><b>为什么安全：</b>它只调"风险预算分配"，不改入场逻辑；且体制变量是样本外真实有效的维度，不是新挖的因子。</li>
+</ul>
+</div>
+
+<h3><span class="tag t2">B</span>滚动重扫 + Governor 闸门（周期触发）</h3>
+<div class="card amber">
+<ul>
+<li><b>调度：</b>用自动化（recurring）每 1–3 个月触发一次，窗口 <code>train = t-3y, holdout = t-1y, validate = t</code> 的 walk-forward。</li>
+<li><b>流程：</b><code>step73</code> 网格 → <code>step74</code> 挑 reco → 候选参数喂给 Governor 闸门。</li>
+<li><b>闸门不通过 = 原样保留当前冻结参数 + 写告警日志。</b>通过才写回三源。</li>
+</ul>
+</div>
+
+<h3><span class="tag t3">C</span>漂移监控（实时/准实时）</h3>
+<div class="card bd">
+<ul>
+<li>滚动 20/60 日窗口，比较<b>实盘</b>净值/回撤/PF 与<b>回测预期</b>。指标：live MAR &lt; 0.6×回测 MAR，或体制分布偏移 &gt; 阈值。</li>
+<li>漂移触发即唤醒 B 层重扫（不必等周期）。</li>
+</ul>
+</div>
+
+<h2>3. Governor 四道硬护栏（来自本项目的血泪教训）</h2>
+<table>
+<tr><th>护栏</th><th>拦截过的历史事故</th><th>实现</th></tr>
+<tr><td><span class="tag t4">①</span> self_check 逐笔 PASS</td><td>空头吊灯误用 SL_ATR（bug 假象，旧 SL3/TR2 净利被人为抬高 30%+）、NaN-ATR 僵尸仓</td><td><code>fusion_v5x_engine.self_check()</code> 对比 <code>trades46_V5X.csv</code>，任一笔偏离 &gt;0 即 FAIL</td></tr>
+<tr><td><span class="tag t4">②</span> OOS MAR↑ 且三分区同号</td><td>样本内 IC/净利好看、样本外衰减；单点"优化"只是噪声</td><td>holdout + validate 两段 MAR 同向上升，且不低于当前值</td></tr>
+<tr><td><span class="tag t4">③</span> 无"全同结果"指纹</td><td>价格序列全 NaN → 多个参数变体逐位相同（数据退化指纹）</td><td>重扫前断言每品种价格非全 NaN；同一输入的多个变体不得逐位相同</td></tr>
+<tr><td><span class="tag t4">④</span> 无前视</td><td>因子用了决策时点后的 bar / 前瞻标签用未来价</td><td>重扫数据契约锁定"决策时点可用字段"，CI 检查</td></tr>
+</table>
+<div class="card red"><p style="margin:0"><b>护栏 ① 是主干中的主干。</b>本次（2026-10-22）正是靠它揪出空头吊灯 bug：没有逐笔对拍，SL 调到 3.0 的"更好表现"会被误当成真实 edge 锁死。自进化系统必须把对拍做成不可绕过的关卡，而不是事后校验。</p></div>
+
+<h2>4. 版本治理与知识沉淀</h2>
+<ul>
+<li><b>冻结参数表带版本号</b>（V5X.1 → V5X.2 …），每次重锁在 <code>fusion_v5x_spec.html</code> 写勘误段，记录变更前后值与通过/未通过的护栏。</li>
+<li><b>策略变体登记册：</b>分支/合并可追溯。新门控（如把 M5 幅度门换成方向过滤）须作为独立变体先跑 holdout，不得直接覆盖基线。</li>
+<li><b>教训库自动化：</b>把项目记忆里的 19+ 条量化纪律转成 <code>relock_checklist</code>，重锁前逐项打勾，新事故追加新条目。</li>
+</ul>
+
+<h2>5. 绝不能做的事（风险边界）</h2>
+<div class="card red">
+<ol>
+<li><b>不要让系统自动 overwrite 生产参数。</b>Governor 默认 <code>--dry-run</code>，只产出"建议 + 护栏报告"，人工确认后才写三源。</li>
+<li><b>不要在单一样本内做"无限重扫"。</b>重扫必须 walk-forward，且护栏 ②③④ 缺一不可。</li>
+<li><b>不要碰 alpha 的"自动搜索新因子"。</b>新因子进入必须经过完整 OOS + 多网格 + 多品种交叉，禁止自进化系统自行引入未审计因子。</li>
+<li><b>不要把在线体制学习误当成预测。</b>它只分配风险预算、不预测方向，避免引入前视。</li>
+</ol>
+</div>
+
+<h2>6. 落地路线（第一版建议）</h2>
+<table>
+<tr><th>阶段</th><th>交付物</th><th>风险</th><th>依赖</th></tr>
+<tr><td>1. 护栏 harness</td><td><code>v5x_relock_guard.py</code>：封装 ①self_check ②OOS ③指纹 ④前视 四检</td><td>低</td><td>已有 self_check + step73/74</td></tr>
+<tr><td>2. Governor 编排</td><td><code>v5x_governor.py</code>：漂移监控 → 触发重扫 → 调 guard → dry-run 报告</td><td>低</td><td>阶段1</td></tr>
+<tr><td>3. 在线体制层</td><td>引擎内 <code>RegimeEstimator</code>（三态 HMM），驱动 P2 门控与仓位缩放</td><td>中</td><td>需体制标注数据</td></tr>
+<tr><td>4. 调度接入</td><td>recurring automation：周期重扫 + 漂移唤醒</td><td>低</td><td>阶段2/3</td></tr>
+<tr><td>5. 版本治理</td><td>冻结表版本化 + 勘误自动写入 + 变体登记册</td><td>低</td><td>阶段2</td></tr>
+</table>
+
+<h2>7. 开放问题（已定夺的部分）</h2>
+<ul>
+<li><b>落地确认方式：</b>已定——默认 dry-run 出报告；落地需 <code>--apply --confirm</code> 双层确认，且 4 关全过才写三源。<b>绝不自动 overwrite 生产参数</b>。</li>
+<li><b>体制标注数据来源：</b>已定双轨——离线用 <code>bar_60m_ba</code> 标定分位阈值（<code>v5x_regime.calibrate_to_csv</code>），上线后用 <code>OnlineRegime</code> 轻量实时分类；体制注入引擎默认关闭（<code>REGIME_P2_AUTO/REGIME_POS_SCALE=False</code>），保证基线对拍不变。</li>
+<li><b>重扫窗口粒度：</b>待定（1 月 vs 1 季）——由未来月度巡检的 drift 频率反推。</li>
+</ul>
+
+<h2>8. 迭代一已实现（2026-10-22）</h2>
+<table>
+<tr><th>模块</th><th>文件</th><th>状态</th><th>验证</th></tr>
+<tr><td>四道硬护栏 harness</td><td><code>v5x_relock_guard.py</code></td><td>已实现</td><td>干跑全过；白名单外参数被 ④ 拒绝（REJECTED）</td></tr>
+<tr><td>Governor 编排 + 漂移监控</td><td><code>v5x_governor.py</code></td><td>已实现</td><td>候选=当前→PROPOSED；含 --apply/--confirm 双层落地（默认不触发）</td></tr>
+<tr><td>在线体制层（非破坏）</td><td><code>v5x_regime.py</code> + 引擎钩子</td><td>已实现（默认关）</td><td>引擎加 <code>REGIME_P2_AUTO/REGIME_POS_SCALE</code> 钩子后 <code>self_check</code> 仍 PASS（逐笔偏差 0）</td></tr>
+<tr><td>版本治理</td><td><code>v5x_changelog.json</code> + 规格勘误</td><td>已实现</td><td>勘误安全插入 <code>&lt;/body&gt;</code> 前（临时副本验证）；每次运行追加变更日志</td></tr>
+<tr><td>月度调度</td><td>recurring automation</td><td>已建立</td><td>每月 1 日 09:00 跑 governor dry-run，仅监控+评估，绝不落地</td></tr>
+</table>
+<div class="card bd"><p style="margin:0"><b>安全主干验证结果：</b>给 <code>fusion_v5x_engine.py</code> 加体制钩子后，<code>self_check()</code> 对 MA888(17笔)/RB888(335笔) 仍 <b>逐笔偏差 0 → PASS</b>。证明体制层以"默认关闭 + 注入式钩子"接入，不破坏已验证基线。</p></div>
+
+<h2>9. 迭代二已实现（2026-10-22 晚）：受控落地分支 apply_to_sources</h2>
+<p>迭代一仅做到 PROPOSED dry-run，源字面量改写留作人工 commit。本迭代把 <code>v5x_governor.apply_to_sources()</code> 补全为<b>真实但受控</b>的落地执行分支：</p>
+<table>
+<tr><th>环节</th><th>实现</th></tr>
+<tr><td>备份</td><td>落地前先备份四件产物：<code>step46_prod_bt.py</code> / <code>fusion_v5x_engine.py</code> / <code>trades46_V5X.csv</code> / <code>results_step46.json</code>（<code>.bak_apply_{ts}_*</code>）</td></tr>
+<tr><td>精确改写</td><td>对 step46 三行全局量 + 引擎 6 个 V5XConfig 字段做 <code>re.sub</code> 数值替换，<b>仅改数值字面、保留注释尾</b>；每条规则必须命中恰好 1 次，否则视为结构漂移 → 中止回滚</td></tr>
+<tr><td>无变化不落盘</td><td>用 <code>newline=''</code> 保留原始换行符；文本未变则跳过写盘，避免污染 git diff</td></tr>
+<tr><td>回测再生</td><td>改写后重跑 <code>step46 V5X</code> 再生 trades46_V5X.csv / results_step46.json（与引擎新参数一致）</td></tr>
+<tr><td>终极护栏</td><td>再跑引擎 <code>self_check()</code>：逐笔对拍必须 PASS，否则<b>全量回滚备份</b>并抛错——保证三源恒对齐</td></tr>
+<tr><td>非重锁短路</td><td>候选 == 当前冻结值时直接 ALREADY-CURRENT，不写规格勘误、不 bump 版本、不污染变更日志</td></tr>
+</table>
+<div class="card bd"><p style="margin:0"><b>验证：</b>① 候选=当前（no-op）跑 <code>apply_to_sources</code> → 9 条替换各命中 1 次、两源文件字节零漂移、<code>self_check</code> PASS、备份清理；② 全链 <code>--apply --confirm</code> + 候选=当前 → 命中 ALREADY-CURRENT 短路，规格/版本未被污染（变更日志仍停 V5X.1）。</p></div>
+
+<p class="foot">本设计直接复用了本项目已验证的工程主干（三源逐笔对拍）与 19+ 条量化纪律。核心命题：<b>让系统"学"，但永远不让它绕开对拍这道关。</b></p>
+</div>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# === 原始行情数据（勿提交：kline_encoding 共 6.3GB 1m/5m/15m 导出） ===
+kline_encoding/*_raw.csv
+kline_encoding/*_1m_raw.csv
+kline_encoding/*_5m_encoded_raw.csv
+kline_encoding/*_15m_encoded_raw.csv
+kline_encoding/*_encoded_raw.csv
+kline_encoding/*_encoded.csv
+kline_encoding/*_1m_encoded*.csv
+kline_encoding/_sym1m/
+kline_encoding/prod50/
+# 价格级原始导出（按品种×年份）
+kline_encoding/[A-Z]*_[0-9]*_1m_raw.csv
+kline_encoding/[A-Z]*_[0-9]*_[0-9]*_1m_raw.csv
+
+# === 备份 / 中间产物 ===
+kline_encoding/*.bak
+kline_encoding/.bak_*
+*.bak
+*.bak_*
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# === 大二进制 / 数据库 ===
+*.parquet
+*.db
+*.sqlite
+*.gz
+*.zip
+# 模型权重 / 数据 pickle / kronos 工作区（下载产物，非源码）
+*.safetensors
+*.pkl
+kronos_work/
+# 大型回测成交导出（可经 step46 再生；保留 V5X 自检参考）
+kline_encoding/trades46_*.csv
+kline_encoding/trades_ths_*.csv
+!kline_encoding/trades46_V5X.csv
+
+# === 工作区工具态 ===
+.workbuddy/
+
+# === 编辑器 ===
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,63 @@
+<svg viewBox="0 0 680 340" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">形状向量 PCA：一根K线在特征空间里是几维物体 — MA</text>
+<text x="40.0" y="46.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">输入=标准化后的(涨跌幅,振幅,CLV,上影,下影)，30万根随机样本</text>
+<rect x="56" y="75.5" width="40" height="164.5" rx="3" fill="#6E5FB8"/>
+<text x="76.0" y="69.5" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">39.2%</text>
+<text x="76.0" y="256.0" font-size="9.5" fill="#888780" text-anchor="middle" font-weight="400">PC1</text>
+<rect x="106" y="142.0" width="40" height="98.0" rx="3" fill="#A397D2"/>
+<text x="126.0" y="136.0" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">23.3%</text>
+<text x="126.0" y="256.0" font-size="9.5" fill="#888780" text-anchor="middle" font-weight="400">PC2</text>
+<rect x="156" y="153.8" width="40" height="86.2" rx="3" fill="#CFC6E6"/>
+<text x="176.0" y="147.8" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">20.5%</text>
+<text x="176.0" y="256.0" font-size="9.5" fill="#888780" text-anchor="middle" font-weight="400">PC3</text>
+<rect x="206" y="179.1" width="40" height="60.9" rx="3" fill="#CFC6E6"/>
+<text x="226.0" y="173.1" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">14.5%</text>
+<text x="226.0" y="256.0" font-size="9.5" fill="#888780" text-anchor="middle" font-weight="400">PC4</text>
+<rect x="256" y="229.6" width="40" height="10.4" rx="3" fill="#F6F4EE"/>
+<text x="276.0" y="223.6" font-size="9.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">2.5%</text>
+<text x="276.0" y="256.0" font-size="9.5" fill="#888780" text-anchor="middle" font-weight="400">PC5</text>
+<line x1="46" y1="240" x2="330" y2="240" stroke="#D3D1C7"/>
+<text x="56.0" y="276.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="600">PC1+PC2+PC3 = 83% 方差</text>
+<text x="428.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">PC1</text>
+<text x="484.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">PC2</text>
+<text x="540.0" y="62.0" font-size="10" fill="#5F5E5A" text-anchor="middle" font-weight="400">PC3</text>
+<text x="392.0" y="94.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">涨跌幅</text>
+<rect x="400" y="70" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.67"/>
+<text x="427.0" y="94.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">-0.42</text>
+<rect x="456" y="70" width="54" height="38" rx="4" fill="#8C4FA1" fill-opacity="0.85"/>
+<text x="483.0" y="94.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">+0.73</text>
+<rect x="512" y="70" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.04"/>
+<text x="539.0" y="94.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.02</text>
+<text x="392.0" y="134.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">振幅</text>
+<rect x="400" y="110" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.02"/>
+<text x="427.0" y="134.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.01</text>
+<rect x="456" y="110" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.06"/>
+<text x="483.0" y="134.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">-0.04</text>
+<rect x="512" y="110" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.85"/>
+<text x="539.0" y="134.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">-0.95</text>
+<text x="392.0" y="174.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">CLV</text>
+<rect x="400" y="150" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.85"/>
+<text x="427.0" y="174.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">-0.68</text>
+<rect x="456" y="150" width="54" height="38" rx="4" fill="#8C4FA1" fill-opacity="0.22"/>
+<text x="483.0" y="174.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.14</text>
+<rect x="512" y="150" width="54" height="38" rx="4" fill="#8C4FA1" fill-opacity="0.00"/>
+<text x="539.0" y="174.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.00</text>
+<text x="392.0" y="214.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">上影</text>
+<rect x="400" y="190" width="54" height="38" rx="4" fill="#8C4FA1" fill-opacity="0.68"/>
+<text x="427.0" y="214.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">+0.42</text>
+<rect x="456" y="190" width="54" height="38" rx="4" fill="#8C4FA1" fill-opacity="0.76"/>
+<text x="483.0" y="214.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">+0.47</text>
+<rect x="512" y="190" width="54" height="38" rx="4" fill="#8C4FA1" fill-opacity="0.30"/>
+<text x="539.0" y="214.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.19</text>
+<text x="392.0" y="254.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">下影</text>
+<rect x="400" y="230" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.67"/>
+<text x="427.0" y="254.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">-0.42</text>
+<rect x="456" y="230" width="54" height="38" rx="4" fill="#2F7E7A" fill-opacity="0.76"/>
+<text x="483.0" y="254.0" font-size="9.5" fill="#FFFFFF" text-anchor="middle" font-weight="400">-0.47</text>
+<rect x="512" y="230" width="54" height="38" rx="4" fill="#8C4FA1" fill-opacity="0.37"/>
+<text x="539.0" y="254.0" font-size="9.5" fill="#26215C" text-anchor="middle" font-weight="400">+0.23</text>
+<text x="400.0" y="292.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">PC1=收盘位置轴  PC2=方向轴</text>
+<text x="400.0" y="308.0" font-size="10" fill="#26215C" text-anchor="start" font-weight="600">PC3=大小轴（振幅独占）</text>
+<text x="400.0" y="328.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">六位码 = PC2的1比特 + PC1的2比特</text>
+<text x="400.0" y="342.0" font-size="9.5" fill="#C4372E" text-anchor="start" font-weight="600">          + PC3的 0 比特（幅度被丢掉）</text>
+</svg>

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>融合策略 V5X · 程序化执行说明书</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#fff;--ink:#1f2329;--sub:#5c6470;--line:#e3e6eb;
+        --red:#d43030;--green:#0e9f6e;--blue:#2563eb;--amber:#b45309;--purple:#7c3aed;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.75 "Microsoft YaHei","PingFang SC",sans-serif;}
+  .wrap{max-width:1060px;margin:0 auto;padding:32px 24px 80px}
+  h1{font-size:26px;margin:0 0 6px}
+  h2{font-size:20px;margin:44px 0 14px;padding-left:12px;border-left:4px solid var(--blue)}
+  h3{font-size:16.5px;margin:26px 0 8px}
+  .sub{color:var(--sub);font-size:13.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:18px 22px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  table{border-collapse:collapse;width:100%;font-size:13.5px;margin:10px 0}
+  th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+  th{background:#eef2f7;font-weight:600}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .up{color:var(--red);font-weight:600}
+  .dn{color:var(--green);font-weight:600}
+  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;margin-right:6px}
+  .t-adopt{background:#fde8e8;color:var(--red)}
+  .t-reject{background:#e6f4ee;color:var(--green)}
+  .t-env{background:#eef2ff;color:var(--blue)}
+  .formula{background:#f2f4f8;border:1px solid var(--line);border-radius:6px;
+           padding:10px 14px;font-family:Consolas,"Courier New",monospace;font-size:13px;
+           overflow-x:auto;white-space:pre;margin:8px 0}
+  .why{background:#fffbf0;border-left:3px solid var(--amber);padding:8px 14px;
+       margin:8px 0;font-size:13.5px;color:#5c4a1a}
+  .risk{background:#fdf2f2;border-left:3px solid var(--red);padding:8px 14px;margin:8px 0;font-size:13.5px}
+  .ok{background:#f0f9f4;border-left:3px solid var(--green);padding:8px 14px;margin:8px 0;font-size:13.5px}
+  code{background:#eef1f5;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi .v{font-size:22px;font-weight:700}
+  .kpi .k{font-size:12.5px;color:var(--sub)}
+  ol,ul{padding-left:22px}
+  li{margin:3px 0}
+  .toc a{color:var(--blue);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>融合策略 V5X · 程序化执行说明书</h1>
+<div class="sub">版本冻结 2026-10-18 ｜ <b>参数重锁 2026-10-22（无 bug 代码全量扫描最优）</b> ｜ 语义与 step46_prod_bt.py（V5X 变体）逐位对齐 ｜ 参考实现 fusion_v5x_engine.py（自检 PASS）｜ 本文不改动生产环境</div>
+<div class="risk" style="margin-top:10px"><b>勘误（2026-10-18 23:55）：</b>发现 step46 回测的 NaN-ATR 僵尸仓 bug（25 品种 60m 数据有 NaN 洞 → 手写 ATR 递推永久污染 → 止损恒 NaN → 6 笔持仓 1.4~8 年的僵尸单合计 −27.1 万，并封锁对应品种后续开仓）。引擎已修复（NaN 跳过+进场断言）。<b>干净口径 V5X：净利 204.2 万 / PF 1.216 / MAR 4.54 / holdout +73.0 万</b>（本页下文 134.0 万等绝对数为旧口径，方向性结论不变）。详见 winrate_report.html。</div>
+<div class="risk" style="margin-top:10px; border-color:#b45309"><b>重锁勘误（2026-10-22）：</b>上轮 NaN-ATR 修复后参数扫描中又发现 <b>空头吊灯止损误用 SL_ATR（应为 TRAIL_ATR）</b> 的 bug——旧参数 SL=2=TRAIL=2 时该 bug 隐形，改 SL=3 后 step46 与引擎在 self_check 中分叉暴露。已修复（空头吊灯改用 TRAIL_ATR），step46 与 fusion_v5x_engine 现 <b>SELF-CHECK: PASS（逐笔偏差 0）</b>。故此前基于 bug 代码锁定的参数（SL3/TR2/BE1/CD1）结论作废；在无 bug 代码上重扫，<b>最优重锁 = SL1.5 / TRAIL3.0 / BE1.0 / CD7 / AL2 / AT1.5</b>。<b>重锁版 V5X：净利 +251.8 万 / PF 1.280 / MAR 7.50 / holdout +82.3 万（6703 笔）</b>，较旧锁定（SL3/TR2）净利 +47.6 万、MAR 4.54→7.50。该重锁（SL1.5/TR3.0）已被 2026-10-22 晚的 <b>V5X.2 自进化重锁（SL1.75/TR2.0）</b> 进一步优化，MAR 升至 8.49，见文末 V5X.2 勘误。</div>
+
+<!-- ================================================== -->
+<h2>0. 一页总览</h2>
+<div class="grid">
+  <div class="kpi"><div class="v">6,744 笔</div><div class="k">56 品种 · 2015–2026 总成交（基线 25,704 笔的 26%）</div></div>
+  <div class="kpi"><div class="v up">+134.0 万</div><div class="k">净利润（固定 1 手口径，真实费率+滑点）</div></div>
+  <div class="kpi"><div class="v">PF 1.223</div><div class="k">盈亏比（基线 1.026）</div></div>
+  <div class="kpi"><div class="v">MAR 2.25</div><div class="k">净利 / 最大回撤 59.6 万（基线 0.88）</div></div>
+  <div class="kpi"><div class="v up">+19.2 万</div><div class="k">2026 holdout（195 笔，PF 1.22，未参与任何调参）</div></div>
+  <div class="kpi"><div class="v">24.3%</div><div class="k">胜率（趋势跟踪型：低胜率、高盈亏比，平均单笔 +0.068R）</div></div>
+</div>
+
+<div class="card">
+<b>策略一句话：</b>在 60 分钟 K 线上，用 EMA140 定方向，等价格回踩 EMA20（斐波那契汇流确认）或突破前 10 根高低点进场，然后用五道从研究中实证出来的「过滤器」把不值得做的行情全部挡掉——高波动的日子不做、化工链不追突破、尾盘不开仓、MACD 柱反着来的回踩不做、会员大户没有明显倾向时不做。进场后 1.75 倍 ATR 初始止损，赚够 1 个 ATR 就把止损抬到保本，之后用 2.0 倍 ATR 吊灯止损跟着趋势走，最多加一次码。
+<br><br>
+<b>它赚钱的方式不是「预测方向」，而是「只在赔率有利的天气里出海」：</b>方向信号本身（基线）11 年只有 +52 万、PF 1.03，几乎不赚钱；全部超额收益来自五道门控砍掉 74% 的交易。这一点决定了实盘守则的核心——<b>门控规则一条都不能擅自放松</b>。
+</div>
+
+<table>
+<tr><th>变体</th><th class="num">笔数</th><th class="num">胜率</th><th class="num">PF</th><th class="num">净利(元)</th><th class="num">最大回撤(元)</th><th class="num">MAR</th><th class="num">holdout 净利</th><th>说明</th></tr>
+<tr><td>BASE（无门控）</td><td class="num">25,704</td><td class="num">22.1%</td><td class="num">1.026</td><td class="num">519,673</td><td class="num">-591,136</td><td class="num">0.88</td><td class="num">382,610</td><td>原始 V3.4 引擎</td></tr>
+<tr><td>V4X（P2+P4+P6）</td><td class="num">18,699</td><td class="num">22.1%</td><td class="num">1.054</td><td class="num">774,991</td><td class="num">-508,766</td><td class="num">1.52</td><td class="num">166,996</td><td>时段/体制门控</td></tr>
+<tr><td>+M1a（MACD柱门）</td><td class="num">14,854</td><td class="num">22.6%</td><td class="num">1.097</td><td class="num">1,173,354</td><td class="num">-484,584</td><td class="num">2.42</td><td class="num">261,630</td><td>叠加指标门</td></tr>
+<tr><td>+M5（持仓门）</td><td class="num">8,839</td><td class="num">23.6%</td><td class="num">1.175</td><td class="num">1,271,789</td><td class="num">-574,728</td><td class="num">2.21</td><td class="num">142,239</td><td>叠加持仓因子门</td></tr>
+<tr><td><b>V5X 终版（P2+P4+P6+M1a+M5）</b></td><td class="num"><b>6,744</b></td><td class="num"><b>24.3%</b></td><td class="num"><b>1.223</b></td><td class="num up"><b>1,340,409</b></td><td class="num"><b>-596,315</b></td><td class="num"><b>2.25</b></td><td class="num up"><b>191,783</b></td><td>本说明书对象</td></tr>
+</table>
+<div class="sub">稳健性：9–12 个自然年度为正；剔除净利最高的单一品种后仍 +35.8 万；M5 阈值 0.5/1.0/1.5 → 135/148/94 万，1.0 是甜点而非孤峰；M5 反向对照（只在 |z|&lt;1 开仓）−49.2 万，证明信息含量为真。</div>
+
+<div class="toc card"><b>目录</b>：
+<a href="#d">① 数据契约</a> · <a href="#arch">② 五层架构</a> · <a href="#sig">③ 信号层</a> ·
+<a href="#gate">④ 门控层（核心）</a> · <a href="#exec">⑤ 执行层</a> · <a href="#param">⑥ 参数总表</a> ·
+<a href="#sop">⑦ 实盘运行 SOP 与停机条件</a> · <a href="#risk">⑧ 已知局限</a> · <a href="#verify">⑨ 一致性验证</a></div>
+
+<!-- ================================================== -->
+<h2 id="d">① 数据契约：引擎每天/每根需要什么</h2>
+<div class="card">
+<table>
+<tr><th>数据</th><th>用途</th><th>频率</th><th>关键纪律</th></tr>
+<tr><td>60m 后复权主连 K 线（OHLCV）</td><td>信号计算 + 盈亏记账</td><td>每根收盘</td><td>信号与盈亏必须同一复权口径，否则止损位失真</td></tr>
+<tr><td>60m 原始价（不复权）</td><td>手续费/保证金计算</td><td>每根收盘</td><td>PCT 费率 = fee_value‱ × 原始价 × 乘数</td></tr>
+<tr><td>主连日线（OHLC）</td><td>P2 高波日判定、簇冲击、交易日历</td><td>每日收盘后</td><td>当日判定只用 <b>T−1 及以前</b> 的日线（shift(1)）</td></tr>
+<tr><td>官方交易日历</td><td>夜盘归属：<b>≥18:00 的 bar 归次一交易日</b></td><td>静态</td><td>日历外日期用 searchsorted 就近归并</td></tr>
+<tr><td>dim_trading_cost 费率字典</td><td>OPEN / CLOSE_TODAY / CLOSE_YEST 三动作费率 + slip_ticks</td><td>交易所发文时更新</td><td>取 effective_to 为空的现行档；平今与平昨必须分开</td></tr>
+<tr><td>factor_value.member_net_z（会员净持仓 z 分数）</td><td>M5 门控</td><td>每日</td><td><b>available_at 滞后纪律</b>：只能用 available_at ≤ 当根交易日的值；NaN（无数据）放行</td></tr>
+<tr><td>簇映射表 CLUSTER（56 品种→17 板块）</td><td>P4 适用范围、簇冲击封禁</td><td>静态</td><td>上市新品种须先入表再上线</td></tr>
+</table>
+<div class="risk"><b>预热纪律（两道）：</b>① 品种上市/数据起点后 <b>200 个自然日</b>内不开仓（对齐生产 sym_cut）；② 每个品种前 <b>30 根</b> bar 不开仓（EMA140/ADX 预热）。两道同时满足才允许出信号。</div>
+</div>
+
+<!-- ================================================== -->
+<h2 id="arch">② 五层架构</h2>
+<div class="card">
+<svg viewBox="0 0 1000 240" width="100%" style="background:#fbfcfe;border-radius:8px">
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#64748b"/></marker></defs>
+  <!-- layer boxes -->
+  <g font-family="Microsoft YaHei" font-size="13">
+    <rect x="20" y="60" width="170" height="120" rx="10" fill="#eef2ff" stroke="#2563eb"/>
+    <text x="105" y="82" text-anchor="middle" font-weight="bold" fill="#1e3a8a">① 数据层</text>
+    <text x="105" y="106" text-anchor="middle" fill="#334155">60m 复权/原始价</text>
+    <text x="105" y="126" text-anchor="middle" fill="#334155">日线 / 交易日历</text>
+    <text x="105" y="146" text-anchor="middle" fill="#334155">费率 / member_z</text>
+    <text x="105" y="166" text-anchor="middle" fill="#b45309">T−1 滞后纪律</text>
+
+    <rect x="220" y="60" width="170" height="120" rx="10" fill="#f5f3ff" stroke="#7c3aed"/>
+    <text x="305" y="82" text-anchor="middle" font-weight="bold" fill="#4c1d95">② 信号层</text>
+    <text x="305" y="106" text-anchor="middle" fill="#334155">EMA140 定方向</text>
+    <text x="305" y="126" text-anchor="middle" fill="#334155">EMA20 回踩+斐波</text>
+    <text x="305" y="146" text-anchor="middle" fill="#334155">10 根突破</text>
+    <text x="305" y="166" text-anchor="middle" fill="#334155">ADX≥15 门</text>
+
+    <rect x="420" y="60" width="190" height="120" rx="10" fill="#fde8e8" stroke="#d43030"/>
+    <text x="515" y="82" text-anchor="middle" font-weight="bold" fill="#7f1d1d">③ 门控层（alpha）</text>
+    <text x="515" y="104" text-anchor="middle" fill="#334155">P2 高波日 · P6 尾盘</text>
+    <text x="515" y="122" text-anchor="middle" fill="#334155">P4 化工只回踩</text>
+    <text x="515" y="140" text-anchor="middle" fill="#334155">M1a MACD柱同号</text>
+    <text x="515" y="158" text-anchor="middle" fill="#334155">M5 |z|≥1.0 · 簇冲击</text>
+    <text x="515" y="176" text-anchor="middle" fill="#7f1d1d">砍掉 74% 交易</text>
+
+    <rect x="640" y="60" width="160" height="120" rx="10" fill="#ecfdf5" stroke="#0e9f6e"/>
+    <text x="720" y="82" text-anchor="middle" font-weight="bold" fill="#065f46">④ 执行层</text>
+    <text x="720" y="106" text-anchor="middle" fill="#334155">收盘确认→次根市价</text>
+    <text x="720" y="126" text-anchor="middle" fill="#334155">真实费率+滑点</text>
+    <text x="720" y="146" text-anchor="middle" fill="#334155">加码 ≤2 手</text>
+    <text x="720" y="166" text-anchor="middle" fill="#334155">冷却 7 根</text>
+
+    <rect x="830" y="60" width="150" height="120" rx="10" fill="#fffbeb" stroke="#b45309"/>
+    <text x="905" y="82" text-anchor="middle" font-weight="bold" fill="#78350f">⑤ 风控层</text>
+    <text x="905" y="106" text-anchor="middle" fill="#334155">1.75ATR 初始止损</text>
+    <text x="905" y="126" text-anchor="middle" fill="#334155">2.0ATR 吊灯</text>
+    <text x="905" y="146" text-anchor="middle" fill="#334155">1.0ATR 保本</text>
+    <text x="905" y="166" text-anchor="middle" fill="#334155">kill switch</text>
+  </g>
+  <g stroke="#64748b" stroke-width="1.6">
+    <line x1="190" y1="120" x2="218" y2="120" marker-end="url(#ar)"/>
+    <line x1="390" y1="120" x2="418" y2="120" marker-end="url(#ar)"/>
+    <line x1="610" y1="120" x2="638" y2="120" marker-end="url(#ar)"/>
+    <line x1="800" y1="120" x2="828" y2="120" marker-end="url(#ar)"/>
+  </g>
+</svg>
+<div class="sub">判断顺序有严格先后：<b>每根 bar 先维护枢轴点 → 冷却递减 → 检查离场 → 检查进场 → 检查加码</b>。进场成功的当根不再加码；平仓当根冷却置 7，冷却期内不得开仓。</div>
+</div>
+
+<!-- ================================================== -->
+<h2 id="sig">③ 信号层：什么形态可以进场</h2>
+
+<h3>3.1 方向过滤（唯一允许的方向）</h3>
+<div class="formula">dir[t] = sign(close[t-1] − EMA140(close)[t-1])      ← 用【前一根】的方向
+做多只允许 dir ≥ 0，做空只允许 dir ≤ 0</div>
+<div class="why"><b>为什么用前一根：</b>防止当根收盘自己同时决定「方向」和「触发」造成自我强化；也用前一根保证了无前视。EMA140（≈1 个月）是生产引擎的既定口径，方向层调快被实证不改善入场时点（研究结论 18：「晚的是确认不是方向」）。</div>
+
+<h3>3.2 回踩支路（Pullback，主力支路）</h3>
+<div class="formula">多头四条件（同时成立，价格均为当根收盘/高低）：
+  ① dir ≥ 0（方向允许多）
+  ② 上穿：close[t] &gt; EMA20[t] 且 close[t-1] &lt; EMA20[t-1]
+  ③ 触及：low[t] ≤ EMA20[t]            ← 本根真的回踩过均线
+  ④ 斐波汇流：取最近 60 根内最后一个枢轴低点 PL，
+     腿 = PL 到其后最高点 SH 的幅度 leg = high[SH] − low[PL]（要求索引距 ≥2 且 leg&gt;0）
+     要求 low[t] 落在 {SH − r×leg | r ∈ 0.382/0.5/0.618} 之一 ± 0.5×ATR14 内
+空头完全镜像（下穿 + 触及 + 自枢轴高点的反弹位汇流）</div>
+<div class="why"><b>白话：</b>上涨趋势里，价格跌回 20 小时均线、且恰好跌在上一段涨幅的 38.2%–61.8%「黄金回撤区」，才认为这是一次「健康的回调结束」，此时顺大势买入。研究依据：「买回调本身（不等确认）净利 −30.6%」——所以必须等到「重新站上均线」这一确认动作，<b>等确认本身就是 edge</b>（研究结论 18）。</div>
+
+<h3>3.3 突破支路（Breakout，非化工品种适用）</h3>
+<div class="formula">多头：dir ≥ 0 且 close[t] &gt; max(high[t-10 … t-1]) 且 close[t] &gt; open[t]（阳线）
+空头镜像。前 10 根不含当根。</div>
+<div class="why"><b>为什么化工链禁用这条支路（P4）：</b>审查发现化工池（聚酯/聚烯烃/两碱/醇醚）的突破单毛利为负——化工品种假突破多、趋势延续性差。所以 V5X 中这四条链<b>只做回踩</b>，其余板块（黑色/有色/贵金属/农产品等）双支路都允许。</div>
+
+<h3>3.4 ADX 趋势强度门</h3>
+<div class="formula">ADX14[t-1] ≥ 15 才允许任何进场（前一根口径）
+注：本策略 ADX 内部用 EMA(span=14) 递推（非 Wilder），前 28 根输出 0 —— 与生产引擎一致，不要随意「修正」</div>
+<div class="why">ADX&lt;15 的震荡市里，回踩和突破都容易被双向打脸。15 是生产策略既定参数，未在本轮研究中重调。</div>
+
+<!-- ================================================== -->
+<h2 id="gate">④ 门控层：五道过滤器（本策略的 alpha 来源）</h2>
+<div class="card">
+<div class="sub">优先级按下列顺序依次判定，任一触发则信号作废（sig→0）。所有门控都只用 ≤ 当根收盘可得的信息。</div>
+
+<h3>P2 · 高波日禁开仓 <span class="tag t-adopt">采纳</span></h3>
+<div class="formula">hvol(td) = 1{ 昨日振幅 &gt; 250 日振幅序列的 80 分位 }（滚动窗 min_periods=60，shift(1)）
+hvol=1 的交易日，全天（含夜盘归属日）禁止新开仓；已有持仓的止损/吊灯照常运行</div>
+<div class="why"><b>证据：</b>策略审查发现高波日入场的 903 笔合计亏 −100.7 万。高波日的回踩/突破多数是情绪尖峰而非趋势启动，止损 2ATR 在高波日等于把止损放在噪声带里。数学依据：波动是聚类的体制变量（HMM 三态），高波体制下该策略的入场边缘为负。<b>例外纪律：</b>只禁「新开仓」，不强制平掉旧仓——旧仓有自己的止损管理。</div>
+
+<h3>P4 · 化工链只回踩 <span class="tag t-adopt">采纳</span></h3>
+<div class="formula">CLUSTER(品种) ∈ {聚酯, 聚烯烃, 两碱, 醇醚} ⇒ 突破支路信号强制作废
+涉及 15 个品种：TA PX PF PR / PP L V EB / FG SA SH / MA EG UR</div>
+<div class="why"><b>证据：</b>化工池突破支路毛利为负（剔除单品种 IF 后 −13.4 万）；化工品种受原油夜盘与产业套保盘影响，小时级突破多为假动量。扩展到全部能化（P4E）反而稀释收益，故保持原四条链。</div>
+
+<h3>P6 · 尾盘根不开仓 <span class="tag t-adopt">采纳</span></h3>
+<div class="formula">sess_last = 日盘 14:00 根 ∪ 夜盘收盘前最后一根完整小时（按品种夜盘时长自适应，SC 等跨零点品种已处理）
+落在会话末根的信号作废</div>
+<div class="why"><b>证据：</b>尾盘入场紧跟着长休市，隔夜跳空风险全额暴露且无法用日内止损响应；尾盘成交清淡，收盘价易被尾盘单扭曲（第二章「极端收盘回拉只值 1.3bp」的另一面）。注意只禁末根，早盘根（B2）经检验不禁。</div>
+
+<h3>M1a · MACD 柱同号门（仅回踩支路）<span class="tag t-adopt">采纳</span></h3>
+<div class="formula">hist[t-1] = 2×(DIF−DEA)，DIF=EMA12−EMA26，DEA=EMA9(DIF)
+回踩做多要求 hist[t-1] ≥ 0；回踩做空要求 hist[t-1] ≤ 0。突破支路不适用此门。</div>
+<div class="why"><b>证据（59 品种全市场口径）：</b>KDJ 金叉但 MACD 柱仍绿（hist&lt;0）的多单，胜率低 12.5 个百分点；镜像的空单低 12.6pp；48/49 个品种方向一致。机制（心理学依据）：回踩进场的本质是赌「回调已结束」，而 MACD 柱还在反方向说明动能尚未扭转——你是在接一把还在下落的刀。反向对照（要求柱反号才做）显著更差，证明信息为真。只用于回踩支路是因为突破支路的逻辑恰恰是「动能刚启动」，柱滞后不适用。</div>
+
+<h3>M5 · 会员净持仓强度门 <span class="tag t-adopt">采纳</span></h3>
+<div class="formula">z = member_net_z（最新 available_at ≤ 当根交易日的值；严格滞后，NaN 放行）
+|z| ≥ 1.0 才允许开仓；方向不设要求（M5b 方向一致版无增量，未采纳）
+阈值敏感性：0.5 → 135 万；1.0 → 148 万（单因子口径）；1.5 → 94 万 ⇒ 1.0 为甜点</div>
+<div class="why"><b>证据：</b>单因子 M5 全市场 MAR 4.67（全部变体中最高）；反向对照（只在 |z|&lt;1 开仓）−49.2 万。机制（社会学依据）：会员席位净持仓是产业资本与大户的「真金白银投票」，z 分数衡量其偏离常态的程度；|z| 大说明知情资金立场鲜明，此时技术信号与之共振的胜率显著更高。注意 V5X 采纳的是<b>强度门而非方向门</b>——大户绝对立场鲜明的「天气」比立场方向本身更稳定（方向版 M5b 无增量）。</div>
+
+<h3>簇冲击日封禁 <span class="tag t-env">环境基线</span></h3>
+<div class="formula">对 17 个板块各算「簇等权日收益」r_cl(td)，冲击日 = { |r_cl| &gt; 3×σ_250d }
+冲击日当日该簇全部品种禁止新开仓</div>
+<div class="why"><b>依据：</b>第二章证实跨品种共尾真实量级 2–4× 且是体制变量——簇冲击日就是共尾兑现日，此时簇内任何「独立信号」都是同一个宏观冲击的回声，分散是错觉。此规则在 BASE 与所有变体中一致生效，属策略环境而非增量门控。</div>
+
+<h3>被否决的门（不要重新加回来）</h3>
+<table>
+<tr><th>候选</th><th>结论</th><th>否决理由</th></tr>
+<tr><td>M2 KDJ 位置门（K&gt;80 禁追多等）</td><td><span class="tag t-reject">否决</span></td><td>正向反向都赚钱 ⇒ 无信息含量，只是随机砍交易</td></tr>
+<tr><td>M3 放量突破门（量≥1.5×20根中位量）</td><td><span class="tag t-reject">否决</span></td><td>全市场证据≈0；量价 IC 0.055 太弱，砍掉的单子与留下的无差异</td></tr>
+<tr><td>M1b 精确「金叉遇绿柱」事件版</td><td><span class="tag t-reject">否决</span></td><td>与 M1a 高度重叠但样本更碎，无增量</td></tr>
+<tr><td>P3 簇并发持仓 ≤2</td><td><span class="tag t-reject">否决（翻案）</span></td><td>修复 sym↔簇键 bug 后重测：52→24 万，拦掉的恰是 AU/J 等龙头盈利单——共尾风险已由「簇冲击日封禁」覆盖</td></tr>
+</table>
+</div>
+
+<!-- ================================================== -->
+<h2 id="exec">⑤ 执行层：进场后怎么管</h2>
+<div class="card">
+<h3>5.1 进场执行</h3>
+<ul>
+<li><b>触发时点：</b>60m bar 收盘确认（所有条件按收盘价判定），订单在<b>下一根 bar 开盘</b>以市价/对手价执行。</li>
+<li><b>回测口径：</b>按信号根收盘价成交 + 双边滑点（slip_ticks×tick，每品种实测档）+ 真实费率。实盘滑点已被成本模型覆盖，预期偏差在 1 tick 内。</li>
+<li><b>首仓 1 手</b>（固定手数口径；组合层资金分配见 ⑧ 局限）。</li>
+</ul>
+<h3>5.2 止损三件套（全部以「入场根的 ATR14」e_atr 为尺子，持仓期间不重新计算）</h3>
+<div class="formula">多头（空头镜像，peak→trough，−→+）：
+初始止损  stop = avg_price − 1.75 × e_atr
+吊灯止损  stop = max(stop, peak_close − 2.0 × e_atr)     ← 只紧不松
+保本规则  一旦 close − entry_price ≥ 1.0 × e_atr，stop 抬到 entry_price（至少保本）
+触发判定  close ≤ stop ⇒ 当根收盘价离场（实盘：下一根开盘市价单）</div>
+<div class="why">设计逻辑：初始止损 1.75ATR（V5X.2 自进化重扫由 1.5 放宽至 1.75，降低噪声扫损同时保留趋势空间）；吊灯 2.0ATR 让利润奔跑（V5X.2 由 3.0 收窄至 2.0，更快锁定盈利）；1.0ATR 保本把「猜对了方向但走不远」的单子变成免费彩票。止损/保本/冷却于 2026-10-22 经持仓周期参数扫描（无 bug 代码）重锁：SL 1.5→1.75、TRAIL 3.0→2.0、BE 1.0 保持、COOLDOWN 1→7、ADD_THR 1.5 保持（见文末 V5X.2 勘误）。</div>
+<h3>5.3 阶梯加码（最多 2 手）</h3>
+<div class="formula">多头：close[t] &gt; max(high[entry … t-1])（创入场以来新高，不含当根）
+       且 close[t] − entry_price ≥ 当前手数 × 1.5 × e_atr ⇒ +1 手，均价重算
+进场当根不加码；加码后止损按新均价与新 peak 重算（e_atr 不变）</div>
+<div class="why">「浮盈够一整个 ATR 且价格创新高」才加——加码用的是市场已经证明你正确的钱，而不是摊平亏损。利弗莫尔阶梯口径，与生产一致。</div>
+<h3>5.4 冷却与节奏</h3>
+<ul>
+<li>平仓后冷却计数置 7，逐根递减，冷却期间不得新开仓。2026-10-22 曾由 3→1 缩短，经无 bug 代码全量重扫发现 COOLDOWN=7 综合最优（离场后冷却更充分、抑制过拟合噪声），故重锁为 7。</li>
+<li>数据末端仍持仓的，按最后一根收盘价强制平仓记账（回测口径）。</li>
+</ul>
+<h3>5.5 成本模型</h3>
+<div class="formula">round_cost = fee_open(入场原始价) + fee_close(离场原始价) + 2 × slip_ticks × tick
+fee_close 分 CLOSETODAY（同一交易日）/ CLOSE_YEST（隔日）两档，PCT 费率 = fee_value÷10000 × 价 × 乘数
+净盈亏 = (离场 − 均价) × 手数 × 乘数（复权价）× 方向 − round_cost × 手数</div>
+</div>
+
+<!-- ================================================== -->
+<h2 id="param">⑥ 参数总表（冻结值）</h2>
+<div class="card"><table>
+<tr><th>参数</th><th>值</th><th>层级</th><th>来源 / 敏感性</th></tr>
+<tr><td>方向 EMA</td><td>140（前一根）</td><td>信号</td><td>生产既定；研究结论 18：调快不改善入场时点</td></tr>
+<tr><td>回踩均线</td><td>EMA20</td><td>信号</td><td>生产既定</td></tr>
+<tr><td>突破窗</td><td>前 10 根（不含当根）</td><td>信号</td><td>生产既定</td></tr>
+<tr><td>ADX 门</td><td>≥15（前一根）</td><td>信号</td><td>生产既定</td></tr>
+<tr><td>斐波位 / 容差</td><td>0.382/0.5/0.618，±0.5×ATR</td><td>信号</td><td>生产既定；枢轴窗 60 根</td></tr>
+<tr><td>初始止损 / 吊灯</td><td>1.75 / 2.0 ×ATR</td><td>风控</td><td>2026-10-22 V5X.2 自进化重锁：SL 1.5→1.75、TRAIL 3.0→2.0</td></tr>
+<tr><td>保本</td><td>1.0 ×ATR</td><td>风控</td><td>2026-10-22 锁定 0.5→1.0</td></tr>
+<tr><td>加码</td><td>≤2 手，间隔 ≥手数×1.5×ATR 且创新高/低</td><td>执行</td><td>2026-10-22 锁定 1.0→1.5</td></tr>
+<tr><td>冷却 / 预热</td><td>7 根 / 200 自然日+30 根</td><td>执行</td><td>2026-10-22 无bug代码重锁 1→7</td></tr>
+<tr><td>P2 高波阈值</td><td>250 日振幅 80 分位（shift 1）</td><td>门控</td><td>70 分位档（hvol70）备选未采纳</td></tr>
+<tr><td>P4 范围</td><td>聚酯/聚烯烃/两碱/醇醚</td><td>门控</td><td>扩展版 P4E 稀释收益，否</td></tr>
+<tr><td>P6 末根</td><td>14:00 ∪ 夜盘末根（品种自适应）</td><td>门控</td><td>—</td></tr>
+<tr><td>M1a</td><td>hist[t−1] 同号，仅回踩支路</td><td>门控</td><td>all 支路版无更好；反向对照显著差</td></tr>
+<tr><td>M5 阈值</td><td>|z| ≥ 1.0，NaN 放行</td><td>门控</td><td>0.5/1.0/1.5 → 135/148/94 万；方向版无增量</td></tr>
+<tr><td>簇冲击</td><td>|簇等权日收益| &gt; 3σ(250d)</td><td>环境</td><td>—</td></tr>
+</table></div>
+
+<!-- ================================================== -->
+<h2 id="sop">⑦ 实盘运行 SOP 与停机条件</h2>
+<div class="card">
+<h3>7.1 每日盘前（T 日开盘前，全自动）</h3>
+<ol>
+<li>更新前一交易日日线 → 重算每品种 amp 与 250 日 80 分位 → 得 <code>hvol(T)</code>。</li>
+<li>重算 17 簇等权日收益与 3σ 冲击标记 → 得每品种 <code>blocked(T)</code>。</li>
+<li>拉取 <code>member_net_z</code>：取 <code>available_at ≤ T</code> 的最新值（一般为 T−1 持仓，次日上午可得）；无数据置 NaN（放行）。</li>
+<li>按交易日历计算当日各品种的会话末根小时集合（夜盘归次日）。</li>
+<li>向 56 个 SymbolEngine 分发 <code>DailyCtx</code>。</li>
+</ol>
+<h3>7.2 每根 60m bar 收盘后（全自动）</h3>
+<ol>
+<li>写入当根 OHLCV（复权+原始价）→ <code>on_bar()</code>。</li>
+<li>引擎返回订单列表：OPEN / ADD / CLOSE（含数量与原因）。</li>
+<li>下一根 bar 开盘执行；记录实际成交价与回测假设价的偏差，纳入滑点监控。</li>
+<li>持仓中每根都要重算吊灯/保本止损位（引擎内建）。</li>
+</ol>
+<h3>7.3 监控指标（每日收盘后）</h3>
+<ul>
+<li>滚动 60 笔 PF：&lt;0.8 亮黄牌，&lt;0.7 亮红牌。</li>
+<li>当月回撤 vs 历史 MDD（59.6 万，固定 1 手口径）：超过 1.5×（≈89 万）触发停机评审。</li>
+<li>单品种净利占比：TOP1 超过 40% 提示集中度风险（当前剔 TOP1 仍 +35.8 万）。</li>
+<li>数据健康：member_z 连续 5 日 NaN 的品种告警（M5 失效中）；60m bar 缺口检测。</li>
+<li>成交偏差：实盘成交价 vs 信号根收盘价的滚动均值，超 2×slip_ticks 告警。</li>
+</ul>
+<h3>7.4 停机条件（kill switch，任一触发即停止新开仓）</h3>
+<ul>
+<li>滚动 60 笔 PF &lt; 0.7；</li>
+<li>净值回撤超过历史 MDD 的 1.5 倍；</li>
+<li>费率/保证金规则重大调整未重测（成本模型过期）；</li>
+<li>member_net_z 因子数据源中断超过一周（M5 门长期失效等于换了策略）。</li>
+</ul>
+<div class="ok"><b>上线前检查清单：</b>① 引擎与回测逐位对拍通过（见 ⑨）；② 用生产组合引擎（资金分配/保证金占用层）对 V5X 信号流重跑一遍，确认组合口径净值形状一致（教训 16/19：输入口径与「已修复」声明都要自证）；③ 纸面跟踪 ≥20 个交易日，比对实盘信号与研究信号逐根一致；④ 费率档核对交易所最新公告。</div>
+</div>
+
+<!-- ================================================== -->
+<h2 id="risk">⑧ 已知局限（必须知情）</h2>
+<div class="card">
+<ol>
+<li><b>固定 1 手逐品种口径，没有组合层。</b>+134 万是 56 品种各 1 手的简单加总，不含保证金占用、资金分配与相关性约束；实际上线规模需生产组合引擎复核后才能定。</li>
+<li><b>holdout 只有 195 笔</b>（2026 年 9 个多月），PF 1.22 与训练期 1.223 几乎一致是好信号，但样本仍小，且历史最大回撤（−59.6 万）恰好发生在 holdout 段。</li>
+<li><b>胜率 24%</b> 意味着连续亏损 8–12 笔是常态。心理压力是执行风险的一部分——这正是门控条款「一条不许放松」的原因：放松门控=交易更多=更接近基线的 PF 1.03。</li>
+<li><b>M5 依赖外部因子源。</b>member_net_z 的 available_at 纪律若被破坏（拿到未公布的数据时间），回测全部失效——这是全策略最脆弱的一根链条，务必保持滞后纪律。</li>
+<li><b>成交假设：</b>信号根收盘价成交 + 固定滑点。极端行情（涨跌停附近）成交可能显著劣于假设，簇冲击日封禁已部分对冲该风险。</li>
+</ol>
+</div>
+
+<!-- ================================================== -->
+<h2 id="verify">⑨ 与回测的一致性验证</h2>
+<div class="card ok">
+参考实现 <code>fusion_v5x_engine.py</code> 的 <code>self_check()</code> 用生产库真实数据回放，与
+<code>trades46_V5X.csv</code> 逐笔对拍（无 NaN 洞的品种）：<br>
+MA888（醇醚，P4 只回踩路径）：引擎 17 笔 / 3,612.60 元 vs 回测 17 笔 / 3,612.60 元，离场价最大偏差 0；<br>
+RB888（黑色，双支路路径）：引擎 377 笔 / 46,875.18 元 vs 回测 377 笔 / 46,875.18 元，偏差 0。<br>
+<b>SELF-CHECK: PASS</b>。
+</div>
+<div class="risk">
+<b>刻意偏离一处（bug 修复，非口径分歧）：</b>step46 的手写 ATR 递推遇 NaN bar 会永久污染（e_atr=NaN → 止损比较恒假 → 僵尸仓持仓至数据末端，6 品种共 6 笔 artifact 合计 −27.1 万，且占仓封锁后续开仓数年）。引擎改为 <b>NaN 跳过语义</b>（指标状态冻结）+ 进场断言 ATR 有限且为正。修复后干净口径：<b>7,786 笔 / 净利 204.2 万 / PF 1.216 / MAR 4.54 / holdout +73.0 万</b>（vs step46 旧口径 6,744 笔 / 134.0 万 / MAR 2.25）。逐品种对拍：50 个无 NaN 品种全部逐位一致，6 个差异品种即僵尸仓所在品种。
+</div>
+
+<div class="sub" style="margin-top:30px">配套文件：fusion_v5x_engine.py（参考实现+自检）｜trades46_V5X.csv（6,744 笔逐笔明细）｜fusion_prod_report.html（26 变体全对比）｜trading_takeaways.html（七步推导）。</div>
+
+</div>
+
+  <div class="risk" style="margin-top:10px"><b>勘误（2026-10-22，V5X.2 自进化重锁）：</b>
+    四道硬护栏结果：全过。自进化 Governor 自动重锁（4 关全过）。
+    <table class="mini"><tbody><tr><td>SL_ATR</td><td>1.75</td></tr><tr><td>TRAIL_ATR</td><td>2.0</td></tr><tr><td>BE_R</td><td>1.0</td></tr><tr><td>COOLDOWN</td><td>7</td></tr><tr><td>ADD_MAX_LOTS</td><td>2</td></tr><tr><td>ADD_THR</td><td>1.5</td></tr></tbody></table></div>
+
+</body>
+</html>

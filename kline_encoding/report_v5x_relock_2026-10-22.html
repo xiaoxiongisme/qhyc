@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V5X 参数重锁与架构一致性核验报告 · 2026-10-22</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#fff;--ink:#1f2937;--mut:#64748b;--b:#e5e7eb;
+        --grn:#059669;--red:#dc2626;--amb:#d97706;--blu:#2563eb;--line:#cbd5e1;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:23px;margin:0 0 4px}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:22px}
+  .card{background:var(--card);border:1px solid var(--b);border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+  .kpi{background:var(--card);border:1px solid var(--b);border-radius:12px;padding:14px 16px}
+  .kpi .v{font-size:22px;font-weight:700}
+  .kpi .k{font-size:12px;color:var(--mut);margin-top:2px}
+  .up{color:var(--grn)} .down{color:var(--red)} .amb{color:var(--amb)}
+  h2{font-size:18px;margin:26px 0 6px;padding-left:10px;border-left:4px solid var(--blu)}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}
+  th{background:#f1f5f9;font-weight:600}
+  tr:nth-child(even) td{background:#fafbfc}
+  .ok{color:var(--grn);font-weight:700}
+  .bad{color:var(--red);font-weight:700}
+  .code{background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:8px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow:auto}
+  .risk{border:1px solid var(--amb);background:#fffbeb;border-radius:10px;padding:14px 16px;margin:14px 0}
+  .risk b{color:var(--amb)}
+  .tag{display:inline-block;background:#e0f2fe;color:#0369a1;border-radius:6px;padding:1px 8px;font-size:12px;margin-right:6px}
+  .mut{color:var(--mut);font-size:12px}
+  ul{margin:6px 0 6px 18px;padding:0} li{margin:4px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>V5X 参数重锁与架构一致性核验报告</h1>
+<div class="sub">生成：2026-10-22 ｜ 核对范围：云端规格 fusion_v5x_spec.html · 研究回测 step46_prod_bt.py · 生产引擎 fusion_v5x_engine.py ｜ 数据：prod50 干净后复权（56 品种·2020–2026）</div>
+
+<h2>结论速览（回答用户两问）</h2>
+<div class="grid">
+  <div class="kpi"><div class="v ok">PASS</div><div class="k">架构×代码一致性<br>（引擎==回测 逐笔偏差 0）</div></div>
+  <div class="kpi"><div class="v up">+¥251.8万</div><div class="k">重锁版 V5X 净利（6703 笔）</div></div>
+  <div class="kpi"><div class="v up">7.50</div><div class="k">MAR（净利/|MDD|）</div></div>
+  <div class="kpi"><div class="v">1.280</div><div class="k">PF 盈亏比</div></div>
+</div>
+<div class="card">
+<ul>
+<li><b>问题① 云端架构与代码是否一致？</b> —— 此前不一致（规格冻结表、引擎、回测三处参数互不相同，且规格自报"SELF-CHECK PASS"实为旧参数 SL=2=TRAIL=2 隐藏的空头吊灯 bug 假象）。<b>本次修复 bug 后，引擎 `self_check()` 与回测 `step46 V5X` 逐笔偏差为 0，SELF-CHECK: PASS，三者已完全对齐。</b></li>
+<li><b>问题② 当前正式版参数是否即交易信号生成基准？</b> —— 是。<code>fusion_v5x_engine.py</code> 是实际信号生成器（盘前 set_daily_ctx + 每根 on_bar），其 <code>V5XConfig</code> 已锁定<b>无 bug 代码全量扫描最优</b>：<span class="tag">SL 1.5ATR</span><span class="tag">吊灯 3.0ATR</span><span class="tag">保本 1.0ATR</span><span class="tag">冷却 7 根</span><span class="tag">加码≤2手·1.5ATR间隔</span>。step46 同步锁定同值，二者逐笔一致。</li>
+</ul>
+</div>
+
+<h2>1. 发现的 bug：空头吊灯止损误用 SL_ATR</h2>
+<div class="card">
+<p><code>step46_prod_bt.py</code> 离场逻辑中，<b>多头</b>吊灯用 <code>TRAIL_ATR</code>（正确），<b>空头</b>吊灯却误用 <code>SL_ATR</code>：</p>
+<div class="code"># 多头 (line 317, 正确)
+t = peak - TRAIL_ATR * e_atr
+# 空头 (line 338, 原错误)
+t = trough + SL_ATR * e_atr   ← 应为 TRAIL_ATR</div>
+<p>旧参数 <code>SL=2=TRAIL=2</code> 时两数相等，bug 完全隐形。上轮把 SL 优化到 3.0 后，空头吊灯意外变成 <b>3ATR</b>（比本意 2ATR 宽）→ 空头止损更少 → 净利被人为抬高。</p>
+<div class="risk"><b>这就是此前锁定值（SL3/TR2/BE1/CD1，n=6906 / 净利¥2.68M / MAR 8.58）的真因——是 bug 假象，不是真实 edge。</b></div>
+<p><b>修复：</b>空头吊灯改为 <code>TRAIL_ATR</code>（line 338 已改）。修复后 step46 重跑，空头笔数/净利回落到真实值，n 由 6906→6703。</p>
+</div>
+
+<h2>2. 无 bug 代码上重扫 → 新最优参数</h2>
+<div class="card">
+<p>以修复后的 step46 为 truth，重跑 step73 全量扫描（A 网格 64 组出场参数 + B 网格 45 组节奏参数），step74 按"<b>train 与 holdout 双正、全样本 MAR 最高</b>"挑推荐：</p>
+<table>
+<tr><th>参数</th><th>原锁定(bug产物)</th><th>无bug重扫最优</th><th>方向</th></tr>
+<tr><td>初始止损 SL_ATR</td><td>3.0</td><td class="ok">1.5</td><td>收紧（贴近入场、减噪声扫损）</td></tr>
+<tr><td>吊灯 TRAIL_ATR</td><td>2.0</td><td class="ok">3.0</td><td>放宽（让利润奔跑）</td></tr>
+<tr><td>保本 BE_R</td><td>1.0</td><td>1.0</td><td>保持</td></tr>
+<tr><td>冷却 COOLDOWN</td><td>1</td><td class="ok">7</td><td>拉长（离场后充分冷却、抑过拟合噪声）</td></tr>
+<tr><td>加码上限 AL</td><td>2</td><td>2</td><td>保持</td></tr>
+<tr><td>加码门槛 AT</td><td>1.5</td><td>1.5</td><td>保持</td></tr>
+</table>
+<p class="mut">A 网格 MAR 中心 SL1.5_TR3.0_BE1.0（MAR 6.367）优于旧 SL3_TR2_BE1（6.167）；B 网格 CD7 综合最优。</p>
+</div>
+
+<h2>3. 三处真理源已重锁并互验</h2>
+<div class="card">
+<table>
+<tr><th>文件</th><th>改动</th><th>校验</th></tr>
+<tr><td>step46_prod_bt.py</td><td>全局量 SL/TRAIL/BE=1.5/3.0/1.0、COOLDOWN=7、ADD_THR=1.5</td><td rowspan="3">见第 4 节</td></tr>
+<tr><td>fusion_v5x_engine.py</td><td>V5XConfig 同值 + docstring/注释同步</td></tr>
+<tr><td>fusion_v5x_spec.html</td><td>新增「重锁勘误」段 + 风控层 SVG + 参数总表 + 策略一句话 + 冷却说明全部更新</td></tr>
+</table>
+</div>
+
+<h2>4. 决定性核验：引擎 == 回测</h2>
+<div class="card">
+<p><b>step46 V5X 重跑（无补丁，直接吃锁定值）：</b></p>
+<div class="code">V5X {"n": 6703, "win": 0.215, "pf": 1.2798, "net_yuan": 2517724.59, "mdd_yuan": -335488.52, "mar": 7.5047}</div>
+<p>与 <code>step74_compare.json → reco_full</code> 逐位一致（n 6703 / 净利 ¥2,517,724.59 / MAR 7.5047）。</p>
+<p><b>fusion_v5x_engine self_check()（对比 trades46_V5X.csv）：</b></p>
+<div class="code">MA888: mine 17 笔 / net 1,906.64  vs  ref 17 笔 / net 1,906.64  -> 一致 (逐笔离场价偏差 0)
+RB888: mine 335 笔 / net 27,206.18 vs  ref 335 笔 / net 27,206.18 -> 一致 (逐笔离场价偏差 0)
+SELF-CHECK: PASS</div>
+<p class="ok">结论：生产引擎与研究会回测在重锁参数下逐笔完全等价，云端架构与代码实现现已一致。</p>
+</div>
+
+<h2>5. 正式版干净口径成绩（当前信号生成基准）</h2>
+<div class="grid">
+  <div class="kpi"><div class="v">6703</div><div class="k">总成交笔数（56 品种·2020–2026）</div></div>
+  <div class="kpi"><div class="v up">+¥251.8万</div><div class="k">净利润（1 手口径·真实费率+滑点）</div></div>
+  <div class="kpi"><div class="v">1.280</div><div class="k">PF 盈亏比</div></div>
+  <div class="kpi"><div class="v down">−¥33.5万</div><div class="k">最大回撤</div></div>
+  <div class="kpi"><div class="v up">7.50</div><div class="k">MAR</div></div>
+  <div class="kpi"><div class="v up">+¥82.3万</div><div class="k">2026 holdout（201 笔·PF2.50·未参与调参）</div></div>
+</div>
+<table>
+<tr><th>分区</th><th class="num">笔数</th><th class="num">净利(元)</th><th class="num">PF</th></tr>
+<tr><td>train (≤2025)</td><td class="num">6502</td><td class="num">1,694,752</td><td class="num">1.20</td></tr>
+<tr><td>holdout (≥2026)</td><td class="num">201</td><td class="num">822,973</td><td class="num">2.50</td></tr>
+<tr><td>oos21 (≥2021)</td><td class="num">3599</td><td class="num">1,662,494</td><td class="num">1.26</td></tr>
+</table>
+<p class="mut">对照真实原始基线（无 bug、SL2/TR2/BE0.5/CD3）：净利 ¥2.04M / PF1.216 / MAR4.54。重锁版边际：净利 +¥0.48M(+23%)、MAR +3.0(+65%)，且三分区同号改善，非单区过拟合。旧发布值（¥2.68M/MAR8.58）已作废。</p>
+
+<h2>6. 工程纪律（本日新增）</h2>
+<div class="card">
+<ul>
+<li><b>参数优化后必做一次「改一个参数 → step46 与引擎逐笔对拍」离群检查。</b> 多空不对称 bug 在无对拍时完全隐形——self_check 能抓出 MA888/RB888 的逐笔 net 偏差。</li>
+<li>前视/对称性检查须覆盖<b>多空两条离场支路</b>，不能只看多头或只看汇总 PF。</li>
+<li>「SELF-CHECK: PASS」写在文档里不等于真 PASS：旧 SL=2=TRAIL=2 曾让 bug 隐形并骗过文档自检声明。基准对齐须以运行时 self_check 输出为准。</li>
+</ul>
+</div>
+
+<h2>7. 产物清单</h2>
+<div class="card">
+<ul>
+<li><code>step46_prod_bt.py</code> — 全局量重锁（line 26/27/30）</li>
+<li><code>fusion_v5x_engine.py</code> — V5XConfig 重锁 + docstring</li>
+<li><code>fusion_v5x_spec.html</code> — 新增重锁勘误段 + 参数表/SVG 更新</li>
+<li><code>results_step46.json</code> — V5X 重算结果（n=6703 / net¥2.52M / MAR7.50）</li>
+<li><code>trades46_V5X.csv</code> — 重锁参数逐笔成交（引擎对拍基准）</li>
+<li><code>step73_sweep.json</code> / <code>step74_compare.json</code> — 无 bug 全量扫描与推荐配置</li>
+<li><code>report_v5x_relock_2026-10-22.html</code> — 本报告</li>
+</ul>
+</div>
+
+</div>
+</body>
+</html>

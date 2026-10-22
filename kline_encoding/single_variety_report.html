@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V5X 单品种落地报告 · 四万本金 · 甲醇/乙二醇/苯乙烯/合成橡胶/纯碱/工业硅</title>
+<style>
+  :root{--bg:#0d1117;--card:#161b22;--ink:#e6edf3;--mut:#8b949e;--bd:#30363d;
+        --ok:#3fb950;--bad:#f85149;--warn:#d29922;--acc:#58a6ff;--grn:#26a641;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;line-height:1.65;padding:32px}
+  .wrap{max-width:980px;margin:0 auto}
+  h1{font-size:25px;margin:0 0 4px}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:24px}
+  h2{font-size:18px;border-left:4px solid var(--acc);padding-left:10px;margin:30px 0 12px}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px 18px;margin:14px 0}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--bd);text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--mut);font-weight:600;border-bottom:2px solid var(--bd)}
+  .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:600}
+  .p-ok{background:rgba(63,185,80,.15);color:var(--ok)}
+  .p-bad{background:rgba(248,81,73,.15);color:var(--bad)}
+  .p-warn{background:rgba(210,153,34,.15);color:var(--warn)}
+  .lead{font-size:15px} .big{font-size:20px;font-weight:700}
+  code{background:#21262d;padding:1px 6px;border-radius:4px;font-size:12.5px;color:#a5d6ff}
+  .note{color:var(--mut);font-size:12.5px;margin-top:6px}
+  .verdict{background:linear-gradient(135deg,#1a2f1f,#0d1117);border:1px solid var(--grn);border-radius:10px;padding:18px 20px;margin:18px 0}
+  ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:680px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>V5X 单品种落地报告</h1>
+<div class="sub">候选：甲醇 MA · 乙二醇 EG · 苯乙烯 EB · 合成橡胶 BR · 纯碱 SA · 工业硅 SI ｜ 本金 40,000 元 ｜ 开仓 1 手 + 浮盈加仓(≤2手)<br>
+口径：已逐笔验证引擎 <code>fusion_v5x_engine.py</code>（V5X：P2高波日禁开 + P4化工只回踩 + P6尾盘禁开 + 簇冲击封禁 + M1a回踩MACD同号 + M5会员|z|≥1.0）｜ 数据 2015–2026 全周期</div>
+
+<div class="verdict">
+<div class="big ok">结论：选 苯乙烯(EB) 单一重做，或 EB + 乙二醇(EG) 双品种组合。</div>
+<div class="lead" style="margin-top:8px">
+EB 是这 6 个里唯一同时具备「高净利、高 PF、正回撤可控」的品种（11 年 +13,567 元 / PF 3.27 / 最大回撤 −8.1%）；
+EG 是稳健第二选择（+9,368 / PF 2.59 / 回撤 −6.8%）。二者皆化工链、皆走「回踩支路」，逻辑同源、可共用一套参数。
+<b>合成橡胶(BR) 全周期 0 笔信号、工业硅(SI) 净负且踩过 NaN 僵尸坑——直接排除。</b>
+</div>
+</div>
+
+<h2>一、6 候选品种排名（引擎逐笔验证，含浮盈加仓 ≤2 手）</h2>
+<table>
+<thead><tr><th>品种</th><th>笔数/11年</th><th>笔/年</th><th>净利(元)</th><th>PF</th><th>胜率%</th><th>最大手</th><th>4万终值</th><th>最大回撤%</th><th>结论</th></tr></thead>
+<tbody>
+<tr><td>苯乙烯 EB</td><td>18</td><td>4.4</td><td class="ok">+13,567</td><td class="ok">3.27</td><td>38.9</td><td>2</td><td class="ok">53,567</td><td>−8.1</td><td><span class="pill p-ok">首选</span></td></tr>
+<tr><td>乙二醇 EG</td><td>22</td><td>4.1</td><td class="ok">+9,368</td><td class="ok">2.59</td><td>40.9</td><td>2</td><td class="ok">49,368</td><td>−6.8</td><td><span class="pill p-ok">次选</span></td></tr>
+<tr><td>甲醇 MA</td><td>17</td><td>1.5</td><td>+3,613</td><td>1.96</td><td>17.6</td><td>2</td><td>43,613</td><td>−8.3</td><td><span class="pill p-warn">太稀疏</span></td></tr>
+<tr><td>纯碱 SA</td><td>17</td><td>3.4</td><td>+3,487</td><td>1.54</td><td>29.4</td><td>2</td><td>43,487</td><td class="ok">−3.6</td><td><span class="pill p-warn">edge薄</span></td></tr>
+<tr><td>合成橡胶 BR</td><td class="bad">0</td><td>0</td><td>0</td><td>—</td><td>—</td><td>0</td><td>40,000</td><td>0</td><td><span class="pill p-bad">永不触发</span></td></tr>
+<tr><td>工业硅 SI</td><td>16</td><td>—</td><td class="bad">−406</td><td class="bad">0.97</td><td>25.0</td><td>2</td><td class="bad">39,594</td><td class="bad">−23.8</td><td><span class="pill p-bad">负+脏数据</span></td></tr>
+</tbody>
+</table>
+<div class="note">「笔/年」= 全周期笔数 ÷ 持仓年数。EB/EG 约 4 笔/年，属低频系统化，但每笔 PF 高；MA 仅 1.5 笔/年，单独做几乎无交易节奏。</div>
+
+<h2>二、为什么不能靠「放松门控」来增加交易次数（关键纪律）</h2>
+<div class="card">
+对 EB / EG / MA / SA 测试「去 M5（会员|z|门）」「再去 M1a（MACD 同号门）」后的频率与质量：
+<table>
+<thead><tr><th>品种</th><th>配置</th><th>笔数</th><th>净利</th><th>PF</th><th>胜率%</th><th>笔/年</th></tr></thead>
+<tbody>
+<tr><td rowspan="3">苯乙烯 EB</td><td>V5X(含M5+M1a)</td><td>18</td><td class="ok">+13,567</td><td class="ok">3.27</td><td>38.9</td><td>4.4</td></tr>
+<tr><td>去 M5</td><td>22</td><td>+10,676</td><td>2.20</td><td>31.8</td><td>3.5</td></tr>
+<tr><td>去 M5+去 M1a</td><td>149</td><td>+4,776</td><td class="bad">1.08</td><td>22.8</td><td>23.7</td></tr>
+<tr><td rowspan="3">乙二醇 EG</td><td>V5X(含M5+M1a)</td><td>22</td><td class="ok">+9,368</td><td class="ok">2.59</td><td>40.9</td><td>4.1</td></tr>
+<tr><td>去 M5</td><td>26</td><td>+8,578</td><td>2.14</td><td>38.5</td><td>4.1</td></tr>
+<tr><td>去 M5+去 M1a</td><td>140</td><td class="bad">−3,316</td><td class="bad">0.94</td><td>30.7</td><td>19.6</td></tr>
+</tbody>
+</table>
+<b>结论：M5/M1a 不是「锦上添花」，而是 edge 本身。</b> 去掉后交易次数涨 5–10 倍，但 PF 直接崩到 1.0 附近甚至转负（EG 去双门 −3,316）。
+单品种交易若嫌信号少，<b>正确做法是多铺几个同逻辑品种，而不是拆门控</b>——拆门控等于把策略退化成裸信号。
+</div>
+
+<h2>三、四万本金容量测算（以首选 EB 为例，EG 同级）</h2>
+<div class="grid">
+<div class="card">
+<div class="big">风险极轻，40k 绰绰有余</div>
+<ul>
+<li><b>每手风险</b>（2×ATR 初始止损）：EB ≈ <b>605 元</b>、EG ≈ 607 元 ≈ 本金的 <b>1.5%</b></li>
+<li><b>加仓后最大暴露</b>：2 手 × 605 = <b>1,210 元 ≈ 3.0% 本金</b></li>
+<li><b>保证金占用</b>（估算）：EB ≈ 3,400 元/手 → 2 手 ≈ 6,800 元 ≈ <b>17% 本金</b>（EG 同级）</li>
+<li><b>历史最大回撤</b>：EB −8.1%（≈ −3,240 元）、EG −6.8%（≈ −2,720 元）</li>
+</ul>
+</div>
+<div class="card">
+<div class="big">绝对收益偏低，靠「加仓」抬升</div>
+<ul>
+<li>40k 跑 11 年：EB 终值 53,567（+34%）、EG 终值 49,368（+23%）</li>
+<li>年化约 <b>2.7%（EB）/ 2.1%（EG）</b>——低频、低回撤的「保险费」型收益</li>
+<li>想放大绝对收益：可把加仓上限从 2 手提到 3–4 手（每信号风险仍仅 4.5–6%），<b>但需重新验证且回撤同比例放大</b></li>
+</ul>
+</div>
+</div>
+<div class="note">SI 每手风险高达 1,070 元、回撤 −23.8%，即使本金够也因信号负而被排除。BR 无信号，无需容量。</div>
+
+<h2>四、浮盈加仓（≤2手）对本策略是「对」的</h2>
+<div class="card">
+本策略的盈利几乎全部来自右尾趋势（之前拆解：r&gt;3 的趋势单只占 10% 笔数却贡献绝大多数利润）。浮盈加仓恰好把仓位加在「已经走对的单子」上，放大右尾：
+<table>
+<thead><tr><th>品种</th><th>固定1手 净利</th><th>浮盈加仓 净利</th><th>增量</th></tr></thead>
+<tbody>
+<tr><td>苯乙烯 EB</td><td>8,382</td><td class="ok">13,567</td><td class="ok">+5,185 (+62%)</td></tr>
+<tr><td>乙二醇 EG</td><td>4,178</td><td class="ok">9,368</td><td class="ok">+5,190 (+124%)</td></tr>
+<tr><td>纯碱 SA</td><td>2,243</td><td class="ok">3,487</td><td class="ok">+1,244</td></tr>
+<tr><td>甲醇 MA</td><td>2,382</td><td class="ok">3,613</td><td class="ok">+1,231</td></tr>
+</tbody>
+</table>
+胜率数字会「下降」（因为加仓后的合并单若被止损，是一笔 2 手亏损），但 <b>净利用与 PF 上升</b>，与策略盈利结构一致。结论：<b>保留浮盈加仓，加仓上限 2 手保持不变。</b>
+</div>
+
+<h2>五、落地参数清单（EB / EG 共用）</h2>
+<div class="card">
+<ul>
+<li><b>周期</b>：60 分钟 K 线（夜盘归次日交易日）</li>
+<li><b>方向</b>：EMA140 定多空；仅做「回踩支路」（化工 P4：突破支路禁用）</li>
+<li><b>回踩信号</b>：价格上穿 EMA20 且当根触及均线 + 斐波那契 0.382/0.5/0.618 汇流（±0.5ATR）</li>
+<li><b>入场门控</b>：ADX≥15；MACD 柱与方向同号（M1a）；会员净持仓 |z|≥1.0（M5）；非高波日（P2）；非尾盘根（P6）；非簇冲击日</li>
+<li><b>开仓</b>：1 手；浮盈 ≥ 当前手数×1.0×ATR 且收盘创新高/低 → 加 1 手，上限 2 手</li>
+<li><b>止损</b>：2×ATR 初始；2×ATR 吊灯（只紧不松）；浮盈 ≥0.5×ATR 抬至保本</li>
+<li><b>冷却</b>：平仓后 3 根不开新仓</li>
+<li><b>成本</b>：按各品种真实费率 + 平今/平昨分档 + 双边 1 跳滑点</li>
+</ul>
+<div class="note">完整逐 bar 实现见 <code>fusion_v5x_engine.py</code>（已与回测逐笔一致）。上线前需用生产组合引擎对拍「双品种并发持仓」的资金占用与强平逻辑。</div>
+</div>
+
+<h2>六、风险与局限（务必读）</h2>
+<ul>
+<li><b>低频是本质</b>：EB+EG 合并约 8–9 笔/年。这会考验执行纪律——可能连续数月无信号，也可能信号扎堆。不要因为「手痒」去拆门控补信号。</li>
+<li><b>样本极薄</b>：单品种仅 16–22 笔全周期，置信区间宽。EB/EG 的结论方向稳，但具体 PF 数字不宜过度外推。</li>
+<li><b>holdout 短</b>：2026 年单品种仅个位数笔数，OOS 检验力度弱。</li>
+<li><b>SI 已证脏</b>：工业硅 60m 数据有 NaN 洞，曾导致僵尸仓，本报告数字不可信，永久排除。</li>
+<li><b>绝对收益低</b>：40k 年化约 2–3%。本策略定位是「低回撤、高夏普的卫星仓位」，不是主收益来源。若要放大，提加仓上限需重验。</li>
+</ul>
+
+<div class="card" style="border-color:var(--acc)">
+<b>一句话建议</b>：用 40,000 元，<b>只做苯乙烯(EB)，开 1 手 + 浮盈加仓到 2 手</b>，严格守 6 道门控；若想平摊「无信号期」，再加一个乙二醇(EG) 共用参数。其余 4 个品种（MA 太稀、SA 太薄、BR 无信号、SI 脏且负）不碰。
+</div>
+
+<p class="sub" style="margin-top:28px">生成：2026-10-19 ｜ 引擎口径与 step49 干净回测逐笔一致 ｜ 不改变生产环境 ｜ 所有数字来自 prod50 真实数据回放</p>
+</div>
+</body>
+</html>

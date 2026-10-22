@@ -1,0 +1,14 @@
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)

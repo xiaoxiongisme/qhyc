@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step54_eb_eg_detail.py", line 60, in <module>
+    print(f"{name:4s} {gate:10s} thr={str(thr):4s} 全{n:3d}笔/{mT['net']:>9,.0f}/PF{mT['pf']:.2f}"
+                                                      ^
+NameError: name 'n' is not defined. Did you mean: 'np'?

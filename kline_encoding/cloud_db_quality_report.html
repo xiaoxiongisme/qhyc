@@ -1,0 +1,811 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,'Microsoft YaHei',sans-serif;margin:24px;color:#1f2328;}
+h1{font-size:22px;} h2{font-size:17px;margin-top:28px;border-left:4px solid #0969da;padding-left:8px;}
+table{border-collapse:collapse;font-size:13px;margin-top:8px;width:100%;}
+th,td{border:1px solid #d0d7de;padding:4px 8px;text-align:right;}
+th{background:#f6f8fa;} td:first-child,th:first-child{text-align:left;}
+.summary{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0;}
+.card{border:1px solid #d0d7de;border-radius:8px;padding:12px 18px;min-width:120px;}
+.card .v{font-size:24px;font-weight:700;} .card .k{font-size:12px;color:#57606a;}
+ul{font-size:13px;}
+</style></head><body>
+<h1>云端数据库 60m 全量数据质量校准检查</h1>
+<div class="summary">
+  <div class="card"><div class="v">59</div><div class="k">品种数</div></div>
+  <div class="card"><div class="v">1,150,464</div><div class="k">60m-ba 行</div></div>
+  <div class="card"><div class="v">169,497</div><div class="k">日线行</div></div>
+  <div class="card"><div class="v">2,602,627</div><div class="k">因子行</div></div>
+  <div class="card"><div class="v" style="color:#cf222e">59</div><div class="k">有问题品种</div></div>
+</div>
+<p>检查项：NaN、重复时间戳、非正价、high&lt;low、close 越界、零量、交易日缺口、极端 60m 收益率(&gt;10%)、raw/ba 复权比。</p>
+
+<h2>各品种明细（flag: ✓ 通过 / ⚠ 有问题）</h2>
+<table>
+<tr><th>品种</th><th>行数</th><th>区间</th><th>NaN</th><th>重复</th><th>H&lt;L</th><th>越界</th><th>零量</th><th>缺日</th><th>极端收益</th><th>最大收益%</th><th>复权比中位</th></tr>
+<tr>
+      <td>⚠ A888</td>
+      <td>25225</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">4</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">1</td>
+      <td>11.19</td>
+      <td>0.9631</td>
+    </tr><tr>
+      <td>⚠ AG888</td>
+      <td>33324</td>
+      <td>2015-01-05~2026-10-17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">3</td>
+      <td>16.89</td>
+      <td>0.99969</td>
+    </tr><tr>
+      <td>⚠ AL888</td>
+      <td>30430</td>
+      <td>2015-01-05~2026-10-17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">11</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>5.64</td>
+      <td>0.96759</td>
+    </tr><tr>
+      <td>⚠ AO888</td>
+      <td>8403</td>
+      <td>2023-06-16~2026-10-17</td>
+      <td style="color:#cf222e">11</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.87</td>
+      <td>1.16719</td>
+    </tr><tr>
+      <td>⚠ AP888</td>
+      <td>12642</td>
+      <td>2017-12-22~2026-10-16</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>7.03</td>
+      <td>1.22843</td>
+    </tr><tr>
+      <td>⚠ AU888</td>
+      <td>33324</td>
+      <td>2015-01-05~2026-10-17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">7</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>5.85</td>
+      <td>0.99832</td>
+    </tr><tr>
+      <td>⚠ B888</td>
+      <td>25180</td>
+      <td>2015-01-05~2026-10-09</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">4990</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.14</td>
+      <td>1.77402</td>
+    </tr><tr>
+      <td>⚠ BR888</td>
+      <td>6523</td>
+      <td>2023-07-27~2026-09-30</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>7.46</td>
+      <td>1.0</td>
+    </tr><tr>
+      <td>⚠ BU888</td>
+      <td>25612</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">27</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">4</td>
+      <td>14.69</td>
+      <td>0.99788</td>
+    </tr><tr>
+      <td>⚠ C888</td>
+      <td>21979</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">2</td>
+      <td>14.38</td>
+      <td>1.02297</td>
+    </tr><tr>
+      <td>⚠ CF888</td>
+      <td>24988</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.32</td>
+      <td>1.00236</td>
+    </tr><tr>
+      <td>⚠ CJ888</td>
+      <td>10631</td>
+      <td>2019-04-30~2026-09-30</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">225</td>
+      <td>5833.33</td>
+      <td>0.61834</td>
+    </tr><tr>
+      <td>⚠ CS888</td>
+      <td>21934</td>
+      <td>2015-01-05~2026-10-09</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>4.35</td>
+      <td>0.85714</td>
+    </tr><tr>
+      <td>⚠ CU888</td>
+      <td>30430</td>
+      <td>2015-01-05~2026-10-17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.48</td>
+      <td>1.01806</td>
+    </tr><tr>
+      <td>⚠ EB888</td>
+      <td>14695</td>
+      <td>2019-09-25~2026-10-16</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">10</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">3</td>
+      <td>13.43</td>
+      <td>0.97473</td>
+    </tr><tr>
+      <td>⚠ EC888</td>
+      <td>4355</td>
+      <td>2023-08-18~2026-09-30</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">11</td>
+      <td>22.29</td>
+      <td>2.10762</td>
+    </tr><tr>
+      <td>⚠ EG888</td>
+      <td>16219</td>
+      <td>2018-12-10~2026-10-16</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">3</td>
+      <td>11.18</td>
+      <td>0.9948</td>
+    </tr><tr>
+      <td>⚠ FG888</td>
+      <td>24679</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">3</td>
+      <td>15.37</td>
+      <td>0.99923</td>
+    </tr><tr>
+      <td>⚠ FU888</td>
+      <td>22483</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">4112</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#cf222e">12</td>
+      <td>19.72</td>
+      <td>1.16493</td>
+    </tr><tr>
+      <td>⚠ HC888</td>
+      <td>25612</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">49</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>7.4</td>
+      <td>0.99611</td>
+    </tr><tr>
+      <td>⚠ I888</td>
+      <td>25225</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">7</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#cf222e">9</td>
+      <td>15.15</td>
+      <td>1.0</td>
+    </tr><tr>
+      <td>⚠ J888</td>
+      <td>25225</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">4</td>
+      <td>16.25</td>
+      <td>0.99907</td>
+    </tr><tr>
+      <td>⚠ JD888</td>
+      <td>16998</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#cf222e">17</td>
+      <td>34.33</td>
+      <td>0.97126</td>
+    </tr><tr>
+      <td>⚠ JM888</td>
+      <td>25225</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#cf222e">10</td>
+      <td>15.97</td>
+      <td>1.00242</td>
+    </tr><tr>
+      <td>⚠ L888</td>
+      <td>21979</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>9.63</td>
+      <td>1.01754</td>
+    </tr><tr>
+      <td>⚠ LC888</td>
+      <td>4524</td>
+      <td>2023-07-21~2026-10-16</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">8</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">2</td>
+      <td>14.17</td>
+      <td>0.98002</td>
+    </tr><tr>
+      <td>⚠ LH888</td>
+      <td>8202</td>
+      <td>2021-01-08~2026-10-16</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">7</td>
+      <td>35.03</td>
+      <td>0.97602</td>
+    </tr><tr>
+      <td>⚠ LU888</td>
+      <td>13237</td>
+      <td>2020-06-19~2026-09-30</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">10</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">2</td>
+      <td>12.89</td>
+      <td>1.20541</td>
+    </tr><tr>
+      <td>⚠ M888</td>
+      <td>25225</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">4</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">4</td>
+      <td>12.97</td>
+      <td>1.03576</td>
+    </tr><tr>
+      <td>⚠ MA888</td>
+      <td>24988</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#cf222e">20</td>
+      <td>22.57</td>
+      <td>0.9735</td>
+    </tr><tr>
+      <td>⚠ NI888</td>
+      <td>29846</td>
+      <td>2015-03-26~2026-10-17</td>
+      <td style="color:#cf222e">11</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">30</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#bf8700">4</td>
+      <td>16.88</td>
+      <td>1.00012</td>
+    </tr><tr>
+      <td>⚠ OI888</td>
+      <td>24679</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>8.02</td>
+      <td>1.00171</td>
+    </tr><tr>
+      <td>⚠ P888</td>
+      <td>25225</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">4</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">2</td>
+      <td>12.18</td>
+      <td>1.00072</td>
+    </tr><tr>
+      <td>⚠ PB888</td>
+      <td>30430</td>
+      <td>2015-01-05~2026-10-17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">130</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>4.65</td>
+      <td>1.01115</td>
+    </tr><tr>
+      <td>⚠ PF888</td>
+      <td>12595</td>
+      <td>2020-10-09~2026-09-30</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>9.84</td>
+      <td>0.94945</td>
+    </tr><tr>
+      <td>⚠ PG888</td>
+      <td>13669</td>
+      <td>2020-03-30~2026-09-30</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">6</td>
+      <td>14.03</td>
+      <td>1.02775</td>
+    </tr><tr>
+      <td>⚠ PK888</td>
+      <td>8057</td>
+      <td>2021-02-01~2026-09-30</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>5.03</td>
+      <td>0.85946</td>
+    </tr><tr>
+      <td>⚠ PP888</td>
+      <td>21978</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">2</td>
+      <td>10.25</td>
+      <td>0.95247</td>
+    </tr><tr>
+      <td>⚠ PR888</td>
+      <td>4147</td>
+      <td>2024-08-29~2026-09-30</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>9.8</td>
+      <td>1.00094</td>
+    </tr><tr>
+      <td>⚠ PS888</td>
+      <td>2387</td>
+      <td>2024-12-26~2026-09-30</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td>14.64</td>
+      <td>1.02289</td>
+    </tr><tr>
+      <td>⚠ PX888</td>
+      <td>6280</td>
+      <td>2023-09-14~2026-10-16</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td>10.25</td>
+      <td>1.00511</td>
+    </tr><tr>
+      <td>⚠ RB888</td>
+      <td>25612</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">7</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>9.21</td>
+      <td>0.98845</td>
+    </tr><tr>
+      <td>⚠ RM888</td>
+      <td>24988</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">3</td>
+      <td>16.93</td>
+      <td>0.99917</td>
+    </tr><tr>
+      <td>⚠ RU888</td>
+      <td>24988</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">7</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">4</td>
+      <td>24.75</td>
+      <td>0.9787</td>
+    </tr><tr>
+      <td>⚠ SA888</td>
+      <td>14284</td>
+      <td>2019-12-05~2026-10-16</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">10</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">8</td>
+      <td>21.67</td>
+      <td>1.00163</td>
+    </tr><tr>
+      <td>⚠ SC888</td>
+      <td>24030</td>
+      <td>2018-03-23~2026-10-17</td>
+      <td style="color:#cf222e">12</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">20</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">6</td>
+      <td>14.06</td>
+      <td>0.94849</td>
+    </tr><tr>
+      <td>⚠ SF888</td>
+      <td>16998</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">2507</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">2</td>
+      <td>15.53</td>
+      <td>1.1582</td>
+    </tr><tr>
+      <td>⚠ SH888</td>
+      <td>6280</td>
+      <td>2023-09-14~2026-10-16</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td>16.09</td>
+      <td>0.99957</td>
+    </tr><tr>
+      <td>⚠ SI888</td>
+      <td>5358</td>
+      <td>2022-12-22~2026-10-16</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">1</td>
+      <td>32.86</td>
+      <td>0.97005</td>
+    </tr><tr>
+      <td>⚠ SM888</td>
+      <td>16998</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">1847</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#cf222e">6</td>
+      <td>13.25</td>
+      <td>1.13538</td>
+    </tr><tr>
+      <td>⚠ SN888</td>
+      <td>29846</td>
+      <td>2015-03-26~2026-10-17</td>
+      <td style="color:#cf222e">11</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">117</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#bf8700">1</td>
+      <td>12.84</td>
+      <td>0.99875</td>
+    </tr><tr>
+      <td>⚠ SP888</td>
+      <td>16513</td>
+      <td>2018-11-26~2026-10-16</td>
+      <td style="color:#cf222e">9</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>7.05</td>
+      <td>0.99808</td>
+    </tr><tr>
+      <td>⚠ SR888</td>
+      <td>24988</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.43</td>
+      <td>0.99412</td>
+    </tr><tr>
+      <td>⚠ SS888</td>
+      <td>17906</td>
+      <td>2019-09-24~2026-10-17</td>
+      <td style="color:#cf222e">11</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#cf222e">21</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td>7.97</td>
+      <td>1.00171</td>
+    </tr><tr>
+      <td>⚠ TA888</td>
+      <td>24988</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#bf8700">1</td>
+      <td>11.63</td>
+      <td>0.98834</td>
+    </tr><tr>
+      <td>⚠ UR888</td>
+      <td>10266</td>
+      <td>2019-08-09~2026-10-16</td>
+      <td style="color:#cf222e">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">6</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">2</td>
+      <td>11.78</td>
+      <td>1.00061</td>
+    </tr><tr>
+      <td>⚠ V888</td>
+      <td>21978</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">2</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.98</td>
+      <td>0.98969</td>
+    </tr><tr>
+      <td>⚠ Y888</td>
+      <td>25224</td>
+      <td>2015-01-05~2026-10-16</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">4</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.45</td>
+      <td>1.0</td>
+    </tr><tr>
+      <td>⚠ ZN888</td>
+      <td>30430</td>
+      <td>2015-01-05~2026-10-17</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#1a7f37">0</td>
+      <td style="color:#bf8700">5</td>
+      <td style="color:#cf222e">7</td>
+      <td style="color:#1a7f37">0</td>
+      <td>6.59</td>
+      <td>1.01364</td>
+    </tr>
+</table>
+
+<h2>问题清单</h2>
+<ul><li><b>A888</b>: 零量×4, 缺交易日×7</li><li><b>AG888</b>: 零量×5, 缺交易日×7</li><li><b>AL888</b>: 零量×11, 缺交易日×7</li><li><b>AO888</b>: NaN×11, 零量×17</li><li><b>AP888</b>: NaN×6, 零量×6</li><li><b>AU888</b>: 零量×7, 缺交易日×7</li><li><b>B888</b>: 零量×4990, 缺交易日×7</li><li><b>BR888</b>: NaN×9, 零量×9</li><li><b>BU888</b>: 零量×27, 缺交易日×7</li><li><b>C888</b>: 零量×1, 缺交易日×7</li><li><b>CF888</b>: 零量×5, 缺交易日×7</li><li><b>CJ888</b>: NaN×6, 非正价×3307, 零量×6</li><li><b>CS888</b>: 零量×1, 缺交易日×7</li><li><b>CU888</b>: 零量×6, 缺交易日×7</li><li><b>EB888</b>: NaN×9, 零量×10</li><li><b>EC888</b>: NaN×6, 零量×6</li><li><b>EG888</b>: NaN×6, 零量×7</li><li><b>FG888</b>: 零量×5, 缺交易日×7</li><li><b>FU888</b>: 零量×4112, 缺交易日×7</li><li><b>HC888</b>: 零量×49, 缺交易日×7</li><li><b>I888</b>: 零量×7, 缺交易日×7</li><li><b>J888</b>: 零量×5, 缺交易日×7</li><li><b>JD888</b>: 缺交易日×7</li><li><b>JM888</b>: 零量×5, 缺交易日×7</li><li><b>L888</b>: 零量×1, 缺交易日×7</li><li><b>LC888</b>: NaN×6, 零量×8</li><li><b>LH888</b>: NaN×6, 零量×6</li><li><b>LU888</b>: NaN×9, 零量×10</li><li><b>M888</b>: 零量×4, 缺交易日×7</li><li><b>MA888</b>: 零量×5, 缺交易日×7</li><li><b>NI888</b>: NaN×11, 零量×30, 缺交易日×5</li><li><b>OI888</b>: 零量×5, 缺交易日×7</li><li><b>P888</b>: 零量×4, 缺交易日×7</li><li><b>PB888</b>: 零量×130, 缺交易日×7</li><li><b>PF888</b>: NaN×9, 零量×9</li><li><b>PG888</b>: NaN×6, 零量×6</li><li><b>PK888</b>: NaN×6, 零量×6</li><li><b>PP888</b>: 零量×1, 缺交易日×7</li><li><b>PR888</b>: NaN×9, 零量×9</li><li><b>PS888</b>: NaN×6, 零量×6</li><li><b>PX888</b>: NaN×9, 零量×9</li><li><b>RB888</b>: 零量×7, 缺交易日×7</li><li><b>RM888</b>: 零量×5, 缺交易日×7</li><li><b>RU888</b>: 零量×7, 缺交易日×7</li><li><b>SA888</b>: NaN×9, 零量×10</li><li><b>SC888</b>: NaN×12, 零量×20</li><li><b>SF888</b>: 零量×2507, 缺交易日×7</li><li><b>SH888</b>: NaN×9, 零量×9</li><li><b>SI888</b>: NaN×6, 零量×9</li><li><b>SM888</b>: 零量×1847, 缺交易日×7</li><li><b>SN888</b>: NaN×11, 零量×117, 缺交易日×5</li><li><b>SP888</b>: NaN×9, 零量×17</li><li><b>SR888</b>: 零量×6, 缺交易日×7</li><li><b>SS888</b>: NaN×11, 零量×21</li><li><b>TA888</b>: 零量×6, 缺交易日×7</li><li><b>UR888</b>: NaN×6, 零量×6</li><li><b>V888</b>: 零量×2, 缺交易日×7</li><li><b>Y888</b>: 零量×4, 缺交易日×7</li><li><b>ZN888</b>: 零量×5, 缺交易日×7</li></ul>
+
+<h2>其他表</h2>
+<p><b>daily_bar</b>: 124 品种, 2015-01-05~2026-10-16, NaN(OHLC)=0, high&lt;low=0</p>
+<p><b>factor_value</b>: 60 品种, 因子=basis_rate_z, cross_rank_z, f_amt_conc, f_atr_pct, f_atr_pctile, f_close_loc, f_close_loc14, f_gap, f_mom_1h, f_mom_4h, f_oi_dir, f_range_comp, f_vol_ratio, f_vol_surge, f_vol_z, f_voldiv_divergence, f_vwap_dev, inventory_z, member_ls_z, member_net_z, member_trend_z, roll_yield_z, spot_mom_z, structure_slope_z, vol_concentration_z, warehouse_receipt_z, 2015-01-05~2026-10-17, NaN(z)=8711, inf=0</p>
+
+<h2>结论</h2>
+<p>云端 60m 数据在 <b>数值完整性</b>（NaN/重复/非正/越界）层面存在异常。
+但需重点注意：</p>
+<ul>
+<li><b>网格口径</b>：bar_60m_ba/raw 采用<b>整点桶</b>（09/10/11/13/14/15 + 21/22/23），与同花顺「连续 60 交易分钟」网格不同，是信号与图表对不上的根因（本会话主线已修复于 bar_60m_ths_full.csv.gz）。</li>
+<li><b>极端收益率</b>：部分品种的 &gt;10% 单根 60m 收益多出现在合约换月日，属复权主连的正常跳变；个别若非换月日则需人工核。</li>
+<li><b>复权比</b>：见各品种「复权比中位」列，若某品种复权比 daily_max/daily_min 跨度极大（如 &gt;2 倍），提示该品种主连换月规则特殊，校准时需谨慎。</li>
+</ul>
+</body></html>

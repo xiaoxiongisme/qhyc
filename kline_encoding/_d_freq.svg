@@ -1,0 +1,63 @@
+<svg viewBox="0 0 680 350" width="100%" xmlns="http://www.w3.org/2000/svg">
+<text x="40.0" y="26.0" font-size="14" fill="#26215C" text-anchor="start" font-weight="600">维度四 · 频域与节律：卦气有日内节律，也有「周一效应」</text>
+<text x="40.0" y="44.0" font-size="10.5" fill="#888780" text-anchor="start" font-weight="400">左: 日内振幅轮廓(5分钟块, MA)；右上: 星期一–星期五均振幅；右下: 月均振幅</text>
+<line x1="48.0" y1="181.7" x2="328.0" y2="181.7" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="184.7" font-size="9" fill="#888780" text-anchor="end" font-weight="400">5%</text>
+<line x1="48.0" y1="155.4" x2="328.0" y2="155.4" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="158.4" font-size="9" fill="#888780" text-anchor="end" font-weight="400">10%</text>
+<line x1="48.0" y1="129.1" x2="328.0" y2="129.1" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="132.1" font-size="9" fill="#888780" text-anchor="end" font-weight="400">15%</text>
+<line x1="48.0" y1="102.8" x2="328.0" y2="102.8" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="105.8" font-size="9" fill="#888780" text-anchor="end" font-weight="400">20%</text>
+<line x1="48.0" y1="76.5" x2="328.0" y2="76.5" stroke="#E8E6DE" stroke-width="1"/>
+<text x="44.0" y="79.5" font-size="9" fill="#888780" text-anchor="end" font-weight="400">25%</text>
+<rect x="52.0" y="66.0" width="60.0" height="148.0" rx="2" fill="#CFC6E6" fill-opacity="0.35"/>
+<text x="80.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">早盘 9:00</text>
+<rect x="112.0" y="66.0" width="48.0" height="148.0" rx="2" fill="#CFC6E6" fill-opacity="0.35"/>
+<text x="134.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">午盘 10:15</text>
+<rect x="160.0" y="66.0" width="72.0" height="148.0" rx="2" fill="#CFC6E6" fill-opacity="0.35"/>
+<text x="194.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">下午 13:30</text>
+<rect x="232.0" y="66.0" width="96.0" height="148.0" rx="2" fill="#DCE8F0" fill-opacity="0.35"/>
+<text x="278.0" y="216.0" font-size="8.5" fill="#5F5E5A" text-anchor="middle" font-weight="400">夜盘 21:00</text>
+<polyline points="52.0,75.5 56.0,119.1 60.0,128.2 64.0,131.1 68.0,135.6 72.0,138.7 76.0,136.4 80.0,139.7 84.0,141.7 88.0,141.3 92.0,142.6 96.0,143.9 100.0,138.8 104.0,141.4 108.0,144.2 112.0,131.9 116.0,143.6 120.0,145.0 124.0,144.5 128.0,145.7 132.0,147.0 136.0,144.3 140.0,146.4 144.0,147.1 148.0,145.3 152.0,146.1 156.0,144.8 160.0,121.1 164.0,140.8 168.0,144.0 172.0,143.7 176.0,146.3 180.0,147.4 184.0,144.4 188.0,146.6 192.0,147.6 196.0,146.6 200.0,147.6 204.0,148.0 208.0,145.0 212.0,147.4 216.0,148.3 220.0,147.1 224.0,146.4 228.0,145.7 232.0,78.4 236.0,122.3 240.0,131.7 244.0,135.1 248.0,140.3 252.0,144.4 256.0,141.0 260.0,144.5 264.0,146.8 268.0,148.0 272.0,148.9 276.0,150.4 280.0,146.0 284.0,149.7 288.0,150.7 292.0,150.3 296.0,151.2 300.0,152.9 304.0,147.4 308.0,151.0 312.0,152.1 316.0,152.0 320.0,153.5 324.0,151.3" fill="none" stroke="#3E3480" stroke-width="1.8" stroke-opacity="1.0"/>
+<text x="56.0" y="85.5" font-size="8.5" fill="#3E3480" text-anchor="start" font-weight="600">开盘块 25.19%</text>
+<text x="324.0" y="143.3" font-size="8.5" fill="#3E3480" text-anchor="end" font-weight="600">10.78%</text>
+<text x="108.0" y="136.2" font-size="8.5" fill="#3E3480" text-anchor="middle" font-weight="600">12.13%</text>
+<text x="40.0" y="238.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">开盘段占比 1.16×　夜盘占比 0.97×　日内谱峰周期 115 / 172.5 分钟</text>
+<text x="40.0" y="254.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">（115 分钟 ≈ 单段会话长度：节律来自开收盘结构，非神秘周期）</text>
+<text x="420.0" y="66.0" font-size="10.5" fill="#26215C" text-anchor="start" font-weight="700">星期效应（平均振幅）</text>
+<text x="414.0" y="97.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="600">周一</text>
+<rect x="420.0" y="84.0" width="80.3" height="11.0" rx="3" fill="#C4372E" fill-opacity="1.0"/>
+<text x="505.3" y="93.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">8.65%</text>
+<rect x="420.0" y="96.0" width="69.1" height="11.0" rx="3" fill="#E5B8B0" fill-opacity="1.0"/>
+<text x="494.1" y="105.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">7.44%</text>
+<text x="414.0" y="127.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周二</text>
+<rect x="420.0" y="114.0" width="114.8" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="539.8" y="123.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.36%</text>
+<rect x="420.0" y="126.0" width="100.1" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="525.1" y="135.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">10.78%</text>
+<text x="414.0" y="157.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周三</text>
+<rect x="420.0" y="144.0" width="115.2" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="540.2" y="153.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.40%</text>
+<rect x="420.0" y="156.0" width="100.3" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="525.3" y="165.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">10.80%</text>
+<text x="414.0" y="187.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周四</text>
+<rect x="420.0" y="174.0" width="117.0" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="542.0" y="183.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.60%</text>
+<rect x="420.0" y="186.0" width="102.1" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="527.1" y="195.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">11.00%</text>
+<text x="414.0" y="217.0" font-size="10" fill="#26215C" text-anchor="end" font-weight="400">周五</text>
+<rect x="420.0" y="204.0" width="117.8" height="11.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="542.8" y="213.0" font-size="8.5" fill="#5F5E5A" text-anchor="start" font-weight="400">12.69%</text>
+<rect x="420.0" y="216.0" width="103.9" height="11.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="528.9" y="225.0" font-size="8.5" fill="#888780" text-anchor="start" font-weight="400">11.19%</text>
+<rect x="420.0" y="240.0" width="9.0" height="9.0" rx="3" fill="#3E3480" fill-opacity="1.0"/>
+<text x="433.0" y="248.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">MA</text>
+<rect x="460.0" y="240.0" width="9.0" height="9.0" rx="3" fill="#A397D2" fill-opacity="1.0"/>
+<text x="473.0" y="248.0" font-size="9" fill="#5F5E5A" text-anchor="start" font-weight="400">EG</text>
+<text x="500.0" y="248.0" font-size="9" fill="#C4372E" text-anchor="start" font-weight="600">红=周一</text>
+<text x="420.0" y="272.0" font-size="10" fill="#C4372E" text-anchor="start" font-weight="600">周一振幅仅为周二~周五的 0.69 倍（EG 0.68）</text>
+<text x="420.0" y="288.0" font-size="9.5" fill="#5F5E5A" text-anchor="start" font-weight="400">星期×时段矩阵 σ₁ 占 72%：星期效应几乎是单一因子</text>
+<text x="420.0" y="312.0" font-size="9.5" fill="#26215C" text-anchor="start" font-weight="600">月均振幅（%）：三月最高 / 八月最低，峰谷比 1.39，F=891（p<1e-16）</text>
+<text x="420.0" y="328.0" font-size="9" fill="#888780" text-anchor="start" font-weight="400">日振幅谱无可交易周期（红噪声型）；季节性用于仓位日历，不用于择时</text>
+</svg>

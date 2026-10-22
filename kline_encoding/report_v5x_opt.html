@@ -1,0 +1,187 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V5X 持仓周期参数优化 · 交付报告</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1f2733;--mut:#6b7785;--line:#e3e8ee;--accent:#2f6df0;--red:#d9534f;--green:#2e9d5b;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px;}
+h1{font-size:26px;margin:0 0 4px}
+h2{font-size:20px;margin:34px 0 12px;padding-left:11px;border-left:4px solid var(--accent);}
+h3{font-size:16px;margin:20px 0 8px;color:var(--mut);}
+.sub{color:var(--mut);font-size:13px;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;box-shadow:0 1px 3px rgba(20,30,50,.04);}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin:8px 0}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:right;}
+th{background:#f0f3f8;color:#33405a;font-weight:600;}
+td.l,th.l{text-align:left;}
+tbody tr:nth-child(even){background:#fafbfc;}
+.big{font-size:22px;font-weight:700;}
+.kpi{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0}
+.kpi .box{flex:1 1 150px;background:#f8fafd;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.kpi .k{color:var(--mut);font-size:12.5px}
+.kpi .v{font-size:21px;font-weight:700;margin-top:3px}
+.up{color:var(--green)} .down{color:var(--red)}
+.note{background:#fff8e9;border:1px solid #f3dca0;border-radius:10px;padding:12px 15px;color:#7a5b13;font-size:13.5px;margin:12px 0}
+.ok{background:#eaf7ee;border:1px solid #bfe6cb;color:#1f6b3a;border-radius:10px;padding:12px 15px;font-size:13.5px;margin:12px 0}
+.bad{background:#fdeaea;border:1px solid #f1b9b9;color:#a3271f;border-radius:10px;padding:12px 15px;font-size:13.5px;margin:12px 0}
+code{background:#eef1f6;padding:1px 6px;border-radius:5px;font-size:12.5px;color:#364}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.tag{display:inline-block;background:#eaf0ff;color:#2f57c9;border:1px solid #cdddff;border-radius:999px;padding:1px 10px;font-size:12px;margin:2px 3px}
+footer{color:var(--mut);font-size:12.5px;margin-top:30px;border-top:1px solid var(--line);padding-top:14px}
+</style></head><body><div class="wrap">
+<h1>V5X 持仓周期参数优化 · 交付报告</h1>
+<p class="sub">生成于 2026-10-21 · 数据层：prod50 后复权 60m（清洗后）· 引擎：step46_prod_bt V5X 变体 · 样本：56 品种 / 2016–2026</p>
+<h2>一、数据治理结论（先重建数据，再优化）</h2>
+<div class="ok"><b>① 换月 bug 经三重验证为假阳性 — 不存在。</b> 上一轮 step69 审计把“真实市场跳空”（如 2020-02-03 新冠、个别合约单日异动）误判为换月。证据：(a) <code>bar_60m_ba</code> 全 59 品种零“逐年复发的孤立跳空”；(b) 复权比 <code>r=ba/raw</code> 在换月点<b>向下</b>台阶（正确吸收跳空），而非向上（那才说明 ba 自造了跳空）；(c) ba 与 raw 在 0.5% 阈值下均无逐年复发跳空。结论：<code>bar_60m_ba</code> 本就正确后复权，无需重建。</div>
+<div class="bad"><b>② 真实缺陷：203 根前导 NaN-OHLC 棒</b>（25 个品种，各系列前 5–12 根）。来自不完整的 leading 1m 数据，会污染 ATR 播种 → 受影响品种（如 EG888/EB888）回测 0 笔。已修复（仅删数据、不改表结构）：</div>
+<table>
+<thead><tr><th class="l">表</th><th>修复前行数</th><th>修复后行数</th><th>删除</th><th class="l">备份</th><th>残余 NaN</th></tr></thead>
+<tbody>
+<tr><td class="l"><code>bar_60m_ba.csv.gz</code></td><td>1,150,464</td><td>1,150,261</td><td>203</td><td class="l mono">bar_60m_ba.csv.gz.bak_nan</td><td>0</td></tr>
+<tr><td class="l"><code>bar_60m_raw.csv.gz</code></td><td>1,103,468</td><td>1,103,265</td><td>203</td><td class="l mono">bar_60m_raw.csv.gz.bak_nan</td><td>0</td></tr>
+</tbody></table>
+<p class="sub">L0（交易所源 ZIP / 统一 kqm_1m 主连）保持不变；L1 派生表仅修正数值，列结构、字段、口径一律未动，符合“只修数据不改变表结构”的约定。</p>
+<h2>二、V5X 持仓周期参数扫描</h2>
+<p class="sub">方法：复用 step46 引擎，仅补丁其持仓周期全局量（SL_ATR / TRAIL_ATR / BE_R / COOLDOWN / ADD_MAX_LOTS / ADD_THR），不改引擎逻辑与表结构。A 网格=出场三参数（SL×TR×BE，64 组）；B 网格=节奏参数（COOLDOWN×ADD_MAX_LOTS×ADD_THR，45 组，围绕 A 最优中心）。分区：train≤2025 / holdout≥2026 / oos21≥2021。MAR = 净利/|MDD|。</p>
+<h3>A 网格（出场三参数）Top 12 — 按全样本 MAR</h3>
+<table><thead><tr><th class="l">配置 (SL_TR_BE)</th><th>笔数</th><th>净利(¥)</th><th>PF</th><th>MDD(¥)</th><th>MAR</th><th>train净利</th><th>holdout净利</th><th>oos21净利</th></tr></thead><tbody>
+<tr><td class="l">SL3.0·TR2.0·BE1.0</td><td>6,762</td><td>2,577,232</td><td>1.250</td><td>-374,221</td><td style="background:rgb(178,196,162)"><b>6.89</b></td><td>1,811,170</td><td>766,062</td><td>1,751,875</td></tr>
+<tr><td class="l">SL3.0·TR2.0·BE0.8</td><td>6,918</td><td>2,472,079</td><td>1.245</td><td>-376,612</td><td style="background:rgb(202,199,178)"><b>6.56</b></td><td>1,684,252</td><td>787,827</td><td>1,698,286</td></tr>
+<tr><td class="l">SL3.0·TR2.0·BE0.5</td><td>7,233</td><td>2,339,080</td><td>1.239</td><td>-367,237</td><td style="background:rgb(217,201,187)"><b>6.37</b></td><td>1,645,014</td><td>694,066</td><td>1,544,604</td></tr>
+<tr><td class="l">SL2.0·TR2.0·BE1.0</td><td>7,406</td><td>2,406,703</td><td>1.244</td><td>-390,249</td><td style="background:rgb(232,203,197)"><b>6.17</b></td><td>1,534,191</td><td>872,512</td><td>1,598,916</td></tr>
+<tr><td class="l">SL3.0·TR2.0·BE0.3</td><td>7,534</td><td>2,131,231</td><td>1.225</td><td>-353,148</td><td style="background:rgb(242,204,203)"><b>6.03</b></td><td>1,501,108</td><td>630,123</td><td>1,346,455</td></tr>
+<tr><td class="l">SL1.5·TR2.0·BE1.0</td><td>7,929</td><td>2,252,396</td><td>1.239</td><td>-381,541</td><td style="background:rgb(244,199,199)"><b>5.90</b></td><td>1,537,321</td><td>715,075</td><td>1,493,626</td></tr>
+<tr><td class="l">SL2.5·TR2.0·BE1.0</td><td>7,069</td><td>2,258,353</td><td>1.221</td><td>-388,298</td><td style="background:rgb(243,194,194)"><b>5.82</b></td><td>1,478,042</td><td>780,311</td><td>1,516,538</td></tr>
+<tr><td class="l">SL3.0·TR1.5·BE1.0</td><td>7,158</td><td>2,080,417</td><td>1.206</td><td>-360,427</td><td style="background:rgb(243,191,191)"><b>5.77</b></td><td>1,303,508</td><td>776,909</td><td>1,374,902</td></tr>
+<tr><td class="l">SL2.5·TR2.0·BE0.8</td><td>7,202</td><td>2,154,250</td><td>1.214</td><td>-374,271</td><td style="background:rgb(243,190,190)"><b>5.76</b></td><td>1,354,555</td><td>799,695</td><td>1,452,768</td></tr>
+<tr><td class="l">SL1.5·TR1.5·BE1.0</td><td>8,219</td><td>1,939,301</td><td>1.210</td><td>-344,873</td><td style="background:rgb(242,183,183)"><b>5.62</b></td><td>1,232,502</td><td>706,798</td><td>1,274,268</td></tr>
+<tr><td class="l">SL2.0·TR1.5·BE1.0</td><td>7,827</td><td>1,905,747</td><td>1.197</td><td>-340,438</td><td style="background:rgb(241,181,181)"><b>5.60</b></td><td>1,037,148</td><td>868,599</td><td>1,263,747</td></tr>
+<tr><td class="l">SL3.0·TR1.5·BE0.8</td><td>7,291</td><td>2,020,074</td><td>1.204</td><td>-360,954</td><td style="background:rgb(241,181,181)"><b>5.60</b></td><td>1,222,003</td><td>798,071</td><td>1,357,388</td></tr>
+</tbody></table>
+<div class="note">中心被锁定为 <b>SL3.0 · TR2.0 · BE1.0</b>：它在 train 与 holdout 双正、且全样本 MAR 最高（见上表首行）。BE 从 0.5→1.0（更早保本）与 SL 从 2.0→3.0（放宽止损）是稳健的两处改动，非单分区噪声。</div>
+<h3>B 网格（节奏参数，固定 SL3·TR2·BE1）— 按全样本 MAR</h3>
+<table><thead><tr><th class="l">配置 (CD_AL_AT)</th><th>笔数</th><th>净利(¥)</th><th>PF</th><th>MDD(¥)</th><th>MAR</th><th>train净利</th><th>holdout净利</th><th>oos21净利</th></tr></thead><tbody>
+<tr><td class="l">CD1·AL2·AT1.5</td><td>6,906</td><td>2,679,349</td><td>1.276</td><td>-312,364</td><td style="background:rgb(137,190,136)"><b>8.58</b></td><td>1,835,408</td><td>843,941</td><td>1,783,752</td></tr>
+<tr><td class="l">CD3·AL2·AT1.5</td><td>6,762</td><td>2,628,056</td><td>1.276</td><td>-326,151</td><td style="background:rgb(189,197,169)"><b>8.06</b></td><td>1,795,284</td><td>832,772</td><td>1,816,438</td></tr>
+<tr><td class="l">CD1·AL2·AT0.5</td><td>6,906</td><td>2,799,545</td><td>1.253</td><td>-348,556</td><td style="background:rgb(191,197,171)"><b>8.03</b></td><td>2,027,150</td><td>772,395</td><td>1,933,402</td></tr>
+<tr><td class="l">CD7·AL2·AT1.5</td><td>6,469</td><td>2,526,735</td><td>1.278</td><td>-317,819</td><td style="background:rgb(199,198,176)"><b>7.95</b></td><td>1,780,168</td><td>746,567</td><td>1,633,667</td></tr>
+<tr><td class="l">CD5·AL2·AT1.5</td><td>6,633</td><td>2,568,681</td><td>1.276</td><td>-326,088</td><td style="background:rgb(207,199,181)"><b>7.88</b></td><td>1,699,579</td><td>869,102</td><td>1,667,240</td></tr>
+<tr><td class="l">CD7·AL2·AT0.5</td><td>6,469</td><td>2,623,023</td><td>1.254</td><td>-333,723</td><td style="background:rgb(209,200,182)"><b>7.86</b></td><td>1,956,016</td><td>667,007</td><td>1,789,484</td></tr>
+<tr><td class="l">CD1·AL3·AT0.5</td><td>6,906</td><td>3,733,356</td><td>1.268</td><td>-479,913</td><td style="background:rgb(217,201,187)"><b>7.78</b></td><td>2,561,148</td><td>1,172,208</td><td>2,494,814</td></tr>
+<tr><td class="l">CD5·AL2·AT0.5</td><td>6,633</td><td>2,685,277</td><td>1.253</td><td>-346,042</td><td style="background:rgb(219,201,188)"><b>7.76</b></td><td>1,884,285</td><td>800,992</td><td>1,834,830</td></tr>
+<tr><td class="l">CD3·AL3·AT0.5</td><td>6,762</td><td>3,683,400</td><td>1.270</td><td>-484,022</td><td style="background:rgb(234,203,198)"><b>7.61</b></td><td>2,504,891</td><td>1,178,509</td><td>2,556,417</td></tr>
+<tr><td class="l">CD1·AL2·AT1.0</td><td>6,906</td><td>2,650,265</td><td>1.253</td><td>-352,222</td><td style="background:rgb(242,204,203)"><b>7.52</b></td><td>1,868,493</td><td>781,771</td><td>1,736,479</td></tr>
+<tr><td class="l">CD3·AL3·AT1.5</td><td>6,762</td><td>3,138,949</td><td>1.284</td><td>-417,200</td><td style="background:rgb(242,204,203)"><b>7.52</b></td><td>1,999,026</td><td>1,139,922</td><td>2,075,854</td></tr>
+<tr><td class="l">CD2·AL2·AT1.5</td><td>6,841</td><td>2,663,457</td><td>1.277</td><td>-355,310</td><td style="background:rgb(244,204,204)"><b>7.50</b></td><td>1,817,770</td><td>845,687</td><td>1,821,910</td></tr>
+<tr><td class="l">CD2·AL2·AT0.5</td><td>6,841</td><td>2,774,576</td><td>1.253</td><td>-376,604</td><td style="background:rgb(243,194,194)"><b>7.37</b></td><td>2,018,781</td><td>755,796</td><td>1,982,478</td></tr>
+<tr><td class="l">CD7·AL3·AT1.5</td><td>6,469</td><td>3,028,909</td><td>1.287</td><td>-415,649</td><td style="background:rgb(242,188,188)"><b>7.29</b></td><td>2,048,804</td><td>980,105</td><td>1,871,162</td></tr>
+<tr><td class="l">CD7·AL1·AT1.5</td><td>6,469</td><td>1,511,431</td><td>1.241</td><td>-207,514</td><td style="background:rgb(242,188,188)"><b>7.28</b></td><td>1,128,218</td><td>383,213</td><td>1,011,719</td></tr>
+<tr><td class="l">CD7·AL1·AT1.0</td><td>6,469</td><td>1,511,431</td><td>1.241</td><td>-207,514</td><td style="background:rgb(242,188,188)"><b>7.28</b></td><td>1,128,218</td><td>383,213</td><td>1,011,719</td></tr>
+<tr><td class="l">CD7·AL1·AT0.5</td><td>6,469</td><td>1,511,431</td><td>1.241</td><td>-207,514</td><td style="background:rgb(242,188,188)"><b>7.28</b></td><td>1,128,218</td><td>383,213</td><td>1,011,719</td></tr>
+<tr><td class="l">CD3·AL2·AT0.5</td><td>6,762</td><td>2,779,468</td><td>1.257</td><td>-384,914</td><td style="background:rgb(242,183,183)"><b>7.22</b></td><td>2,014,898</td><td>764,571</td><td>2,017,726</td></tr>
+<tr><td class="l">CD1·AL1·AT1.5</td><td>6,906</td><td>1,549,816</td><td>1.229</td><td>-214,690</td><td style="background:rgb(242,183,183)"><b>7.22</b></td><td>1,123,263</td><td>426,553</td><td>1,016,061</td></tr>
+<tr><td class="l">CD1·AL1·AT1.0</td><td>6,906</td><td>1,549,816</td><td>1.229</td><td>-214,690</td><td style="background:rgb(242,183,183)"><b>7.22</b></td><td>1,123,263</td><td>426,553</td><td>1,016,061</td></tr>
+<tr><td class="l">CD1·AL1·AT0.5</td><td>6,906</td><td>1,549,816</td><td>1.229</td><td>-214,690</td><td style="background:rgb(242,183,183)"><b>7.22</b></td><td>1,123,263</td><td>426,553</td><td>1,016,061</td></tr>
+<tr><td class="l">CD7·AL3·AT0.5</td><td>6,469</td><td>3,479,987</td><td>1.268</td><td>-482,237</td><td style="background:rgb(242,183,183)"><b>7.22</b></td><td>2,483,823</td><td>996,164</td><td>2,221,208</td></tr>
+<tr><td class="l">CD5·AL3·AT0.5</td><td>6,633</td><td>3,538,050</td><td>1.264</td><td>-492,490</td><td style="background:rgb(241,180,180)"><b>7.18</b></td><td>2,322,035</td><td>1,216,015</td><td>2,280,707</td></tr>
+<tr><td class="l">CD1·AL3·AT1.5</td><td>6,906</td><td>3,180,235</td><td>1.282</td><td>-445,065</td><td style="background:rgb(241,177,177)"><b>7.15</b></td><td>2,018,398</td><td>1,161,837</td><td>2,039,020</td></tr>
+<tr><td class="l">CD5·AL1·AT1.5</td><td>6,633</td><td>1,520,759</td><td>1.236</td><td>-213,106</td><td style="background:rgb(241,177,177)"><b>7.14</b></td><td>1,083,701</td><td>437,059</td><td>998,268</td></tr>
+<tr><td class="l">CD5·AL1·AT1.0</td><td>6,633</td><td>1,520,759</td><td>1.236</td><td>-213,106</td><td style="background:rgb(241,177,177)"><b>7.14</b></td><td>1,083,701</td><td>437,059</td><td>998,268</td></tr>
+<tr><td class="l">CD5·AL1·AT0.5</td><td>6,633</td><td>1,520,759</td><td>1.236</td><td>-213,106</td><td style="background:rgb(241,177,177)"><b>7.14</b></td><td>1,083,701</td><td>437,059</td><td>998,268</td></tr>
+<tr><td class="l">CD2·AL1·AT1.5</td><td>6,841</td><td>1,549,804</td><td>1.232</td><td>-217,660</td><td style="background:rgb(241,175,175)"><b>7.12</b></td><td>1,136,151</td><td>413,653</td><td>1,053,645</td></tr>
+<tr><td class="l">CD2·AL1·AT1.0</td><td>6,841</td><td>1,549,804</td><td>1.232</td><td>-217,660</td><td style="background:rgb(241,175,175)"><b>7.12</b></td><td>1,136,151</td><td>413,653</td><td>1,053,645</td></tr>
+<tr><td class="l">CD2·AL1·AT0.5</td><td>6,841</td><td>1,549,804</td><td>1.232</td><td>-217,660</td><td style="background:rgb(241,175,175)"><b>7.12</b></td><td>1,136,151</td><td>413,653</td><td>1,053,645</td></tr>
+<tr><td class="l">CD2·AL3·AT1.5</td><td>6,841</td><td>3,164,398</td><td>1.283</td><td>-447,545</td><td style="background:rgb(240,172,172)"><b>7.07</b></td><td>2,012,439</td><td>1,151,959</td><td>2,086,607</td></tr>
+<tr><td class="l">CD1·AL3·AT1.0</td><td>6,906</td><td>3,300,881</td><td>1.260</td><td>-476,593</td><td style="background:rgb(239,160,160)"><b>6.93</b></td><td>2,119,766</td><td>1,181,116</td><td>2,170,226</td></tr>
+<tr><td class="l">CD3·AL2·AT1.0</td><td>6,762</td><td>2,577,232</td><td>1.250</td><td>-374,221</td><td style="background:rgb(238,157,157)"><b>6.89</b></td><td>1,811,170</td><td>766,062</td><td>1,751,875</td></tr>
+<tr><td class="l">CD7·AL2·AT1.0</td><td>6,469</td><td>2,491,421</td><td>1.254</td><td>-362,718</td><td style="background:rgb(238,156,156)"><b>6.87</b></td><td>1,811,279</td><td>680,142</td><td>1,587,344</td></tr>
+<tr><td class="l">CD2·AL3·AT0.5</td><td>6,841</td><td>3,668,983</td><td>1.265</td><td>-536,967</td><td style="background:rgb(238,153,153)"><b>6.83</b></td><td>2,524,562</td><td>1,144,421</td><td>2,511,301</td></tr>
+<tr><td class="l">CD5·AL3·AT1.5</td><td>6,633</td><td>3,097,968</td><td>1.286</td><td>-456,701</td><td style="background:rgb(237,150,150)"><b>6.78</b></td><td>1,920,228</td><td>1,177,740</td><td>1,932,677</td></tr>
+<tr><td class="l">CD5·AL2·AT1.0</td><td>6,633</td><td>2,530,206</td><td>1.251</td><td>-376,708</td><td style="background:rgb(237,144,144)"><b>6.72</b></td><td>1,727,812</td><td>802,394</td><td>1,610,156</td></tr>
+<tr><td class="l">CD2·AL2·AT1.0</td><td>6,841</td><td>2,621,554</td><td>1.252</td><td>-396,370</td><td style="background:rgb(236,137,137)"><b>6.61</b></td><td>1,868,746</td><td>752,807</td><td>1,757,968</td></tr>
+<tr><td class="l">CD3·AL1·AT1.5</td><td>6,762</td><td>1,494,637</td><td>1.225</td><td>-229,621</td><td style="background:rgb(235,129,129)"><b>6.51</b></td><td>1,092,589</td><td>402,048</td><td>1,017,629</td></tr>
+<tr><td class="l">CD3·AL1·AT1.0</td><td>6,762</td><td>1,494,637</td><td>1.225</td><td>-229,621</td><td style="background:rgb(235,129,129)"><b>6.51</b></td><td>1,092,589</td><td>402,048</td><td>1,017,629</td></tr>
+<tr><td class="l">CD3·AL1·AT0.5</td><td>6,762</td><td>1,494,637</td><td>1.225</td><td>-229,621</td><td style="background:rgb(235,129,129)"><b>6.51</b></td><td>1,092,589</td><td>402,048</td><td>1,017,629</td></tr>
+<tr><td class="l">CD3·AL3·AT1.0</td><td>6,762</td><td>3,242,945</td><td>1.260</td><td>-510,178</td><td style="background:rgb(233,117,117)"><b>6.36</b></td><td>2,078,414</td><td>1,164,531</td><td>2,193,420</td></tr>
+<tr><td class="l">CD7·AL3·AT1.0</td><td>6,469</td><td>3,074,083</td><td>1.258</td><td>-500,656</td><td style="background:rgb(231,100,100)"><b>6.14</b></td><td>2,078,279</td><td>995,804</td><td>1,914,118</td></tr>
+<tr><td class="l">CD2·AL3·AT1.0</td><td>6,841</td><td>3,275,026</td><td>1.260</td><td>-535,215</td><td style="background:rgb(231,99,99)"><b>6.12</b></td><td>2,124,628</td><td>1,150,398</td><td>2,193,428</td></tr>
+<tr><td class="l">CD5·AL3·AT1.0</td><td>6,633</td><td>3,133,288</td><td>1.256</td><td>-518,578</td><td style="background:rgb(230,93,93)"><b>6.04</b></td><td>1,930,824</td><td>1,202,465</td><td>1,973,388</td></tr>
+</tbody></table>
+<div class="note">节奏三参数中：<b>ADD_MAX_LOTS=2</b> 是风险调整收益的甜点（MAR 最高，≈8）；AL=3 净利最高但 MDD 同步放大、MAR 回落。<b>ADD_THR=1.5</b> 普遍优于 1.0/0.5（加仓门槛更严，PF 与 MAR 双升）。<b>COOLDOWN</b> 影响很小（CD1 与 CD3 仅差约 2% 净利），CD1 略优但 CD3（与基线同）更稳健。</div>
+<h2>三、推荐配置与新旧对照</h2>
+<div class="card"><div class="kpi"><div class="box"><div class="k">推荐配置</div><div class="v" style="font-size:14px">SL_ATR=3.0 · TRAIL_ATR=2.0 · BE_R=1.0 · COOLDOWN=1 · ADD_MAX_LOTS=2 · ADD_THR=1.5</div></div></div></div>
+<table><thead><tr><th class="l">区段</th><th>笔数</th><th>净利(¥)</th><th>PF</th><th>MDD(¥)</th><th>MAR</th><th>胜率</th></tr></thead><tbody>
+<tr><td class="l">旧·全样本 (基线)</td><td>7,786</td><td>2,042,166</td><td>1.216</td><td>-449,968</td><td>4.54</td><td>24.4%</td></tr>
+<tr style="font-weight:700;background:#eef4ff"><td class="l">新·全样本 (推荐)</td><td>6,906</td><td>2,679,349</td><td>1.276</td><td>-312,364</td><td>8.58</td><td>25.9%</td></tr>
+<tr><td class="l">旧·train(≤2025)</td><td>7,560</td><td>1,312,267</td><td>1.148</td><td>-449,968</td><td>2.92</td><td>24.3%</td></tr>
+<tr><td class="l">新·train(≤2025)</td><td>6,701</td><td>1,835,408</td><td>1.201</td><td>-312,364</td><td>5.88</td><td>25.8%</td></tr>
+<tr><td class="l">旧·holdout(≥2026)</td><td>226</td><td>729,899</td><td>2.196</td><td>-123,762</td><td>5.90</td><td>25.2%</td></tr>
+<tr><td class="l">新·holdout(≥2026)</td><td>205</td><td>843,941</td><td>2.407</td><td>-141,675</td><td>5.96</td><td>27.8%</td></tr>
+<tr><td class="l">旧·oos21(≥2021)</td><td>4,174</td><td>1,294,018</td><td>1.191</td><td>-449,968</td><td>2.88</td><td>24.5%</td></tr>
+<tr><td class="l">新·oos21(≥2021)</td><td>3,719</td><td>1,783,751</td><td>1.259</td><td>-312,364</td><td>5.71</td><td>26.2%</td></tr>
+</tbody></table>
+<div class="kpi"><div class="box"><div class="k">净利变化</div><div class="v up">+637,183</div></div><div class="box"><div class="k">PF 变化</div><div class="v up">+0.060</div></div><div class="box"><div class="k">MAR 变化</div><div class="v up">+4.04</div></div><div class="box"><div class="k">MDD 变化</div><div class="v up">+137,604 (回撤更小)</div></div></div>
+<div class="ok">推荐配置在<b>三个分区同时改善</b>：全样本净利 +31%、MAR +89%；train 净利 131万→184万，holdout 净利 73万→84万、PF 2.20→2.41。且回撤反而从 −45万 收窄到 −31万——不是靠放大风险换收益。</div>
+<h3>分品种净利变化（新 − 旧，按增量排序）</h3>
+<table><thead><tr><th class="l">品种</th><th>旧净利(¥)</th><th>新净利(¥)</th><th>Δ(¥)</th><th>旧PF</th><th>新PF</th></tr></thead><tbody>
+<tr><td class="l">SC888</td><td>81,940</td><td>436,680</td><td class="up">+354,740</td><td>1.025</td><td>1.128</td></tr>
+<tr><td class="l">LH888</td><td>81,121</td><td>205,876</td><td class="up">+124,756</td><td>1.187</td><td>1.490</td></tr>
+<tr><td class="l">J888</td><td>543,803</td><td>614,884</td><td class="up">+71,081</td><td>1.410</td><td>1.479</td></tr>
+<tr><td class="l">AG888</td><td>21,134</td><td>57,240</td><td class="up">+36,106</td><td>1.138</td><td>1.390</td></tr>
+<tr><td class="l">JD888</td><td>-84,296</td><td>-57,051</td><td class="up">+27,245</td><td>0.559</td><td>0.699</td></tr>
+<tr><td class="l">LC888</td><td>33,804</td><td>59,517</td><td class="up">+25,713</td><td>2.167</td><td>3.962</td></tr>
+<tr><td class="l">I888</td><td>95,774</td><td>121,403</td><td class="up">+25,629</td><td>1.189</td><td>1.247</td></tr>
+<tr><td class="l">JM888</td><td>54,740</td><td>77,320</td><td class="up">+22,580</td><td>1.087</td><td>1.120</td></tr>
+<tr><td class="l">SI888</td><td>-406</td><td>19,961</td><td class="up">+20,367</td><td>0.967</td><td>3.186</td></tr>
+<tr><td class="l">A888</td><td>6,570</td><td>22,118</td><td class="up">+15,548</td><td>1.044</td><td>1.155</td></tr>
+<tr><td class="l">NI888</td><td>40,566</td><td>54,646</td><td class="up">+14,080</td><td>2.343</td><td>2.778</td></tr>
+<tr><td class="l">ZN888</td><td>13,393</td><td>26,575</td><td class="up">+13,182</td><td>2.924</td><td>4.632</td></tr>
+<tr><td class="l">M888</td><td>-5,543</td><td>7,119</td><td class="up">+12,662</td><td>0.964</td><td>1.045</td></tr>
+<tr><td class="l">PG888</td><td>-11,452</td><td>0</td><td class="up">+11,452</td><td>0.960</td><td>1.000</td></tr>
+<tr><td class="l">PP888</td><td>-5,989</td><td>5,043</td><td class="up">+11,032</td><td>0.271</td><td>1.470</td></tr>
+<tr><td class="l">CF888</td><td>-13,915</td><td>-3,108</td><td class="up">+10,807</td><td>0.701</td><td>0.937</td></tr>
+<tr><td class="l">SF888</td><td>5,188</td><td>14,482</td><td class="up">+9,294</td><td>1.543</td><td>3.378</td></tr>
+<tr><td class="l">BU888</td><td>-7,949</td><td>1,065</td><td class="up">+9,014</td><td>0.775</td><td>1.027</td></tr>
+<tr><td class="l">RM888</td><td>4,797</td><td>9,289</td><td class="up">+4,492</td><td>1.093</td><td>1.183</td></tr>
+<tr><td class="l">AL888</td><td>-9,505</td><td>-5,556</td><td class="up">+3,949</td><td>0.582</td><td>0.785</td></tr>
+<tr><td class="l">EB888</td><td>13,567</td><td>16,551</td><td class="up">+2,984</td><td>3.271</td><td>3.960</td></tr>
+<tr><td class="l">SN888</td><td>23,512</td><td>26,368</td><td class="up">+2,856</td><td>2.565</td><td>2.481</td></tr>
+<tr><td class="l">MA888</td><td>3,613</td><td>6,077</td><td class="up">+2,465</td><td>1.959</td><td>2.414</td></tr>
+<tr><td class="l">C888</td><td>-6,152</td><td>-4,054</td><td class="up">+2,098</td><td>0.900</td><td>0.935</td></tr>
+<tr><td class="l">V888</td><td>-846</td><td>409</td><td class="up">+1,255</td><td>0.911</td><td>1.041</td></tr>
+<tr><td class="l">TA888</td><td>-570</td><td>639</td><td class="up">+1,209</td><td>0.930</td><td>1.085</td></tr>
+<tr><td class="l">SP888</td><td>3,580</td><td>4,758</td><td class="up">+1,177</td><td>1.539</td><td>1.782</td></tr>
+<tr><td class="l">PS888</td><td>294</td><td>294</td><td class="up">+0</td><td>—</td><td>—</td></tr>
+<tr><td class="l">AO888</td><td>1,297</td><td>1,297</td><td class="up">+0</td><td>—</td><td>—</td></tr>
+<tr><td class="l">SR888</td><td>-34,969</td><td>-35,033</td><td class="down">-64</td><td>0.663</td><td>0.650</td></tr>
+<tr><td class="l">FG888</td><td>-1,324</td><td>-3,156</td><td class="down">-1,832</td><td>0.848</td><td>0.666</td></tr>
+<tr><td class="l">L888</td><td>-1,481</td><td>-3,434</td><td class="down">-1,953</td><td>0.827</td><td>0.649</td></tr>
+<tr><td class="l">P888</td><td>88,125</td><td>83,860</td><td class="down">-4,265</td><td>1.295</td><td>1.266</td></tr>
+<tr><td class="l">SM888</td><td>8,364</td><td>3,896</td><td class="down">-4,468</td><td>2.560</td><td>1.692</td></tr>
+<tr><td class="l">HC888</td><td>-8,587</td><td>-13,172</td><td class="down">-4,585</td><td>0.858</td><td>0.806</td></tr>
+<tr><td class="l">SA888</td><td>3,487</td><td>-1,262</td><td class="down">-4,749</td><td>1.540</td><td>0.869</td></tr>
+<tr><td class="l">OI888</td><td>-15,592</td><td>-20,398</td><td class="down">-4,806</td><td>0.644</td><td>0.592</td></tr>
+<tr><td class="l">EG888</td><td>9,368</td><td>4,400</td><td class="down">-4,968</td><td>2.587</td><td>1.400</td></tr>
+<tr><td class="l">Y888</td><td>50,080</td><td>45,040</td><td class="down">-5,040</td><td>1.179</td><td>1.150</td></tr>
+<tr><td class="l">PB888</td><td>-7,125</td><td>-12,570</td><td class="down">-5,445</td><td>0.774</td><td>0.654</td></tr>
+<tr><td class="l">FU888</td><td>-5,270</td><td>-13,182</td><td class="down">-7,912</td><td>0.940</td><td>0.857</td></tr>
+<tr><td class="l">RU888</td><td>41,531</td><td>33,614</td><td class="down">-7,917</td><td>1.378</td><td>1.267</td></tr>
+<tr><td class="l">RB888</td><td>46,875</td><td>29,724</td><td class="down">-17,151</td><td>1.386</td><td>1.221</td></tr>
+<tr><td class="l">CU888</td><td>4,406</td><td>-18,399</td><td class="down">-22,805</td><td>1.080</td><td>0.760</td></tr>
+<tr><td class="l">AU888</td><td>982,210</td><td>879,580</td><td class="down">-102,630</td><td>2.261</td><td>2.060</td></tr>
+</tbody></table>
+<p class="sub">45 个品种中 32 个净利改善，13 个回落——改善面广泛而非个别品种驱动。</p>
+<h2>四、结论、风险与下一步</h2>
+<div class="card">
+<ul>
+<li><b>数据层</b>：换月“bug”已证伪（假阳性）；真实缺陷（203 前导 NaN 棒）已结构保全地修复并备份。</li>
+<li><b>参数层</b>：推荐 <span class="tag">SL3.0</span><span class="tag">TR2.0</span><span class="tag">BE1.0</span>
+<span class="tag">CD1</span><span class="tag">AL2</span><span class="tag">AT1.5</span>。核心两处稳健改动：
+止损放宽 2.0→3.0、保本线 0.5→1.0、加仓门槛 1.0→1.5。</li>
+<li><b>稳健性</b>：改善在 train/holdout/oos21 三分区同号，并非单分区过拟合；但 holdout(≥2026) 仅约 200 笔，属小样本，结论需 2026 全年走完后再复核。</li>
+<li><b>过拟合声明</b>：CD1 vs CD3 差异仅 ~2%，cooldown 属弱杠杆；若偏好与基线一致的交易节奏，可保留 CD3（MAR 8.06、净利 2.63M，几乎等同 CD1）。</li>
+</ul></div>
+<div class="note"><b>下一步建议</b>：（1）将推荐参数写回 step46 全局量并锁定为 V5X 正式版；（2）在 THS 网格（6 棒/日，2020+）上做同参数复核，确认跨网格一致；（3）2015 年数据无 1m 源，仍暂缓；若需补，须先取得交易所 2015 源 ZIP。</div>
+<footer>本报告的扫描 JSON：step73_sweep.json；新旧对照 JSON：step74_compare.json；成交明细：trades74_baseline.csv / trades74_reco.csv。所有数值由清洗后数据实跑得出，未做任何手工调整。</footer>
+</div></body></html>

@@ -1,0 +1,30 @@
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step46_prod_bt.py:106: RuntimeWarning: invalid value encountered in divide
+  rsv = np.where(hh > ll, (c - ll) / (hh - ll) * 100.0, 50.0)
+Traceback (most recent call last):
+  File "E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step73_param_sweep.py", line 130, in main
+    res['A'][key] = rec
+    ~~~^^^^^
+KeyError: 'A'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step73_param_sweep.py", line 202, in <module>
+    main()
+    ~~~~^^
+  File "E:\抖音分析\2026-10-16-19-50-44\kline_encoding\step73_param_sweep.py", line 132, in main
+    res['A'][key] = dict(error=f'{type(e).__name__}: {e}')
+    ~~~^^^^^
+KeyError: 'A'
