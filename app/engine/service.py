@@ -162,7 +162,15 @@ def _ensemble(
             "caliber": get_settings().yaml.backtest.label_metric,  # §17 工单①
         }
         stmt = pg_insert(PredictionResult).values(**values)
-        # run_id 含秒级时间戳：同 as_of 多次运行生成新 run_id，天然可追溯不冲突
+        # 2026-10-23 事故修复：run_id 的日期部分取自数据 as_of 日（sector 路径为
+        # `as_of_date or dates[-1]`）。一旦该数据冻结（退役板块 financial 的指数停在
+        # 2026-09-11），日期部分就恒为旧值，run_id 只剩"时刻"这一位唯一——每日同时刻
+        # 开跑即跨天撞主键（UniqueViolation → 事务中止 → 同批 50 品种全灭）。
+        # 改为冲突即更新：同 (run_id, symbol) 重跑是幂等覆盖，不再炸掉整批。
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["run_id", "symbol"],
+            set_={k: stmt.excluded[k] for k in values if k not in ("run_id", "symbol")},
+        )
         session.execute(stmt)
         session.commit()
     return out
@@ -356,9 +364,19 @@ def predict_sector_indices(session: Session, as_of_date: date | None = None) -> 
     cfg = get_settings().yaml.predict
     as_of_ts = datetime.now(TZ)
 
+    # 2026-10-23 事故修复：板块清单必须来自 sector_map（当前有效分类），**不能**取
+    # SectorIndex 的 distinct——后者含已退役板块。financial 的成员是中金所股指，
+    # §16.1 起剔除出采集/预测范围，其指数永远停在 2026-09-11：run_id 的日期部分
+    # 随之冻结，与每日同时刻的 run_id 撞 prediction_result 主键 → 整个 predict
+    # 事务中止、50 个品种全部 InFailedSqlTransaction 失败。
+    # 另加陈旧闸门：仍在谱系内但指数落后过多的板块同样跳过（等不出新数据，且会
+    # 写出 target_date 是一个月前的过期预测，污染品种级 sector_pred_prob 特征）。
+    from app.models import SectorMap
+
     sectors = session.execute(
-        select(SectorIndex.sector).distinct().order_by(SectorIndex.sector)
+        select(SectorMap.sector).distinct().order_by(SectorMap.sector)
     ).scalars().all()
+    max_stale_days = int(getattr(cfg, "sector_max_stale_days", 10) or 10)
 
     outputs_all: list[dict] = []
     for sector in sectors:
@@ -374,6 +392,18 @@ def predict_sector_indices(session: Session, as_of_date: date | None = None) -> 
         rows = rows[::-1]
         dates = pd.Index([r[0] for r in rows])
         rets = np.asarray([float(r[1]) for r in rows])
+
+        # trade_date 可能是 date 或 datetime（视列类型/驱动而定），统一成 date 再比
+        latest = dates[-1]
+        if isinstance(latest, datetime):
+            latest = latest.date()
+        stale_days = (as_of_ts.date() - latest).days
+        if stale_days > max_stale_days:
+            logger.warning(
+                f"[sector-predict] {sector} 指数最新 {latest} 落后 {stale_days} 天"
+                f"（阈值 {max_stale_days}），跳过预测（疑似数据源停供或板块已退役）"
+            )
+            continue
 
         # Hurst 门控（与品种同一套规则）
         from app.features.complexity import hurst_exponent, market_state, sample_entropy

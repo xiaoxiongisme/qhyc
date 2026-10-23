@@ -112,8 +112,18 @@ def _predict_job(session, symbols: list[str], label: str) -> int:
     try:
         out = predict_symbols(session, symbols=symbols)
         ok = sum(1 for r in out if "error" not in r)
-        repo.finish(run, "success", f"{ok}/{len(out)} symbols")
-        logger.info(f"[scheduler] predict done label={label} {ok}/{len(out)}")
+        # 2026-10-23：原实现只要不抛异常就记 success，"0/50 symbols"（实际全灭）也会
+        # 写成 success，心跳巡检因此永远发现不了批量失败。按成功率分档。
+        if not out:
+            status = "failed"
+        elif ok == len(out):
+            status = "success"
+        elif ok == 0:
+            status = "failed"
+        else:
+            status = "partial"
+        repo.finish(run, status, f"{ok}/{len(out)} symbols")
+        logger.info(f"[scheduler] predict done label={label} {ok}/{len(out)} status={status}")
         return ok
     except Exception as e:
         repo.finish(run, "failed", str(e))
