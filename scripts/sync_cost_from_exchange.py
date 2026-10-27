@@ -83,6 +83,11 @@ def fetch_czce(refresh=True):
     return rows
 
 
+# 2026-10-28 新增：真正的 dry-run 开关（由 main() 依据 --apply 设置）。
+# 见 upsert() 内说明——此前不带 --apply 也会落库，是危险的"假 dry-run"。
+_DRY_RUN = False
+
+
 def upsert(s, vc, ex, act, ft, fv, note, src):
     """按**滚动语义**写入：先闭合该键的旧「当前有效」行，再插入新行。
 
@@ -91,6 +96,16 @@ def upsert(s, vc, ex, act, ft, fv, note, src):
       造成同一品种动作出现两条口径（如 SA 同时有 PCT 2‰ 与 FIXED 4.0）。
       现改为：闭合旧行(effective_to=APPLY_DAY) + 插入新行，保证任一时刻每个键只有一条有效。
     """
+    # ── 2026-10-28 修复：`--apply` 此前形同虚设 ──────────────────────────
+    # 原实现把 `if not args.apply: print("[dry-run] --apply to write")` 放在 main() **最后**，
+    # 而所有写入块（交易所通知行 / 用户文档行 / 郑商所官方行）都在它之前无条件执行 ——
+    # 即**不带 --apply 的 dry-run 照样落库**。实测 2026-10-28：一次"dry-run"就把
+    # dim_trading_cost 从 465 行改到 515 行、155 行被更新。
+    # 这是危险的假 dry-run：运维以为只是看看，实际已改了成本字典。
+    # 现在唯一写入口统一拦截；dry-run 时只做读取与统计，不产生任何写。
+    if _DRY_RUN:
+        return (None, None)
+
     # ── 修复（2026-10-03）：同日重跑必须能「复活」被闭合的行 ──────────────
     # 场景：首轮写入 doc 行(effective_from=APPLY_DAY) → 018 去重把它闭合(同日起) →
     #       重跑时 INSERT 命中 uq_dim_trading_cost(键含 effective_from) 的
@@ -119,7 +134,13 @@ def upsert(s, vc, ex, act, ft, fv, note, src):
         " scope_kind, fee_type, fee_value, exchange_fee_value, broker_markup_type, "
         " broker_markup_value, slip_ticks, effective_from, source, note) VALUES "
         " (:ex,:v,'FUTURE',:a,'ALL',:ft,:fv,:fv,'FIXED',:bm,1,CAST(:ed AS DATE),:src,:nt) "
-        "ON CONFLICT ON CONSTRAINT uq_dim_trading_cost DO UPDATE SET "
+        # ⚠ 2026-10-28 修复：原写 `ON CONFLICT ON CONSTRAINT uq_dim_trading_cost` 在生产必崩。
+        # 原因：db_layering 把真表迁到 l3_ref 并在 public 留下同名**视图**，而连接
+        # search_path=("$user", public) 不含 l3_ref —— 未限定的 INSERT 打在视图上，
+        # `ON CONSTRAINT` 按名查找约束时只查视图自身（视图无约束）→ UndefinedObject。
+        # 改列推断后由优化器下推到基表的唯一索引，视图写入即可正常仲裁。
+        "ON CONFLICT (variety_code, instrument_kind, action, scope_kind, effective_from) "
+        "DO UPDATE SET "
         " fee_type=EXCLUDED.fee_type, fee_value=EXCLUDED.fee_value, "
         " exchange_fee_value=EXCLUDED.exchange_fee_value, "
         " broker_markup_type=EXCLUDED.broker_markup_type, "
@@ -131,10 +152,12 @@ def upsert(s, vc, ex, act, ft, fv, note, src):
 
 
 def main():
+    global _DRY_RUN
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--no-refresh", action="store_true")
     args = ap.parse_args()
+    _DRY_RUN = not args.apply
 
     notice = load_notice()
     czce = fetch_czce(not args.no_refresh)
@@ -248,8 +271,9 @@ def main():
                 {"v": vc, "a": act}).fetchone()
             print("   %-4s %-12s %-6s %-8s %s" % (vc, act, r[0], r[1], r[2]) if r
                   else "   %-4s %-12s MISSING" % (vc, act))
-    if not args.apply:
-        print("\n[dry-run] --apply to write")
+    if _DRY_RUN:
+        print("\n[dry-run] 未加 --apply：本次**未写入任何行**（仅读取与统计）。"
+              "\n          （2026-10-28 前此处是假 dry-run——写入已先于本判断发生）")
     return 0
 
 

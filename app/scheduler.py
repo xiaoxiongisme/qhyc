@@ -1144,6 +1144,18 @@ SUBPROCESS_SCRIPTS = (
     # G4 交易日历退化为二义判定。脚本自带 max(trade_date)+1 续跑且按日幂等，故纳入每日调度
     # + 启动自检，杜绝再次静默停滞。
     "seed_futures_rule.py",
+    # 2026-10-28 同类排查（"还有没有第二个 futures_rule"）：按数据新鲜度扫全库，
+    # daily_bar/contract_daily/hourly_bar/spot_basis/warehouse_receipt/inventory 全部新鲜
+    # （10-27/10-28），唯独字典与采集类中 3 张滞后，且均无调度、与 futures_rule 同属
+    # "纯手工家族"：
+    #   roll_yield     最新 2026-09-30，停更 27 天  -> collect_roll_yield.py（每日补采）
+    #   dim_trading_cost 最新 updated_at 2026-10-08，停更 19 天（与 futures_rule 同一时刻停摆）
+    #                                                -> sync_cost_from_exchange.py（每周 --apply）
+    #   dim_variety_tick_history 由 rebuild_dict_from_akshare.py 写入（每周 dry-run 漂移检测，
+    #                                                刻意不 --apply，理由见作业 docstring）
+    "collect_roll_yield.py",
+    "sync_cost_from_exchange.py",
+    "rebuild_dict_from_akshare.py",
 )
 
 
@@ -1237,6 +1249,132 @@ def _seed_futures_rule_job() -> None:
         logger.warning("[scheduler] seed_futures_rule timeout>3600s")
     except Exception as e:  # noqa: BLE001
         logger.exception("[scheduler] seed_futures_rule failed")
+
+
+def _collect_roll_yield_job() -> None:
+    """每日补采 roll_yield（展期收益）。
+
+    事故背景（2026-10-28 全库新鲜度排查）：roll_yield 最新只到 **2026-09-30**（停更 27 天），
+    而 daily_bar / contract_daily / hourly_bar / spot_basis / warehouse_receipt / inventory
+    全部停在 2026-10-27 —— 即主链路采集正常，**唯独 roll_yield 这一路从来没有调度**，
+    与 futures_rule 同属"纯手工、无调度"家族。
+
+    幂等性：app.ingest.roll_yield 内部 ``ON CONFLICT (report_date, symbol, version)
+    DO UPDATE``，重复跑同一天只会覆盖为同值，安全。
+
+    回看窗口：默认从 ``max(report_date) + 1`` 续跑；查库失败时回退
+    ROLL_YIELD_LOOKBACK_DAYS（默认 30 天）。**刻意不使用脚本默认的 2018-01-01**——
+    那会按交易日×品种全量重扫（约 2000 天 × 40 品种 × sleep，单次即数十分钟），
+    放进每日调度窗口会挤占正常采集。
+    """
+    import subprocess
+    import sys as _sys
+    from datetime import date as _date, timedelta as _td
+
+    script = _scripts_dir() / "collect_roll_yield.py"
+    if not script.is_file():
+        logger.error(f"[scheduler][ASSET] 找不到脚本 {script}")
+        return
+    lb = int(os.getenv("ROLL_YIELD_LOOKBACK_DAYS", "30"))
+    start = (_date.today() - _td(days=lb)).isoformat()
+    try:
+        from sqlalchemy import text as _text
+
+        from app.core.db import session_scope
+
+        with session_scope() as s:
+            mx = s.execute(_text("SELECT max(report_date) FROM roll_yield")).scalar()
+        if mx is not None:
+            start = (mx + _td(days=1)).isoformat()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[scheduler] roll_yield 读 max(report_date) 失败，回退 {lb} 天窗口: {e}")
+    today = _date.today().isoformat()
+    if start > today:
+        logger.info(f"[scheduler] roll_yield 已最新（start={start} > today），跳过")
+        return
+    cmd = [_sys.executable, str(script), "--start", start, "--end", today,
+           "--sleep", os.getenv("ROLL_YIELD_SLEEP", "0.5")]
+    logger.info(f"[scheduler] collect_roll_yield start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        logger.info(f"[scheduler] collect_roll_yield exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-600:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] collect_roll_yield stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] collect_roll_yield timeout>3600s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[scheduler] collect_roll_yield failed")
+
+
+def _sync_trading_cost_job() -> None:
+    """每周同步 dim_trading_cost（手续费字典）。
+
+    事故背景（2026-10-28 排查）：dim_trading_cost 的 ``max(updated_at)`` 停在
+    **2026-10-08 15:05** —— 与 futures_rule 停更**同一天、几乎同一时刻**，可判定为
+    同一次人工维护后再无人接手。该表是回测成本与盘前门保证金的口径来源，手续费变更
+    （交易所通知 / 官网调费）漏采会让成本被系统性低估。
+
+    执行方式：``sync_cost_from_exchange.py --apply``。不带 --apply 时为 dry-run，
+    不会落库。脚本内部按 (品种, 动作, scope) UPSERT 并带 source 标记，可重复执行。
+
+    频率取"每周"而非"每日"：手续费由交易所通知驱动，变更低频；且该脚本要抓郑商所官网，
+    每日跑属无谓的外部请求压力。可用 SYNC_COST_CRON_* 覆盖。
+    """
+    import subprocess
+    import sys as _sys
+
+    script = _scripts_dir() / "sync_cost_from_exchange.py"
+    if not script.is_file():
+        logger.error(f"[scheduler][ASSET] 找不到脚本 {script}")
+        return
+    cmd = [_sys.executable, str(script), "--apply"]
+    logger.info(f"[scheduler] sync_cost_from_exchange start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        logger.info(f"[scheduler] sync_cost_from_exchange exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-800:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] sync_cost_from_exchange stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] sync_cost_from_exchange timeout>1800s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[scheduler] sync_cost_from_exchange failed")
+
+
+def _rebuild_dict_dryrun_job() -> None:
+    """每周 dry-run 比对 akshare 权威口径与库内字典（**只报告，不落库**）。
+
+    覆盖对象含 dim_variety_tick_history（最小变动价位）与 dim_trading_cost 固定值手续费。
+    这两张表 2026-10-28 排查时分别停在 updated_at 2026-10-03 与 2026-10-08。
+
+    ⚠ **刻意不加 --apply**：rebuild_dict_from_akshare 会用 akshare 口径**覆盖**已有
+    有效行，而库内存在用户已裁定的值——
+      · BZ/EB/PL 采用第三方文档基准（sync_cost_from_exchange.py 内 doc_rows）
+      · 百分比(‰)手续费以交易所通知为权威（akshare 对 40 个百分比品种开仓费用恒为
+        0.01，误用会让 49% 品种手续费近零）
+    自动覆盖会静默抹掉这些裁定，风险远大于收益。故本作业只做**漂移检测**，
+    有差异时输出 WARNING，由人工判断后再手动执行 --apply。
+    """
+    import subprocess
+    import sys as _sys
+
+    script = _scripts_dir() / "rebuild_dict_from_akshare.py"
+    if not script.is_file():
+        logger.error(f"[scheduler][ASSET] 找不到脚本 {script}")
+        return
+    cmd = [_sys.executable, str(script)]  # 无 --apply：仅 dry-run
+    logger.info(f"[scheduler] rebuild_dict(dry-run) start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        out = (proc.stdout or "")
+        logger.info(f"[scheduler] rebuild_dict(dry-run) exit={proc.returncode} tail={out[-800:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] rebuild_dict(dry-run) stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] rebuild_dict(dry-run) timeout>1800s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[scheduler] rebuild_dict(dry-run) failed")
 
 
 def _build_scheduler() -> BlockingScheduler:
@@ -1643,6 +1781,56 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info(f"[scheduler] registered seed_futures_rule at {_srh:02d}:{_srm:02d} "
                 f"(须早于盘前门 08:30)")
+
+    # ---- 2026-10-28 同类治理：把另外 3 个"纯手工、无调度"的字典/采集脚本纳入调度 ----
+    # 排查方法：按各表业务日期/updated_at 做全库新鲜度扫描。主数据链路（daily_bar /
+    # contract_daily / hourly_bar / spot_basis / warehouse_receipt / inventory）全部新鲜，
+    # 滞后的只有字典类——它们共同点是"只在人工想起时才跑一次"。
+    # 19:10 而非 18:40：18:40 已有 warehouse_receipt（scrapling 浏览器抓取，最重），
+    # 且 18:10 的 daily_futures_refresh 刚刷新完 daily_bar（本作业的交易日列表取自它）。
+    _ryh = int(os.getenv("ROLL_YIELD_CRON_HOUR", "19"))
+    _rym = int(os.getenv("ROLL_YIELD_CRON_MINUTE", "10"))
+    sched.add_job(
+        _collect_roll_yield_job,
+        trigger=CronTrigger(hour=_ryh, minute=_rym, timezone=settings.env.TZ),
+        id="collect_roll_yield",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    logger.info(f"[scheduler] registered collect_roll_yield at {_ryh:02d}:{_rym:02d} "
+                f"(停更 27 天治理；从 max(report_date)+1 续跑)")
+
+    _sch = int(os.getenv("SYNC_COST_CRON_HOUR", "3"))
+    _scm = int(os.getenv("SYNC_COST_CRON_MINUTE", "20"))
+    _scd = os.getenv("SYNC_COST_CRON_DOW", "sun")
+    sched.add_job(
+        _sync_trading_cost_job,
+        trigger=CronTrigger(day_of_week=_scd, hour=_sch, minute=_scm, timezone=settings.env.TZ),
+        id="sync_trading_cost",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    logger.info(f"[scheduler] registered sync_trading_cost at {_scd} {_sch:02d}:{_scm:02d} "
+                f"(dim_trading_cost 停更 19 天治理)")
+
+    _rdh = int(os.getenv("REBUILD_DICT_CRON_HOUR", "3"))
+    _rdm = int(os.getenv("REBUILD_DICT_CRON_MINUTE", "40"))
+    _rdd = os.getenv("REBUILD_DICT_CRON_DOW", "sun")
+    sched.add_job(
+        _rebuild_dict_dryrun_job,
+        trigger=CronTrigger(day_of_week=_rdd, hour=_rdh, minute=_rdm, timezone=settings.env.TZ),
+        id="rebuild_dict_dryrun",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    logger.info(f"[scheduler] registered rebuild_dict_dryrun at {_rdd} {_rdh:02d}:{_rdm:02d} "
+                f"(只做漂移检测，不 --apply)")
 
     _apply_task_registry(sched)
     return sched

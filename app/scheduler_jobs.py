@@ -121,6 +121,12 @@ def build_job_registry() -> list[JobSpec]:
         # 停更 19 天后盘前门阻塞。不写 task_run，故 task_run_based=False——
         # 存活由调度器事件监听 + futures_rule 数据新鲜度兜底。
         JobSpec("seed_futures_rule", "seed_futures_rule", "daily", _GAP_DAILY, True, False),
+        # 2026-10-28 新增：同类"纯手工、无调度"治理（全库新鲜度扫描发现，主数据链路均新鲜，
+        # 滞后的只有字典类）。均不写 task_run，故 task_run_based=False，存活由调度器事件
+        # 监听 + 各表新鲜度兜底。
+        JobSpec("collect_roll_yield", "collect_roll_yield", "daily", _GAP_DAILY, True, False),
+        JobSpec("sync_trading_cost", "sync_trading_cost", "weekly", _GAP_WEEKLY, True, False),
+        JobSpec("rebuild_dict_dryrun", "rebuild_dict_dryrun", "weekly", _GAP_WEEKLY, True, False),
         JobSpec("factor_v1v6_daily", "factor_v1v6", "daily", _GAP_DAILY, True, False),
         JobSpec("factor_ic_monitor_daily", "factor_ic_monitor", "daily", _GAP_DAILY, True, False),
         JobSpec("data_selfcheck_daily", "data_selfcheck", "daily", _GAP_DAILY, False, False),

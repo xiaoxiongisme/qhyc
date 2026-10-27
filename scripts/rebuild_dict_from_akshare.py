@@ -247,7 +247,10 @@ def apply_db(varieties):
                     " slip_ticks, effective_from, source, note) VALUES "
                     " (:ex,:v,'FUTURE',:a,'ALL',:ft,:fv,:fv,'FIXED',:bm,1,"
                     " CAST(:ed AS DATE),'akshare_fees_info',:note) "
-                    "ON CONFLICT ON CONSTRAINT uq_dim_trading_cost DO NOTHING"),
+                    # ⚠ 2026-10-28 修复：改列推断（原因同 sync_cost_from_exchange.py ——
+                    # public.dim_trading_cost 是视图、真表在 l3_ref，ON CONSTRAINT 在视图上查不到约束）。
+                    "ON CONFLICT (variety_code, instrument_kind, action, scope_kind, effective_from) "
+                    "DO NOTHING"),
                     {"ex": r["exchange"], "v": vc, "a": act,
                      "ft": "FREE" if exv <= 1e-9 else "FIXED", "fv": exv,
                      "bm": BROKER_MARKUP, "ed": APPLY_DAY,

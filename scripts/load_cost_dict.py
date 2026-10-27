@@ -97,7 +97,10 @@ def main() -> int:
         f"INSERT INTO dim_trading_cost ({_COLS}) "
         "VALUES (:ex, :vc, :kind, :act, :scope, :months, :contracts, :ftype, :fval, "
         "        :exfval, :btype, :bval, 0, :ef, NULL, :src, :note) "
-        "ON CONFLICT ON CONSTRAINT uq_dim_trading_cost DO UPDATE SET "
+        # ⚠ 2026-10-28 修复：改列推断（原因同 sync_cost_from_exchange.py ——
+        # public.dim_trading_cost 是视图、真表在 l3_ref，ON CONSTRAINT 在视图上查不到约束）。
+        "ON CONFLICT (variety_code, instrument_kind, action, scope_kind, effective_from) "
+        "DO UPDATE SET "
         "  fee_type=EXCLUDED.fee_type, fee_value=EXCLUDED.fee_value, "
         "  exchange_fee_value=EXCLUDED.exchange_fee_value, "
         "  broker_markup_type=EXCLUDED.broker_markup_type, "
