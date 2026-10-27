@@ -203,6 +203,45 @@ def _ref_price_and_meta(session: Session, real_symbol: str,
     return settle, exch, mult
 
 
+def _load_last_close(session: Session, symbols: Iterable[str],
+                     trade_date: date) -> dict[str, float]:
+    """各合约 ≤ trade_date 的最近收盘价，作为涨跌停距离判定里的「当前价」。
+
+    ⚠ 2026-10-28 修复（缺陷 A）：原实现把 ``l.price``（其值是**昨结算**）同时当作
+    当前价与昨结算传给 ``mm.limit_room``，于是 ``to_up_pct == to_down_pct == 板幅``
+    恒成立，``danger < 板幅 × warn`` 永远为假 —— 「距停板过近」检查是**死代码**，
+    红灯永不触发。
+
+    涨跌停板是相对**昨结算**计算的，而"距板还有多远"要拿**当前价**去比，
+    两者必须是两个不同的数。
+    """
+    out: dict[str, float] = {}
+    syms = [s for s in symbols if s]
+    if not syms:
+        return out
+    rows = session.execute(text(
+        "SELECT DISTINCT ON (symbol) symbol, close FROM contract_daily "
+        "WHERE symbol = ANY(:s) AND trade_date <= :d AND close IS NOT NULL "
+        "ORDER BY symbol, trade_date DESC"), {"s": syms, "d": trade_date}).all()
+    for sym, close in rows:
+        try:
+            out[sym] = float(close)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _latest_rule_day(session: Session, trade_date: date) -> date | None:
+    """futures_rule 全局（不限品种）最新交易日。
+
+    用于**空仓**时的规则新鲜度判定：空仓没有合约可匹配，但开盘后随时可能开新仓，
+    规则陈旧一样致命。
+    """
+    return session.execute(text(
+        "SELECT MAX(trade_date) FROM futures_rule WHERE trade_date <= :d"),
+        {"d": trade_date}).scalar()
+
+
 def load_rules(session: Session, trade_date: date,
                symbols: Iterable[str]) -> tuple[dict[str, RuleRow], date | None]:
     """取每个合约所属品种的当日规则（按 ``futures_rule.code`` 匹配品种码）。"""
@@ -355,21 +394,33 @@ def run_gate(session: Session, *, account: str, trade_date: date,
             f"规则日 {rule_day}，缺 {miss}" if miss else f"规则日 {rule_day}，{len(rules)} 合约齐备")
         if miss:
             reasons.append(f"缺规则的合约：{miss}（其保证金未计入）")
-        # 规则新鲜度：futures_rule 一旦停更，所有保证金/板幅都用的是旧值。
-        # 实测 2026-10-27 时该表最新只到 2026-10-08（停更 19 天）——
-        # 这种「看起来有数据」的陈旧比缺数据更危险，必须显式降级。
-        if rule_day is not None:
-            lag = (trade_date - rule_day).days
-            if lag > cfg.rule_stale_days:
-                add("rules_fresh", False, "RED",
-                    f"futures_rule 已停更 {lag} 天（最新 {rule_day}）："
-                    f"保证金率/板幅可能已变")
-                reasons.append(
-                    f"合约规则数据停更 {lag} 天，提保与扩板信息缺失，判定不可信")
-                actions.append("先跑 seed_futures_rule.py 补齐当日规则")
-                verdict = mm.worst(verdict, "UNKNOWN")
-            else:
-                add("rules_fresh", True, "OK", f"规则数据新鲜（滞后 {lag} 天）")
+
+    # 规则新鲜度：futures_rule 一旦停更，所有保证金/板幅都用的是旧值。
+    # 实测 2026-10-27 时该表最新只到 2026-10-08（停更 19 天）——
+    # 这种「看起来有数据」的陈旧比缺数据更危险，必须显式降级。
+    #
+    # ⚠ 2026-10-28 修复（缺陷 D）：本检查原先整块包在 `elif legs:` 内 ——
+    # 空仓时 `legs` 为空，规则停更 19 天也照判 GREEN，而本模块 docstring 恰恰把
+    # 「规则陈旧」列为最危险情形。空仓同样要开新仓，规则陈旧一样致命，
+    # 故改为独立于持仓判定；空仓时无合约可匹配，退化为查全局最新规则日。
+    fresh_day = rule_day if rule_day is not None else _latest_rule_day(session, trade_date)
+    if fresh_day is None:
+        add("rules_fresh", False, "RED", "futures_rule 无任何数据：保证金率/板幅全部未知")
+        reasons.append("futures_rule 为空，提保与扩板信息缺失，判定不可信")
+        actions.append("先跑 seed_futures_rule.py 播种规则")
+        verdict = mm.worst(verdict, "UNKNOWN")
+    else:
+        lag = (trade_date - fresh_day).days
+        if lag > cfg.rule_stale_days:
+            add("rules_fresh", False, "RED",
+                f"futures_rule 已停更 {lag} 天（最新 {fresh_day}）："
+                f"保证金率/板幅可能已变")
+            reasons.append(
+                f"合约规则数据停更 {lag} 天，提保与扩板信息缺失，判定不可信")
+            actions.append("先跑 seed_futures_rule.py 补齐当日规则")
+            verdict = mm.worst(verdict, "UNKNOWN")
+        else:
+            add("rules_fresh", True, "OK", f"规则数据新鲜（滞后 {lag} 天）")
 
     # ---- 3. 期货公司加收（把交易所率抬到实收率）----
     # 期货公司通常在交易所基础上加收 2~3 个点，且临时提保时同步加收。
@@ -390,6 +441,20 @@ def run_gate(session: Session, *, account: str, trade_date: date,
     else:
         now = mm.UsageResult(equity=equity)
         extreme = mm.UsageResult(equity=equity)
+
+    # ---- 3b. 保证金输入缺失必须 fail-loud ----
+    # ⚠ 2026-10-28 修复（缺陷 B）：scenario_usage 会把「缺价格 / 缺乘数 / 缺保证金率」
+    # 的腿记进 UsageResult.missing 并**按 0 计入**保证金；原实现从未读取该字段，
+    # 于是占用率被系统性低估却照样显示绿灯——与本模块「禁止静默当 0」的纪律直接冲突。
+    # 注意第 2 项 rules 检查只覆盖「规则缺失」，覆盖不到「价格/乘数缺失」。
+    missing_now = list(now.missing or [])
+    missing_all = missing_now + [m for m in (extreme.missing or []) if m not in missing_now]
+    if missing_all:
+        add("margin_inputs", False, "RED",
+            "保证金输入缺失：" + "；".join(sorted(set(missing_all))))
+        reasons.append("存在缺价格/乘数/保证金率的腿，其保证金按 0 计入 → 占用率被低估")
+        actions.append("补齐 contract_daily / futures_rule / futures_symbol 后重跑")
+        verdict = mm.worst(verdict, "UNKNOWN")
 
     # ---- 4. 占用率判定 ----
     v, why = mm.verdict_from_usage(
@@ -428,11 +493,24 @@ def run_gate(session: Session, *, account: str, trade_date: date,
         add("locked", True, "OK", "无锁仓")
 
     # ---- 6. 涨跌停距离 ----
+    # ⚠ 2026-10-28 修复（缺陷 A）：原先 limit_room(l.price, l.price, rule) 把**昨结算**
+    # 同时当作当前价与昨结算传入，使 to_up_pct == to_down_pct == 板幅 恒成立，
+    # 「danger < 板幅 × warn」永远为假 —— 该检查是死代码，红灯永不触发。
+    # 现：settle 用 l.price（昨结算＝板幅基准），price 用最近收盘价（当前价）。
+    last_close = _load_last_close(session, symbols, trade_date) if legs else {}
     for l in legs:
         rule = rules.get(l.real_symbol)
         if rule is None or l.price <= 0:
             continue
-        room = mm.limit_room(l.price, l.price, rule)
+        cur_px = last_close.get(l.real_symbol)
+        if cur_px is None or cur_px <= 0:
+            # 缺当前价就判不了距板距离；不能静默回退成"恒绿"。
+            add(f"limit_room:{l.real_symbol}", False, "YELLOW",
+                "缺最近收盘价，无法判定距板距离（contract_daily.close 缺失）")
+            reasons.append(f"{l.real_symbol} 缺收盘价，距停板风险未知")
+            verdict = mm.worst(verdict, "YELLOW")
+            continue
+        room = mm.limit_room(cur_px, l.price, rule)
         if not room:
             continue
         lim = mm.normalize_rate(rule.price_limit)

@@ -216,9 +216,11 @@ def scenario_usage(
                 res.missing.append(f"{leg.real_symbol}: 涨跌停幅度缺失，无法做极端情景")
                 px = leg.price
             else:
-                # 空头被涨停打击、多头被跌停打击——压力方向取对保证金不利的一侧
-                direction = 1.0 if leg.short_lots >= leg.long_lots else -1.0
-                px = leg.price * (1.0 + direction * lim * limit_shock)
+                # ⚠ 2026-10-28 修复：保证金 = 手数 × 乘数 × 价格 × 率，**与持仓方向无关**，
+                # 价格越高占用越高。原实现按「对持仓不利」取方向（空头取涨停、多头取跌停），
+                # 于是多头按跌停算出的极端占用率**反而更低**——既与注释「取对保证金不利的
+                # 一侧」自相矛盾，又把极端情景系统性低估。现统一按涨停价测算（最保守一侧）。
+                px = leg.price * (1.0 + lim * limit_shock)
 
         amt, why = leg_margin(leg, rule, price=px, rate_buffer=rate_buffer)
         if why:
