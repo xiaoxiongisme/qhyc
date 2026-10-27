@@ -12,9 +12,13 @@ import app.pipeline.worker as w
 
 
 def _patch_settings(monkeypatch, url: str):
+    # ⚠ 2026-10-28 修正：mock 曾停在 `SimpleNamespace(database_url=...)`，
+    # 而真实配置结构是 `Settings.env: EnvSettings`、``database_url()`` 在 EnvSettings 上
+    # （见 app/core/config.py: EnvSettings.database_url / Settings.env）。
+    # 即 **代码是对的、mock 过期了**，3 条用例因此长期红灯、并给出"worker 有 bug"的假信号。
     monkeypatch.setattr(
         "app.core.config.get_settings",
-        lambda: SimpleNamespace(database_url=lambda: url))
+        lambda: SimpleNamespace(env=SimpleNamespace(database_url=lambda: url)))
 
 
 def test_derives_from_discrete_config(monkeypatch):
