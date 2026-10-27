@@ -98,6 +98,8 @@ def build_job_registry() -> list[JobSpec]:
 
     # ---- 以下作业**不写** task_run，心跳巡检无从监控，仅登记备查 ----------------
     # （存活由调度器 EVENT_JOB_ERROR/MISSSED 事件监听 + 数据新鲜度巡检兜底）
+    # P0 盘前作战门（迁移 044）：三段交易各一次，与 _build_scheduler 里的 id 保持一致
+    preopen_on = bool(__import__("os").getenv("PREOPEN_GATE_ENABLED", "0") == "1")
     fusion_on = bool(getattr(getattr(settings, "fusion", None), "enabled", False))
     hourly_on = bool(getattr(getattr(settings, "hourly_config", None), "enabled", False))
     wr_on = bool(getattr(getattr(settings, "yaml", None), "warehouse_receipt", None) and
@@ -105,6 +107,9 @@ def build_job_registry() -> list[JobSpec]:
     rp_on = bool(getattr(getattr(settings, "yaml", None), "rank_position", None) and
                  getattr(settings.yaml.rank_position, "enabled", False))
     jobs.extend([
+        JobSpec("preopen_gate_day_0830", "preopen_gate", "day_0830", _GAP_DAILY, preopen_on, False),
+        JobSpec("preopen_gate_day_1255", "preopen_gate", "day_1255", _GAP_DAILY, preopen_on, False),
+        JobSpec("preopen_gate_night_2030", "preopen_gate", "night_2030", _GAP_DAILY, preopen_on, False),
         JobSpec("fusion_scan", "fusion_scan", "scan", _GAP_DAILY, fusion_on, False),
         JobSpec("hourly_collect", "hourly_collect", "collect", _GAP_DAILY, hourly_on, False),
         JobSpec("minute_and_bars", "minute_and_bars", "pipeline", _GAP_DAILY, True, False),

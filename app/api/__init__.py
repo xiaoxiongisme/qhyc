@@ -16,6 +16,7 @@ from app.api.routers import (
     pipeline,    # M8 决策链路容器化
     position,    # §18.4/§18.5 M6a
     predict,
+    risk_gate,   # P0 盘前门 / P1 离场 / P2 品种减法（迁移 044）
     scheduled_tasks,  # 2026-10-14 定时任务字典/流水查询（迁移 043）
     symbols,
     tasks,
@@ -49,5 +50,8 @@ api_router.include_router(execution_bridge.router, prefix="/execution", tags=["e
 api_router.include_router(pipeline.router, prefix="/pipeline", tags=["pipeline"], dependencies=_auth)
 # 定时任务字典/运行流水（migrations/043；用户 2026-10-14 需求）
 api_router.include_router(scheduled_tasks.router, prefix="/ops/tasks", tags=["ops-tasks"], dependencies=_auth)
+# 风控外壳（migrations/044；2026-10-26 甲醇提保事故后落地）
+#   P0 盘前作战门 / P1 离场自动化 / P2 品种减法
+api_router.include_router(risk_gate.router, prefix="/risk", tags=["risk-gate"], dependencies=_auth)
 
 __all__ = ["api_router"]

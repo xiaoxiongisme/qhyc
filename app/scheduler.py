@@ -1552,8 +1552,61 @@ def _build_scheduler() -> BlockingScheduler:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[scheduler] scheduler_resync 注册失败: {e}")
 
+    # ---- P0 盘前作战门（2026-10-27，migrations/044）------------------------
+    # 三个时点对应三段交易：早盘 08:30 / 午盘 12:55 / 夜盘 20:30。
+    # 比既有盘前播报（08:45/13:15/20:45）早 15 分钟，留出"看到红灯还能改单"的时间窗。
+    # 默认关闭（PREOPEN_GATE_ENABLED=1 开启）：未配置 account_equity 时只会判 UNKNOWN，
+    # 开了也刷屏，故必须显式启用。
+    try:
+        from app.risk.preopen_gate import GateConfig as _GateCfg
+        if _GateCfg().enabled:
+            accts = [x.strip() for x in
+                     (os.getenv("PREOPEN_ACCOUNTS", "") or "").split(",") if x.strip()]
+            if not accts:
+                logger.warning("[scheduler] PREOPEN_GATE_ENABLED=1 但 PREOPEN_ACCOUNTS 为空，"
+                               "跳过盘前门注册")
+            else:
+                for _hm, _kind in (("08:30", "day"), ("12:55", "day"), ("20:30", "night")):
+                    _h, _mi = (int(x) for x in _hm.split(":"))
+                    sched.add_job(
+                        _preopen_gate_job,
+                        trigger=CronTrigger(hour=_h, minute=_mi, timezone=settings.env.TZ),
+                        id=f"preopen_gate_{_kind}_{_hm.replace(':', '')}",
+                        args=[accts, _kind],
+                        replace_existing=True,
+                        max_instances=1,
+                        coalesce=True,
+                        misfire_grace_time=600,
+                    )
+                logger.info(f"[scheduler] registered preopen_gate 08:30/12:55/20:30 "
+                            f"for {len(accts)} account(s)")
+        else:
+            logger.info("[scheduler] preopen_gate 停用（PREOPEN_GATE_ENABLED!=1）")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] preopen_gate 注册失败: {e}")
+
     _apply_task_registry(sched)
     return sched
+
+
+def _preopen_gate_job(accounts: list[str], session_kind: str) -> None:
+    """盘前门作业：逐账户跑一次并推送。任何异常只记日志（旁路，不拖垮调度）。"""
+    from datetime import date as _date
+
+    from app.core.db import session_scope
+    from app.risk import preopen_gate as _pg
+
+    with session_scope() as s:
+        for acct in accounts:
+            try:
+                res = _pg.run_gate(s, account=acct, trade_date=_date.today(),
+                                   session_kind=session_kind)
+                _pg.persist(s, res)
+                _pg.push(res)
+                _u = f"{res['now'].usage:.1%}" if res["now"] else "n/a"
+                logger.info(f"[preopen] {acct} {session_kind} → {res['verdict']} 占用 {_u}")
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"[preopen] {acct} 执行失败: {e}")
 
 
 def _apply_task_registry(sched: BlockingScheduler) -> None:
