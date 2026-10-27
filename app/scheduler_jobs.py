@@ -117,6 +117,10 @@ def build_job_registry() -> list[JobSpec]:
         JobSpec("rank_position", "rank_position", "daily", _GAP_DAILY, rp_on, False),
         JobSpec("warehouse_receipt", "warehouse_receipt", "daily", _GAP_DAILY, wr_on, False),
         JobSpec("daily_futures_refresh", "daily_futures_refresh", "refresh", _GAP_DAILY, True, False),
+        # 2026-10-27 新增：futures_rule 播种（保证金/涨跌停/乘数）。此前无任何调度，
+        # 停更 19 天后盘前门阻塞。不写 task_run，故 task_run_based=False——
+        # 存活由调度器事件监听 + futures_rule 数据新鲜度兜底。
+        JobSpec("seed_futures_rule", "seed_futures_rule", "daily", _GAP_DAILY, True, False),
         JobSpec("factor_v1v6_daily", "factor_v1v6", "daily", _GAP_DAILY, True, False),
         JobSpec("factor_ic_monitor_daily", "factor_ic_monitor", "daily", _GAP_DAILY, True, False),
         JobSpec("data_selfcheck_daily", "data_selfcheck", "daily", _GAP_DAILY, False, False),

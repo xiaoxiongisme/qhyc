@@ -1139,6 +1139,11 @@ SUBPROCESS_SCRIPTS = (
     "db_apply_migrations.py",
     # R3：仓单日报采集（scrapling 浏览器版，四所）；依赖镜像 WITH_SCRAPLING=1 装好 scrapling+chromium
     "collect_warehouse_receipt.py",
+    # 2026-10-27：futures_rule（保证金率/涨跌停/合约乘数）此前**没有任何调度**，纯靠人工播种；
+    # 最后一次 2026-10-08 人工执行后停更 19 天，导致盘前门"规则过期"判 UNKNOWN 阻塞、
+    # G4 交易日历退化为二义判定。脚本自带 max(trade_date)+1 续跑且按日幂等，故纳入每日调度
+    # + 启动自检，杜绝再次静默停滞。
+    "seed_futures_rule.py",
 )
 
 
@@ -1196,6 +1201,42 @@ def _verify_lookahead_guard() -> None:
         logger.error(
             "[scheduler][GUARD] ⚠️ 前视防护疑似失效：15:00 之后 bar 已泄漏进当日量比！"
             " 请立即检查 compute_factor_v1v6.build_v_factors 的 `hm < DECISION_HM` 过滤。")
+
+
+def _seed_futures_rule_job() -> None:
+    """每日补齐 futures_rule（保证金率 / 涨跌停板 / 合约乘数）。
+
+    事故背景（2026-10-27）：本作业此前**不存在**，播种全靠人工；最后一次人工执行
+    2026-10-08 后停更 19 天，盘前门因此把"规则过期"判为 UNKNOWN 而阻塞，G4 交易日历
+    也退化为二义判定。故补每日调度。
+
+    幂等性：脚本内部先取 `max(trade_date)`，从其后一天续跑到今天；已播种的日期
+    `day_already_seeded()` 直接跳过。因此每日重跑安全、可重复。
+
+    回看窗口：默认 14 天（SEED_RULE_LOOKBACK_DAYS），避免库被清空时从 2015 年全量重扫。
+    """
+    import subprocess
+    import sys as _sys
+    from datetime import date as _date, timedelta as _td
+
+    script = _scripts_dir() / "seed_futures_rule.py"
+    if not script.is_file():
+        logger.error(f"[scheduler][ASSET] 找不到播种脚本 {script}")
+        return
+    lb = int(os.getenv("SEED_RULE_LOOKBACK_DAYS", "14"))
+    since = (_date.today() - _td(days=lb)).isoformat()
+    cmd = [_sys.executable, str(script), "--since", since]
+    logger.info(f"[scheduler] seed_futures_rule start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        logger.info(f"[scheduler] seed_futures_rule exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-600:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] seed_futures_rule stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] seed_futures_rule timeout>3600s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[scheduler] seed_futures_rule failed")
 
 
 def _build_scheduler() -> BlockingScheduler:
@@ -1584,6 +1625,24 @@ def _build_scheduler() -> BlockingScheduler:
             logger.info("[scheduler] preopen_gate 停用（PREOPEN_GATE_ENABLED!=1）")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] preopen_gate 注册失败: {e}")
+
+    # futures_rule 每日播种（保证金率/涨跌停/合约乘数）。
+    # 时刻必须**早于 08:30 盘前门**：门会校验"规则是否过期"，若本作业晚于门运行，
+    # 门读到的是昨日规则 → 判 UNKNOWN 阻塞。2026-10-27 前此作业根本不存在，
+    # 播种纯靠人工，最后一次 2026-10-08 后停更 19 天。
+    _srh = int(os.getenv("SEED_RULE_CRON_HOUR", "8"))
+    _srm = int(os.getenv("SEED_RULE_CRON_MINUTE", "0"))
+    sched.add_job(
+        _seed_futures_rule_job,
+        trigger=CronTrigger(hour=_srh, minute=_srm, timezone=settings.env.TZ),
+        id="seed_futures_rule",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
+    )
+    logger.info(f"[scheduler] registered seed_futures_rule at {_srh:02d}:{_srm:02d} "
+                f"(须早于盘前门 08:30)")
 
     _apply_task_registry(sched)
     return sched
