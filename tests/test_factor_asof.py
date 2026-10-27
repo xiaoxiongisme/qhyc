@@ -42,6 +42,32 @@ def test_bias_missing_floor():
     assert out["entry_gate"] == -1.0
 
 
+def test_bias_missing_pass_does_not_block():
+    """2026-10-28 用户裁定「放行」：因子缺失**不再**把 entry_gate 打到 -1.0。
+
+    原默认 floor 口径下，任一因子缺失即 gate=-1.0（< gate_threshold 0.0）→ 该品种
+    永不开仓，且只有一行 warning，生产上与"策略自然失效"无法区分。
+    pass 口径：缺失按 0 计入，门控只由有值的因子决定。
+    """
+    reg = {
+        "basis_rate_z": {"default_weight": 0.1},
+        "inv_z": {"default_weight": -0.1},
+    }
+    # basis_rate_z 缺失、inv_z 偏空 (z=1.0, w=-0.1 → 贡献 -0.1)
+    out = compute_bias_multipliers({"basis_rate_z": None, "inv_z": 1.0}, reg)
+    assert out["entry_gate"] == -0.1, "缺失应只按 0 计入，不得回落到 gate_floor(-1.0)"
+    assert out["entry_gate"] != -1.0
+    assert out["position_cap_scalar"] == 0.9, "缺失不应把仓位上限压到 cap_floor(0.5)"
+
+
+def test_bias_missing_pass_default():
+    """默认口径必须是 pass（放行）——防止有人改回 floor 而无人察觉。"""
+    assert BiasConfig().degrade_missing == "pass"
+    from app.core.config import FactorBiasConfig
+
+    assert FactorBiasConfig().degrade_missing == "pass"
+
+
 def test_bias_all_zero_neutral():
     """所有因子 z=0 → 偏置乘子中性（cap=1.0, gate=0.0）。"""
     reg = {"f1": {"default_weight": 0.1}}

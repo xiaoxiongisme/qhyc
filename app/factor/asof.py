@@ -21,6 +21,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
+from loguru import logger
+
 from app.core.db import get_engine
 
 
@@ -193,13 +195,9 @@ class FactorContext:
                 ), {"f": factor_id, "s": symbol}).fetchall()
             self._cache[key] = [(r[0], r[1]) for r in rows]
             self._cache_ts[key] = _time.time()
-            eng = get_engine()
-            with eng.connect() as c:
-                rows = c.execute(text(
-                    "SELECT available_at, z_value FROM factor_value "
-                    "WHERE factor_id=:f AND symbol=:s ORDER BY available_at DESC"
-                ), {"f": factor_id, "s": symbol}).fetchall()
-            self._cache[key] = [(r[0], r[1]) for r in rows]
+            # ★ 2026-10-28 修复：原实现在此**重复执行了一遍完全相同的查询**
+            #   （整段 SELECT 被复制粘贴两次，第二次结果覆盖第一次）。
+            #   后果：每次 cache miss 都打两次库、返回全量历史，纯属双倍 IO 无任何收益。
         for avail, z in self._cache[key]:
             if isinstance(avail, str):
                 avail = _dt.date.fromisoformat(avail[:10])
@@ -221,7 +219,15 @@ class BiasConfig:
     gate_threshold: float = 0.0          # entry_gate 低于此值 → 禁止入场
     cap_floor: float = 0.5              # position_cap_scalar 下限（最保守仓位上限）
     gate_floor: float = -1.0            # entry_gate 下限
-    degrade_missing: str = "floor"      # 因子缺失时乘子取值：floor=最保守 / neutral=按0算
+    # 因子缺失时的降级口径（★ 2026-10-28 由用户裁定改为 "pass"）：
+    #   floor   = 最保守：任一因子缺失 → 立即 cap=cap_floor / gate=gate_floor，
+    #             该品种**永不开仓**（曾导致静默停摆：只有一行 warning，故障表现
+    #             与"策略自然失效"无法区分）
+    #   neutral = 缺失按 0 计入；但合成结果若低于 gate_threshold，仍回落到 gate_floor
+    #             （即缺失间接仍然可以封死入场）
+    #   pass    = 放行：缺失按 0 计入，且**不因"缺失"本身**回落到地板；
+    #             门控只由**实际有值的因子**决定。缺失会 WARN 记录，不再静默。
+    degrade_missing: str = "pass"
     max_weight_registry_sum: float = 1.0  # 校验：全因子 max_weight 之和上限（T6）
 
 
@@ -237,26 +243,45 @@ def compute_bias_multipliers(
 
     因子方向 dirᵢ 由因子语义决定（如库存高→偏空→dir=-1）。本实现用 default_weight 的符号
     近似方向（>0 看多、<0 看空）；缺失因子按 degrade 策略处理（§9 T7 降级到 0/地板）。
+
+    ★ 2026-10-28（用户裁定「放行」）：默认口径由 ``floor`` 改为 ``pass``。
+      原默认下**任意一个**因子缺失就直接 gate=-1.0 —— 而 -1.0 < gate_threshold(0.0)，
+      等价于"该品种永不开仓"。由于缺失只打一行 warning 且被上层吞掉，生产表现与
+      "策略自然失效"完全无法区分（依赖表停更时尤其致命：因子全缺失 → 全品种停摆）。
+      现改为：缺失按 0 计入、不因缺失本身封死入场，但**必须 WARN 留痕**，
+      使"数据缺失"与"策略不给信号"在日志层面可区分。
     """
     bias = bias or BiasConfig()
+    mode = (bias.degrade_missing or "pass").lower()
     total = 0.0
-    missing = False
+    missing_ids: list[str] = []
     for fid, z in z_by_factor.items():
         meta = registry.get(fid)
         if meta is None:
             continue
         w = float(meta.get("default_weight") or 0.0)
         if z is None:
-            missing = True
-            if bias.degrade_missing == "floor":
-                # 任一关键因子缺失 → 直接落到最保守地板
+            missing_ids.append(fid)
+            if mode == "floor":
+                # 任一关键因子缺失 → 直接落到最保守地板（历史口径，保留可选）
                 return {"position_cap_scalar": bias.cap_floor, "entry_gate": bias.gate_floor}
-            continue  # neutral：缺失按 0 计入
+            continue  # neutral / pass：缺失按 0 计入
         total += w * z  # w 符号隐式编码方向
+
+    if missing_ids:
+        # 可观测性红线：缺失**绝不静默**。原先只有一行 warning 且被上层吞掉，
+        # 导致"数据断了"被误判成"策略不行"。
+        _avail = len(z_by_factor) - len(missing_ids)
+        logger.warning(
+            f"[factor_bias] 因子缺失 {missing_ids}（共 {len(z_by_factor)} 个中缺 "
+            f"{len(missing_ids)} 个），degrade_missing={mode!r}；"
+            f"本次合成仅基于剩余 {_avail} 个因子"
+            + ("；已按 0 计入并放行入场" if mode == "pass" else "")
+        )
 
     cap = float(np.clip(1.0 + total, bias.cap_floor, 1.0))
     gate = float(np.clip(total, bias.gate_floor, 1.0))
-    if missing and bias.degrade_missing == "neutral" and gate < bias.gate_threshold:
+    if missing_ids and mode == "neutral" and gate < bias.gate_threshold:
         gate = bias.gate_floor
     return {"position_cap_scalar": cap, "entry_gate": gate}
 

@@ -453,11 +453,18 @@ class ExecutionConfig(BaseModel):
 
 
 class FactorBiasConfig(BaseModel):
-    """因子偏置乘子配置（因子接入 PRD §5）。"""
+    """因子偏置乘子配置（因子接入 PRD §5）。
+
+    ★ 2026-10-28（用户裁定「放行」）``degrade_missing`` 默认由 ``floor`` 改为 ``pass``：
+      原默认下任一因子缺失即 gate=-1.0（< gate_threshold 0.0）→ **该品种永不开仓**，
+      且只留一行 warning，生产上与"策略自然失效"无法区分（依赖表停更时全品种停摆）。
+      ``pass`` = 缺失按 0 计入、不因缺失本身封死入场，但强制 WARN 留痕。
+      需要恢复最保守口径时，在此改回 ``floor`` 即可（行为与改动前完全一致）。
+    """
     gate_threshold: float = 0.0
     cap_floor: float = 0.5
     gate_floor: float = -1.0
-    degrade_missing: str = "floor"
+    degrade_missing: str = "pass"
     max_weight_registry_sum: float = 1.0
 
 
