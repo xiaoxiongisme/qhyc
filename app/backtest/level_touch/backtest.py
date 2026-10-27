@@ -88,6 +88,10 @@ def run_backtest(bars: pd.DataFrame, variety: str, cfg: LevelTouchConfig,
     eff_limit = fr["eff_limit_excl"]
     z_every = fr["z_every"]
 
+    # 清洗：分钟级数据偶含 NaN 行（缺失/异常），否则 lows.min()/highs.max()
+    # 变 NaN 会让 make_grid 的 int(NaN) 崩溃。日线数据一般无 NaN，但统一兜底。
+    bars = bars.dropna(subset=["open", "high", "low", "close"]).reset_index(drop=True)
+
     closes = bars["close"].to_numpy(dtype=float)
     highs = bars["high"].to_numpy(dtype=float)
     lows = bars["low"].to_numpy(dtype=float)
