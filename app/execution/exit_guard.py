@@ -227,14 +227,22 @@ def evaluate(plan: dict[str, Any], *, last_price: float, mult: float,
                 f"到 {cfg.tp2_r:g}R（{tp2_px:g}）再落袋 {plan['tp2_lots']} 手，余量交吊灯"))
 
     # ---- 3) 时间止损（治"扛"）----
+    # `not tp1_done` 是有意设计（已被 test_time_stop_not_fired_after_tp1 固化为契约）：
+    # 1R 落袋说明这笔已经走对，剩余仓位转由 TP2 与吊灯接管、让利润奔跑，
+    # 不再用时间止损强制减仓。时间止损针对的是既不赚也不亏、一直耗着的单子
+    # （依据：持仓 3 天以上 29 笔占全部净亏 69%）。
+    #
+    # 2026-10-28 只补边界保护（不改语义）：原实现在 remain <= 0（仓位已平完）时
+    # cut = max(1, remain // 2) 仍会算出 1 手，凭空多出一条平仓建议。
     ts_at = _as_utc(plan.get("time_stop_at"))
     if ts_at and not plan.get("time_stop_done") and now >= ts_at and not tp1_done:
         remain = int(plan["lots_open"]) - (int(plan["tp1_lots"] or 0) if tp1_done else 0)
-        cut = max(1, remain // 2)
-        held_days = (now - (_as_utc(plan.get("opened_at")) or now)).days
-        out.append(ExitSignal(
-            "TIME_STOP", cut, last_price,
-            f"持仓 {held_days} 天仍未到 {cfg.tp1_r:g}R，按规则减半 {cut} 手"))
+        if remain > 0:
+            cut = max(1, remain // 2)
+            held_days = (now - (_as_utc(plan.get("opened_at")) or now)).days
+            out.append(ExitSignal(
+                "TIME_STOP", cut, last_price,
+                f"持仓 {held_days} 天仍未到 {cfg.tp1_r:g}R，按规则减半 {cut} 手"))
 
     # ---- 4) 吊灯（余量，到达 2R 后启用；1 手降级时到 2R 即启动）----
     rest = int(plan.get("rest_lots") or 0)

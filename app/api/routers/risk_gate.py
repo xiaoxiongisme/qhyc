@@ -169,8 +169,31 @@ def evaluate_plan(req: EvalReq) -> dict[str, Any]:
                                         atr_now=req.atr_now or 0.0)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, f"计划的字段不完整：{e}") from e
-    return {"actions": [s.as_row() for s in sigs],
+
+    # ⚠ 2026-10-28 修复（缺陷 K）：persist_actions / mark_done 此前**全仓无调用方**，
+    # 于是动作不落 exit_action、tp1_done_at / time_stop_done 永不置位 ——
+    # 同一动作每次调用都会重复建议，离场自动化实际只剩"返回建议"。
+    # 现补上落库：动作写 exit_action；TP1/TP2/TIME_STOP 置位以避免重复触发。
+    persisted = 0
+    marked: list[str] = []
+    plan_id = req.plan.get("id") if isinstance(req.plan, dict) else None
+    if plan_id is not None and sigs:
+        try:
+            with session_scope() as sn:
+                persisted = exit_guard.persist_actions(sn, int(plan_id), sigs)
+                for sg in sigs:
+                    if sg.kind in ("TP1", "TP2", "TIME_STOP"):
+                        exit_guard.mark_done(sn, int(plan_id), sg.kind)
+                        marked.append(sg.kind)
+        except Exception as e:  # noqa: BLE001
+            # 落库失败不阻断建议返回，但必须留痕——静默失败是本模块一贯的事故源。
+            logger.warning(
+                f"[risk] 离场动作落库失败（建议照常返回）plan_id={plan_id}: {e}")
+
+    return {"actions": [sg.as_row() for sg in sigs],
             "new_trail_stop": trail,
+            "persisted": persisted,
+            "marked_done": marked,
             "note": "本接口只给建议；下单由 execution_runtime 负责"}
 
 

@@ -113,6 +113,12 @@ def bridge_claim(req: ClaimReq) -> dict:
     返回 ``claimed=True`` 的调用方**才允许下单**；
     ``claimed=False`` 表示这单已被别人（另一个网关实例 / 另一台终端）抢走或被 abiotic
     改变状态 → **必须放弃**，否则就是重复下单。
+
+    ⚠ 2026-10-28 修复（缺陷 T）：原先只校验 ``status = 'NEW'``，不校验
+    ``retry_count``。而 ``execution_runtime.submit_order`` 的「已提交未确认」闸正是
+    靠 ``retry_count`` 递增实现的（persistence.mark_submit_attempt，复用 DDL 030 已有列）。
+    于是：订单提交后超时、状态仍停在 NEW 时，无限易侧可以**再次 claim 并重复下单**。
+    现加上 ``COALESCE(retry_count, 0) = 0``，与提交侧的闸门对齐。
     """
     with session_scope() as s:
         row = s.execute(
@@ -123,6 +129,7 @@ def bridge_claim(req: ClaimReq) -> dict:
                        updated_at = now()
                  WHERE id = :id
                    AND status = 'NEW'
+                   AND COALESCE(retry_count, 0) = 0
                 RETURNING id, real_symbol, exchange, direction, action,
                           price, lots, multiplier
                 """
@@ -131,17 +138,27 @@ def bridge_claim(req: ClaimReq) -> dict:
         ).mappings().first()
 
         if row is None:
-            # 抢不到：查一下当前状态，给调用方一个可诊断的理由
+            # 抢不到：查一下当前状态与提交次数，给调用方一个可诊断的理由
             cur = s.execute(
-                text("SELECT status FROM execution_order WHERE id = :id"),
+                text("SELECT status, COALESCE(retry_count, 0) "
+                     "FROM execution_order WHERE id = :id"),
                 {"id": req.order_id},
-            ).scalar()
+            ).first()
             if cur is None:
                 raise HTTPException(status_code=404, detail=f"订单不存在：{req.order_id}")
+            status, retries = cur[0], int(cur[1] or 0)
+            if status == "NEW" and retries > 0:
+                # 已提交过但仍停在 NEW：提交后未确认/超时，绝不能再认领下单。
+                reason = (f"订单已提交 {retries} 次但状态仍为 NEW（提交后未确认或超时），"
+                          f"拒绝再次认领以免重复下单；请先 reconcile 确认真实状态")
+            else:
+                reason = f"订单当前状态 {status}，不是 NEW（已被认领或已终结）"
             return {
                 "claimed": False,
                 "order_id": req.order_id,
-                "reason": f"订单当前状态 {cur}，不是 NEW（已被认领或已终结）",
+                "status": status,
+                "retry_count": retries,
+                "reason": reason,
             }
 
         rec = dict(row)
