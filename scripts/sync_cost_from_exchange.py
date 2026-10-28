@@ -166,23 +166,30 @@ def main():
 
     n_upd = 0
     with session_scope() as s:
+        # ⚠ 2026-10-28 修复（严重数据污染）：seed 每行自带 action（OPEN/CLOSE_YEST/
+        #   CLOSE_TODAY 各一行），原逻辑却把**本行**的费率铺写到 OPEN+CLOSE_YEST 两个
+        #   动作上——当遍历到某品种的 CLOSE_TODAY=FREE 行时，把「平今免收」错铺成
+        #   「开仓免收 + 平昨免收」。实测污染 18 品种 × 2 = 36 行
+        #   （如 LC 碳酸锂 OPEN 0.8‰ → FREE、RU 橡胶 OPEN 3元/手 → FREE）。
+        #   现改为：每行只写它自己的 action；OPEN/CLOSE_YEST 拒绝 FREE 值。
         for r in notice:
             vc = r["variety_code"].upper()
             ex = r["exchange"]
-            for act in ("OPEN", "CLOSE_YEST", "CLOSE_TODAY"):
-                if act == "CLOSE_YEST":
-                    ftype, fval = r["fee_type"], r["fee_value"]   # 平昨与开仓同口径
-                elif act == "OPEN":
-                    ftype, fval = r["fee_type"], r["fee_value"]
-                else:
-                    continue                                    # 平今只由官方/通知续行提供
-                if ftype == "PCT":
-                    continue                                     # 百分比不在此覆盖
-                fv = float(fval or 0)
-                prev = upsert(s, vc, ex, act, ftype, fv,
-                              "exchange_notice 20260311", "exchange_notice_20260311")
-                if prev and prev[0] and prev[0][1] and "akshare" in str(prev[0][1]):
-                    n_upd += 1
+            act = (r.get("action") or "").upper()
+            if act not in ("OPEN", "CLOSE_YEST"):
+                continue                                # 平今只由官方/用户文档基准提供
+            ftype, fval = r["fee_type"], r["fee_value"]
+            if ftype == "PCT":
+                continue                                # 百分比不在此覆盖
+            if ftype == "FREE":
+                print("[SKIP] %s %s: notice says FREE — 开/平昨不可能免收，疑脏数据，跳过"
+                      % (vc, act))
+                continue
+            fv = float(fval or 0)
+            prev = upsert(s, vc, ex, act, ftype, fv,
+                          "exchange_notice 20260311", "exchange_notice_20260311")
+            if prev and prev[0] and prev[0][1] and "akshare" in str(prev[0][1]):
+                n_upd += 1
     print("[done] notice-sourced rows restored: %d" % n_upd)
 
     n_cz = 0
