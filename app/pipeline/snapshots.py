@@ -24,6 +24,36 @@ _BASE_OLD = 'BASE = r"E:/QH/期货简报"'
 _BASE_NEW = 'BASE = os.environ.get("QH_BRIEF_BASE", r"E:/QH/期货简报")'
 
 
+def _normalize_run_pipeline_text(text: str) -> str:
+    """返回 run_pipeline.py 的「规范形态」：把硬编码 BASE 改为 env 优先、必要时补 import os。
+
+    与 _patch_base 的改写逻辑完全一致，仅用于内容比对（剔除 BASE 补丁差异），
+    不落盘、可重复调用（幂等）。
+    """
+    if _BASE_OLD in text:
+        if "import os" not in text:
+            lines = text.splitlines()
+            insert_at = 0
+            for i, ln in enumerate(lines[:40]):
+                if ln.startswith("import ") or ln.startswith("from "):
+                    insert_at = i + 1
+            lines.insert(insert_at, "import os")
+            text = "\n".join(lines) + "\n"
+        text = text.replace(_BASE_OLD, _BASE_NEW)
+    return text
+
+
+def _md5_canonical_run_pipeline(path: Path) -> str:
+    """对 run_pipeline.py 的规范形态做 md5（剔除 BASE 补丁造成的假差异）。"""
+    h = hashlib.md5()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return ""
+    h.update(_normalize_run_pipeline_text(text).encode("utf-8"))
+    return h.hexdigest()
+
+
 def _md5(path: Path) -> str:
     h = hashlib.md5()
     with path.open("rb") as f:
@@ -41,18 +71,10 @@ def _patch_base(dest: Path) -> bool:
         text = target.read_text(encoding="utf-8", errors="replace")
     except Exception:  # noqa: BLE001
         return False
-    if _BASE_OLD not in text:
+    new_text = _normalize_run_pipeline_text(text)
+    if new_text == text:
         return False  # WB 已改造或写法变化 → 不动
-    if "import os" not in text:
-        lines = text.splitlines()
-        insert_at = 0
-        for i, ln in enumerate(lines[:40]):
-            if ln.startswith("import ") or ln.startswith("from "):
-                insert_at = i + 1
-        lines.insert(insert_at, "import os")
-        text = "\n".join(lines) + "\n"
-    text = text.replace(_BASE_OLD, _BASE_NEW)
-    target.write_text(text, encoding="utf-8")
+    target.write_text(new_text, encoding="utf-8")
     logger.info("[pipeline] snapshot: 已在副本上把 run_pipeline.BASE 改为 QH_BRIEF_BASE 优先")
     return True
 
@@ -86,7 +108,8 @@ def needs_resync(src: str, dest: str) -> bool:
       1. 快照不存在 / 为空
       2. 快照里的 run_pipeline.py 仍未打 BASE 补丁
       3. 源文件集合或内容发生变化
-         （run_pipeline.py 例外：以「是否已打补丁」判断，不比 md5，否则永不收敛）
+         （run_pipeline.py 例外：源与快照因 BASE 补丁 md5 必然不同，
+          故比对「规范形态」md5——剔除 BASE 补丁后内容变了才重建，避免永不收敛）
     """
     src_p, dest_p = Path(src), Path(dest)
     if not src_p.exists():
@@ -109,9 +132,19 @@ def needs_resync(src: str, dest: str) -> bool:
         return True
     for k, v in s.items():
         if k == "run_pipeline.py":
-            continue
+            continue  # 见下方规范形态比对
         if d.get(k) != v:
             return True
+    # run_pipeline.py 例外：源与快照因 BASE 补丁 md5 必然不同，故比对「规范形态」
+    # （剔除 BASE 补丁后）的 md5，内容真正变化才触发重建，避免永不收敛
+    rp_src, rp_dst = src_p / "run_pipeline.py", dest_p / "run_pipeline.py"
+    if rp_src.exists() and rp_dst.exists():
+        try:
+            if _md5_canonical_run_pipeline(rp_src) != _md5_canonical_run_pipeline(rp_dst):
+                logger.info("[pipeline] snapshot: run_pipeline.py 内容（剔除 BASE 补丁后）已变化，重建快照")
+                return True
+        except Exception:  # noqa: BLE001
+            pass
     return False
 
 
