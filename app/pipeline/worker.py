@@ -24,7 +24,6 @@ from app.pipeline import config, readiness, recorder, snapshots
 
 _KIND_ARGS = {
     "daily": ["--daily"],
-    "signal": ["--signal"],
     "intraday": ["--intraday"],
     "check": ["--check"],
 }
@@ -178,12 +177,11 @@ def _daily_job() -> None:
 
 
 def _signal_job() -> None:
-    """整点：先盘中监控（串行），再信号推送。"""
+    """整点：盘中监控（持仓异动）。期货信号快报推送已移除（2026-10-28）。"""
     cfg = config.load()
     try:
         if cfg.intraday_enabled:
             run_once("intraday")
-        run_once("signal")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[pipeline] signal job error: {e}")
 

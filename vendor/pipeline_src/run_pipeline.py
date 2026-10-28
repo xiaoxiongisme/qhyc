@@ -10,7 +10,6 @@
   python run_pipeline.py --all          # 跑完整一天（①~⑤），最后校验七章
   python run_pipeline.py --all --skip-quant   # 研究层跳过回测（快）
   python run_pipeline.py --daily        # 【17:30 定时】多空简报（= --all，落盘供媒体发布参考）
-  python run_pipeline.py --signal       # 【交易日整点】期货简报信号 → pushplus 简短推送
   python run_pipeline.py --intraday     # 只跑盘中监控（持仓异动）
   python run_pipeline.py --from 3       # 从第 N 步开始（失败续跑）
 
@@ -44,43 +43,6 @@ HOLD = os.path.join(BASE, "持仓情况和手续费")
 BRIEF = os.path.join(BASE, "简报内容")
 LOG_DIR = os.path.join(BASE, "过程思考", "logs")
 
-# 期货简报信号推送（交易日整点）：9/10/11、13:30/14:00/15:00、21:00/22:00/23:00
-SIGNAL_HOURS_AM = (9, 10, 11)
-SIGNAL_HOURS_PM = (14, 15)          # 下午：14:00 / 15:00（13:30 单列）
-SIGNAL_HOURS_NIGHT = (21, 22, 23)
-SIGNAL_MINUTE = 0
-# 13:30 单独处理（下午开盘首推）
-SIGNAL_PM_OPEN = (13, 30)
-
-# pushplus 推送（token 归属：环境变量 > 本流程数据配置 > qhyc .env 只读兜底）
-PUSHPLUS_ENDPOINT = "https://www.pushplus.plus/send"
-PUSHPLUS_TOKEN_FILES = [os.path.join(BASE, "配置", "pushplus_token.txt")]
-QHYC_ENV = r"E:/Docker/qhyc/.env"
-
-
-def _load_pushplus_token():
-    """返回 (token, 来源标签)。三级解析，任一命中即用。"""
-    t = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
-    if t:
-        return t, "env:PUSHPLUS_TOKEN"
-    for p in PUSHPLUS_TOKEN_FILES:
-        try:
-            if os.path.exists(p):
-                t = open(p, encoding="utf-8-sig").read().strip()
-                if t:
-                    return t, os.path.basename(p)
-        except Exception:
-            pass
-    try:
-        if os.path.exists(QHYC_ENV):
-            for line in open(QHYC_ENV, encoding="utf-8-sig", errors="replace"):
-                if line.strip().upper().startswith("PUSHPLUS_TOKEN"):
-                    t = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    if t:
-                        return t, "qhyc/.env"
-    except Exception:
-        pass
-    return "", "none"
 
 REQUIRED_SCRIPTS = ["_fut_active_contract.py", "_fut_fund_light.py", "_fut_daily_brief.py",
                     "_fut_positions.py", "_fut_intraday_monitor.py", "_fut_research.py",
@@ -254,21 +216,6 @@ def _run(args, fh=None, timeout=1800):
     return True
 
 
-# ------------------------------ 整点信号推送 ------------------------------
-
-def in_signal_slot(now=None):
-    """当前时刻是否属于「期货简报信号」应推送的整点（交易日由外部保证）。"""
-    now = now or datetime.datetime.now()
-    h, m = now.hour, now.minute
-    if h in SIGNAL_HOURS_AM and m == SIGNAL_MINUTE:
-        return True
-    if h in SIGNAL_HOURS_NIGHT and m == SIGNAL_MINUTE:
-        return True
-    if (h, m) == SIGNAL_PM_OPEN:          # 13:30
-        return True
-    if h in SIGNAL_HOURS_PM and m == SIGNAL_MINUTE:
-        return True
-    return False
 
 
 def is_trading_day(d=None):
@@ -287,120 +234,6 @@ def is_trading_day(d=None):
         return d.weekday() < 5
 
 
-def signal_brief(fh=None, push=True):
-    """算当日信号并（可选）推送简短文本。
-
-    直接在本进程内 import 简报引擎复用 analyze()/fusion_signal()，**不落完整简报**，
-    只产出精简信号摘要（供 pushplus 手机推送）。
-    """
-    _log("\n[信号快报] 抓行情 + 融合信号（in-process）", fh)
-    if SX not in sys.path:
-        sys.path.insert(0, SX)
-    try:
-        import pandas as pd
-        import _fut_daily_brief as B
-        from _fut_active_contract import active_contract
-    except Exception as e:
-        _log("  FAIL 加载简报引擎: " + str(e), fh)
-        return False
-
-    univ = pd.read_csv(B.UNIV, encoding="utf-8-sig")
-    asof = datetime.date.today()
-    sigs, pend = [], []
-    n = len(univ)
-    for i, (_, r) in enumerate(univ.iterrows(), 1):
-        root0 = r["root"]
-        C = active_contract(root0, asof, strategy="live_heuristic")
-        m = B.fetch_series_contract(C, root0)
-        if m is None:
-            m = B.fetch_series(f"{root0}0")
-        if m is None:
-            pend.append(root0); continue
-        try:
-            met = B.analyze(m, root0)
-            met["root"] = root0; met["name"] = r["name"]
-            met["symbol"] = C
-            if met.get("action") in ("做多", "做空"):
-                sigs.append(met)
-        except Exception as e:
-            pend.append(f"{root0}({e})")
-
-    sigs.sort(key=lambda x: -abs(x.get("conviction") or 0))
-    longs = [s for s in sigs if s["action"] == "做多"]
-    shorts = [s for s in sigs if s["action"] == "做空"]
-    now = datetime.datetime.now()
-    lines = [f"【期货信号快报】{now:%m-%d %H:%M}",
-             f"多 {len(longs)}｜空 {len(shorts)}｜(49品种)"]
-    top = sigs[:10]
-    if not top:
-        lines.append("今日无新开仓信号（全体观望）")
-    for s in top:
-        tag = "多" if s["action"] == "做多" else "空"
-        px = s.get("entry") or s.get("close")
-        st = s.get("stop"); be = s.get("breakeven")
-        seg = f"{tag} {s.get('symbol')} {s.get('name','')} 入{px:,.0f} 损{st:,.0f}"
-        if be:
-            seg += f" 保{be:,.0f}"
-        lines.append(seg)
-    if pend:
-        lines.append(f"(待恢复 {len(pend)})")
-    text = "\n".join(lines)
-    _log(text, fh)
-
-    out = os.path.join(PROC, f"_brief_signal_{ds()}.json")
-    try:
-        json.dump({"time": now.strftime("%Y-%m-%d %H:%M"), "text": text,
-                   "longs": len(longs), "shorts": len(shorts),
-                   "signals": [{"symbol": s.get("symbol"), "name": s.get("name"),
-                                "action": s.get("action"), "entry": s.get("entry"),
-                                "stop": s.get("stop"), "breakeven": s.get("breakeven"),
-                                "atr": s.get("atr"), "score": s.get("conviction"),
-                                "reason": s.get("reason")} for s in sigs]},
-                  open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-        _log("  信号 JSON -> " + out, fh)
-    except Exception as e:
-        _log("  写 JSON 失败: " + str(e), fh)
-
-    if push:
-        _push_signal("期货信号快报", text, fh)
-    return True
-
-
-def _push_signal(title, text, fh=None):
-    """推送 pushplus。token 解析顺序：环境变量 → 本流程数据配置 → qhyc .env（只读兜底）。
-
-    失败一律只记日志、不抛异常（推送是旁路，不能影响主流程）。
-    """
-    import urllib.request
-    import time
-    token, src = _load_pushplus_token()
-    if not token:
-        _log("  ⚠ 未找到 pushplus token（env / 配置 / qhyc .env 均无）→ 仅落盘不推送", fh)
-        return False
-    payload = {"token": token, "title": title, "content": text, "template": "markdown"}
-    for attempt in range(2):
-        try:
-            req = urllib.request.Request(
-                PUSHPLUS_ENDPOINT,
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                method="POST",
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                body = resp.read().decode("utf-8", "replace")
-            try:
-                code = json.loads(body).get("code")
-            except Exception:
-                code = None
-            if code in (200, 0):
-                _log("  已推送 pushplus（token 来源：" + src + "）", fh)
-                return True
-            _log(f"  pushplus 返回 code={code}｜{body[:160]}（第 {attempt + 1} 次）", fh)
-        except Exception as e:
-            _log(f"  pushplus 请求异常 {type(e).__name__}: {e}（第 {attempt + 1} 次）", fh)
-        if attempt == 0:
-            time.sleep(1.5)
-    return False
 
 
 # ------------------------------ 主流程 ------------------------------
@@ -410,8 +243,6 @@ def main():
     ap.add_argument("--check", action="store_true", help="静态检查（不抓数）")
     ap.add_argument("--all", action="store_true", help="跑完整一天 ①~⑤")
     ap.add_argument("--daily", action="store_true", help="【17:30】多空简报（= --all）")
-    ap.add_argument("--signal", action="store_true", help="【交易日整点】信号快报 → pushplus")
-    ap.add_argument("--no-push", action="store_true", help="信号模式只算不推")
     ap.add_argument("--intraday", action="store_true", help="只跑盘中监控")
     ap.add_argument("--from", dest="start", type=int, default=1, help="从第 N 步开始（续跑）")
     ap.add_argument("--skip-quant", action="store_true", help="研究层跳过回测")
@@ -426,7 +257,7 @@ def main():
     _log("=" * 70, fh)
     _log(f"[pipeline] {datetime.datetime.now():%Y-%m-%d %H:%M:%S}  args={sys.argv[1:]}", fh)
 
-    if a.check or not (a.all or a.intraday or a.signal):
+    if a.check or not (a.all or a.intraday):
         _log("\n[1] 环境与脚本", fh)
         ok1 = check_env(fh)
         _log("\n[2] 参数口径", fh)
@@ -440,19 +271,6 @@ def main():
         fh.close()
         sys.exit(0 if (ok1 and ok2 and ok4) else 1)
 
-    if a.signal:
-        if not in_signal_slot():
-            _log(f"  非信号整点（{datetime.datetime.now():%H:%M}），跳过。"
-                 f"允许: 9/10/11、13:30、14/15、21/22/23", fh)
-            fh.close()
-            sys.exit(0)
-        if not is_trading_day():
-            _log("  非交易日，跳过。", fh)
-            fh.close()
-            sys.exit(0)
-        ok = signal_brief(fh, push=(not a.no_push))
-        fh.close()
-        sys.exit(0 if ok else 1)
 
     if a.intraday:
         _log("\n[盘中监控]", fh)
