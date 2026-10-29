@@ -288,6 +288,22 @@ class DbYAML(BaseModel):
         return data
 
 
+# ---------------------------------------------------------------------------
+# 融合策略离场规则候选（2026-10-29，见《实盘入场规则模拟报告_20261029.html》）
+# ---------------------------------------------------------------------------
+# 来源：以用户 190 笔真实实盘入场点 + 真实合约小时线，套用 V2 离场规则做离场寻优，
+#       并对「当前生产规格（分析口径 SL1.0 / TRAIL2.0 / BE0.5）」做 500 次随机留出。
+# 结论：
+#   - 当前生产规格相对用户实际执行系统性劣化（削掉约 78% 收益），根因是 2×ATR 吊灯过紧、
+#     过早兑现浮盈（MFE 兑现率由实际中位 20.6% 降至规则 0%）。
+#   - 候选 R3（SL1.0 / TRAIL6.0 / BE0.5）在留出检验中 86~90% 优于实际执行。
+# ⚠ 仍属候选，不能直接提升为无条件默认：须经模拟盘 / 持续留出验证
+#   （walk-forward OOS 衰减比 ≥50% 且 OOS 净为正、且在用户入场点样本上优于基线）后，
+#   才把默认从 SL2.0/TR2.0/BE0.5 切换为候选。详见 scripts/validate_exit_candidate.py
+#   与 docs/离场规则候选_SL1_TR6_验证门控.md。
+FUSION_EXIT_CANDIDATE: dict[str, float] = {"sl_atr": 1.0, "trail_atr": 6.0, "be_r": 0.5}
+
+
 class FusionConfig(BaseModel):
     """融合策略实时信号扫描（每15分钟）参数——与回测验证口径一致（额外执行口径）"""
     enabled: bool = True
@@ -510,6 +526,41 @@ def get_env() -> EnvSettings:
     return EnvSettings()
 
 
+def _apply_fusion_env_override(cfg: FusionConfig) -> FusionConfig:
+    """环境变量覆盖融合策略离场参数，用于部署「候选 / 影子」配置而不改默认。
+
+    部署方式（对现有部署零影响；不设这些变量则完全沿用 YAML / 默认）：
+      QH_FUSION_PROFILE=candidate  → 套用 FUSION_EXIT_CANDIDATE（SL1.0 / TRAIL6.0 / BE0.5，2026-10-29 建议）
+      QH_FUSION_SL_ATR=1.0         → 覆盖初始止损（×ATR）
+      QH_FUSION_TRAIL_ATR=6.0      → 覆盖吊灯（×ATR）
+      QH_FUSION_BE_R=0.5           → 覆盖保本触发（×初始风险）
+    granular 变量优先于 profile；两者皆无则原样返回 cfg。
+    """
+    import os
+
+    def _f(name: str) -> float | None:
+        v = os.environ.get(name)
+        if not v or not v.strip():
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            return None
+
+    overrides: dict[str, float] = {}
+    if (os.environ.get("QH_FUSION_PROFILE") or "").strip().lower() == "candidate":
+        overrides.update(FUSION_EXIT_CANDIDATE)
+    for env_name, field_name in (("QH_FUSION_SL_ATR", "sl_atr"),
+                                 ("QH_FUSION_TRAIL_ATR", "trail_atr"),
+                                 ("QH_FUSION_BE_R", "be_r")):
+        val = _f(env_name)
+        if val is not None:
+            overrides[field_name] = val
+    if not overrides:
+        return cfg
+    return FusionConfig(**{**cfg.model_dump(), **overrides})
+
+
 class Settings(BaseModel):
     """运行期统一配置（env + yaml 合并）"""
 
@@ -563,7 +614,9 @@ class Settings(BaseModel):
 
     @property
     def fusion(self) -> FusionConfig:
-        return self.yaml.fusion
+        # 允许用环境变量把离场参数覆盖为「候选/影子」配置（见 _apply_fusion_env_override）。
+        # 不设环境变量时完全沿用 YAML / 默认（对现有部署零影响）。
+        return _apply_fusion_env_override(self.yaml.fusion)
 
     @property
     def factor_bias(self) -> "FactorBiasConfig":
