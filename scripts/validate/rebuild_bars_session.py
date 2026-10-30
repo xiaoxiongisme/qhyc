@@ -42,9 +42,7 @@ DEFAULT_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
 
 SQL_AGG = """
 WITH m AS (
-    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src,
-           (ts AT TIME ZONE 'Asia/Shanghai')::date d,
-           lag(ts) OVER (PARTITION BY symbol ORDER BY ts) prev
+    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src
     FROM l0_raw.minute_bar
     WHERE ts >= :s AND ts < :e
       {sym_filter}
@@ -53,42 +51,38 @@ WITH m AS (
     SELECT DISTINCT ON (symbol, ts) *
     FROM m
     ORDER BY symbol, ts, array_position(:srcs, src)
-), gapd AS (
-    -- 只在「相邻分钟间隔超过阈值」处切断（日盘↔夜盘间隔 360 分钟必然切断，
-    -- 午休 120 分钟 / 小节休市 15 分钟不切断）。
-    -- ⚠ 不再按自然日切断：夜盘跨午夜是连续的，切断会产生 23:59 / 01:01 这类碎片 bar。
-    SELECT *,
-           CASE WHEN prev IS NULL
-                     OR extract(epoch FROM (ts - prev)) / 60 > :maxgap
-                THEN 1 ELSE 0 END AS brk
+), norm AS (
+    -- 终点约定源（ts 记分钟终点）减 1 分钟归一到起点约定，后续只需一套公式
+    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)
+                        THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n
     FROM dedup
+), gapd AS (
+    SELECT *, CASE WHEN prev IS NULL
+                     OR extract(epoch FROM (ts_n - prev)) / 60 > :maxgap
+                THEN 1 ELSE 0 END AS brk
+    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM norm) g
 ), segs AS (
-    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts) grp FROM gapd
+    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) grp FROM gapd
 ), ranked AS (
-    SELECT *, (row_number() OVER (PARTITION BY symbol, grp ORDER BY ts) - 1) / :step bucket,
-           min(ts) OVER (PARTITION BY symbol, grp) grp_first
+    SELECT *, (row_number() OVER (PARTITION BY symbol, grp ORDER BY ts_n) - 1) / :step bucket
     FROM segs
 )
 SELECT symbol,
-       -- ★ 标签＝该 bar 最后一根分钟的 ts，再按该源的「分钟时间戳约定」补偏移：
-       --   kqm_1m / tqsdk_1min 记分钟【起点】(09:00…14:59) → 需 +1min 才是 bar 收边界
-       --   akshare_1min / wh9999_1m 记分钟【终点】(09:01…15:00) → 本身就是收边界，+0
-       -- 判定依据：本连续段首根分钟的分钟数能否被 30 整除（整点/半点=起点约定）
-       max(ts) + CASE WHEN mod(extract(minute FROM (min(grp_first)
-                          AT TIME ZONE 'Asia/Shanghai'))::int, 30) = 0
-                      THEN interval '1 minute' ELSE interval '0 minute' END
-           AS bucket_end,
-       (array_agg(open  ORDER BY ts))[1] AS open,
+       max(ts_n) + interval '1 minute' AS bucket_end,
+       (array_agg(open  ORDER BY ts_n))[1] AS open,
        max(high)  AS high,
        min(low)   AS low,
-       (array_agg(close ORDER BY ts DESC))[1] AS close,
+       (array_agg(close ORDER BY ts_n DESC))[1] AS close,
        sum(volume) AS volume,
        sum(amount) AS amount,
-       (array_agg(open_interest ORDER BY ts DESC))[1] AS open_interest,
+       (array_agg(open_interest ORDER BY ts_n DESC))[1] AS open_interest,
        count(*) AS n_minutes
 FROM ranked
 GROUP BY symbol, grp, bucket
 """
+
+#: 分钟时间戳约定登记（实测）：这些源把 ts 记为分钟的【终点】
+END_LABELED_SRCS = ["akshare_1min", "wh9999_1m"]
 
 
 def _agg_sql(symbols: list[str] | None) -> str:
@@ -101,7 +95,8 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
     t0 = datetime.now(tz=timezone.utc)
     s_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
     e_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
-    params = {"s": s_dt, "e": e_dt, "step": step, "maxgap": maxgap, "srcs": priority}
+    params = {"s": s_dt, "e": e_dt, "step": step, "maxgap": maxgap, "srcs": priority,
+              "end_srcs": END_LABELED_SRCS}
     if symbols:
         params["syms"] = symbols
 

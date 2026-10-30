@@ -63,37 +63,47 @@ _SESSION_MAX_GAP_MIN = 150
 #: 多源分钟去重优先级（同一 (symbol, ts) 被多个 src 写入时取优先级最高的）
 _SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
 
+#: 「分钟时间戳约定」登记：这批源把 ts 记为该分钟的【终点】(HH:01…HH:00)，
+#: 需要先减 1 分钟归一到【起点】约定，再统一落边界。
+#:   kqm_1m     first=09:00 last=14:59  → 起点（已验证 ZN888 2025-06-03）
+#:   tqsdk_1min first=09:00 last=14:59  → 起点（已验证 ZN888 2026-09-24）
+#:   akshare_1min first=09:01 last=15:00 → 终点（已验证 ZN888/SC888 2026-10-27）
+#:   wh9999_1m first=09:01 last=15:00    → 终点（已验证 A888 2015-01-05）
+#: ⚠ 若将来接入新的分钟源，务必先到这里登记它的约定，否则整段 bar 会偏 1 分钟。
+_SESSION_END_LABELED_SRCS = ["akshare_1min", "wh9999_1m"]
+
 _SESSION_INSERT = (
     "WITH m AS (\n"
-    "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src,\n"
-    "           lag(ts) OVER (PARTITION BY symbol ORDER BY ts) prev\n"
+    "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
     "    FROM minute_bar\n"
     "    {where}\n"
     "), dedup AS (\n"
     "    SELECT DISTINCT ON (symbol, ts) * FROM m\n"
     "    ORDER BY symbol, ts, array_position(:srcs, src)\n"
+    "), norm AS (\n"
+    "    -- 终点约定的源统一减 1 分钟归一到起点约定，之后所有逻辑只需一套公式\n"
+    "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
+    "                        THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n\n"
+    "    FROM dedup\n"
     "), gapd AS (\n"
     "    SELECT *, CASE WHEN prev IS NULL\n"
-    "                     OR extract(epoch FROM (ts - prev)) / 60 > :maxgap\n"
+    "                     OR extract(epoch FROM (ts_n - prev)) / 60 > :maxgap\n"
     "                THEN 1 ELSE 0 END AS brk\n"
-    "    FROM dedup\n"
+    "    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM norm) g\n"
     "), segs AS (\n"
-    "    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts) grp FROM gapd\n"
+    "    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) grp FROM gapd\n"
     "), ranked AS (\n"
-    "    SELECT *, (row_number() OVER (PARTITION BY symbol, grp ORDER BY ts) - 1) / :step bucket,\n"
-    "           min(ts) OVER (PARTITION BY symbol, grp) grp_first\n"
+    "    SELECT *, (row_number() OVER (PARTITION BY symbol, grp ORDER BY ts_n) - 1) / :step bucket\n"
     "    FROM segs\n"
     ")\n"
     "INSERT INTO {t} (symbol, bucket, open, high, low, close, volume, amount, open_interest)\n"
     "SELECT symbol,\n"
-    "       max(ts) + CASE WHEN mod(extract(minute FROM (min(grp_first)\n"
-    "                             AT TIME ZONE 'Asia/Shanghai'))::int, 30) = 0\n"
-    "                      THEN interval '1 minute' ELSE interval '0 minute' END,\n"
-    "       (array_agg(open  ORDER BY ts))[1],\n"
+    "       max(ts_n) + interval '1 minute',\n"
+    "       (array_agg(open  ORDER BY ts_n))[1],\n"
     "       max(high), min(low),\n"
-    "       (array_agg(close ORDER BY ts DESC))[1],\n"
+    "       (array_agg(close ORDER BY ts_n DESC))[1],\n"
     "       sum(volume)::bigint, sum(amount),\n"
-    "       (array_agg(open_interest ORDER BY ts DESC))[1]\n"
+    "       (array_agg(open_interest ORDER BY ts_n DESC))[1]\n"
     "FROM ranked\n"
     "GROUP BY symbol, grp, bucket\n"
     "{tail}"
@@ -328,6 +338,7 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
     return _run(session, sql, {
         "since": since,
         "srcs": _SESSION_SRC_PRIORITY,
+        "end_srcs": _SESSION_END_LABELED_SRCS,
         "maxgap": _SESSION_MAX_GAP_MIN,
         "step": step,
     })
