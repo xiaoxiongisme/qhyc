@@ -72,7 +72,8 @@ def _wf_one(session, override: dict, wf: WalkForwardParams,
                             params=wf, start=start, end=end, verbose=True)
 
 
-def run_walkforward_check(args) -> dict:
+def run_walkforward_check(args, start: date | None = None,
+                          end: date | None = None) -> dict:
     print("\n=== 1) walk-forward OOS（基线 vs 候选）===")
     wf = WalkForwardParams(
         train_days=720, test_days=60, step_days=60,
@@ -86,9 +87,16 @@ def run_walkforward_check(args) -> dict:
     print(f"候选覆盖: SL={CANDIDATE_OVERRIDE['sl_atr']} "
           f"TRAIL={CANDIDATE_OVERRIDE['trail_atr']} BE={CANDIDATE_OVERRIDE['be_r']}")
 
+    # start/end 必须是 date（run_walk_forward 内部 _windows 要做 date+timedelta 运算）；
+    # 由 main() 统一解析传入，此处也可兜底：若拿到字符串则现转
+    if isinstance(start, str):
+        start = date.fromisoformat(start)
+    if isinstance(end, str):
+        end = date.fromisoformat(end)
+
     with _session() as session:
-        base_res = _wf_one(session, BASELINE_OVERRIDE, wf, symbols, args.start, args.end)
-        cand_res = _wf_one(session, CANDIDATE_OVERRIDE, wf, symbols, args.start, args.end)
+        base_res = _wf_one(session, BASELINE_OVERRIDE, wf, symbols, start, end)
+        cand_res = _wf_one(session, CANDIDATE_OVERRIDE, wf, symbols, start, end)
 
     def _row(tag, r):
         print(f"  [{tag}] n窗={r.get('n_windows')} OOS笔={r.get('n_oos_trades')} "
@@ -166,12 +174,13 @@ def main():
     ap.add_argument("--max-symbols", type=int, default=0, help="限制品种数（快速抽样）")
     args = ap.parse_args()
 
+    # args.start/end 为命令行字符串；转成 date 后交给 walk-forward（其 _windows 需 date 运算）。
     start = date.fromisoformat(args.start) if args.start else None
     end = date.fromisoformat(args.end) if args.end else None
 
     wf_verdict = None
     if not args.no_wf:
-        wf_verdict = run_walkforward_check(args)
+        wf_verdict = run_walkforward_check(args, start, end)
 
     live = run_live_check()
 
