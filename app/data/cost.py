@@ -70,7 +70,10 @@ _FEE_CACHE_MAX = 8192
 #:   * ``miss`` 高、`hit`` 低 → 键设计有问题（如按成交日而非费率窗口归约）→ 查键
 #:   * ``miss`` 低但仍慢        → 纯连接层问题（NullPool / 隧道）→ 查池配置
 #:   * ``fallback`` 占比高      → 费率表覆盖不足，查询退化为当期行扫描
-_FEE_STATS = {"hit": 0, "miss": 0, "fallback": 0, "evict": 0, "error": 0}
+_FEE_STATS = {"hit": 0, "miss": 0, "fallback": 0, "evict": 0, "error": 0,
+              # 同一 (品种,action,scope_rank) 命中多条 → dim_trading_cost 存在冲突费档。
+              # 当前实测恒为 0；非 0 即为数据质量问题，需修数据（而非改代码）。
+              "same_rank_multi": 0}
 
 
 def fee_cache_stats() -> dict:
@@ -285,7 +288,8 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
             "       slip_ticks, effective_from, source, note "
             "FROM dim_trading_cost "
             "WHERE upper(variety_code) = :vc AND instrument_kind = :kind AND action = :act "
-            "  AND effective_from <= :d AND (effective_to IS NULL OR effective_to > :d)"),
+            "  AND effective_from <= :d AND (effective_to IS NULL OR effective_to > :d) "
+            "ORDER BY effective_from DESC, id DESC"),
             {"vc": vc, "kind": kind, "act": action, "d": d}).fetchall()
 
         fell_back = False
@@ -302,7 +306,8 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
                 "       slip_ticks, effective_from, source, note "
                 "FROM dim_trading_cost "
                 "WHERE upper(variety_code) = :vc AND instrument_kind = :kind AND action = :act "
-                "  AND effective_to IS NULL"),
+                "  AND effective_to IS NULL "
+                "ORDER BY effective_from DESC, id DESC"),
                 {"vc": vc, "kind": kind, "act": action}).fetchall()
             if not cur:
                 raise CostNotFoundError(
@@ -335,8 +340,28 @@ def fee_per_lot(symbol, action, *, contract=None, on_date=None, kind="FUTURE"):
             if not hit:
                 continue
         rank = _SCOPE_RANK.get(sk, 0)
+        # ── 2026-10-31 加固：同 rank 多条时必须**确定性**取舍 ──────────────────
+        #   原实现只在 rank **严格大于**时替换，rank 相等则保留先遍历到的那条。
+        #   而两条 SQL 均无 ORDER BY → 顺序由 PG 物理堆决定（UPDATE 会搬行，
+        #   VACUUM 会重排），同一条记录在不同时刻可能返回不同结果 —— 未定义行为。
+        #   现在两条 SQL 已加 `ORDER BY effective_from DESC, id DESC`；而下面仍用
+        #   严格大于 `>` 比较 → rank 相同时保留**先遍历到的那条**，即 ORDER BY 下
+        #   最靠前者 = effective_from 最新、其次 id 最大者。语义即「后发布者胜」。
+        #   这样 rank 相同的情况从"取哪条未定义"变成"取最新发布的那条"。
+        #
+        #   ⚠ 实测结论（2026-10-31，scripts/validate/cost_ambiguity_final.py）：
+        #     当前库中「同 rank 且费率值不同」的组合数为 **0** —— 所有多条并存都
+        #     是 **不同 scope_rank**（CONTRACTS/MONTHS 分档 vs ALL 通用），那是
+        #     交易所的既定设计、有确定性优先级，**不是数据冲突**。故本加固
+        #     **不改变任何现有取值**，仅消除将来写入冲突时的静默不确定性。
         if best is None or rank > best[0]:
             best = (rank, r)
+            continue
+        if rank == best[0]:
+            # rank 相同且都被同一合约月份命中：正常只可能有一条，出现多条说明
+            # dim_trading_cost 越权写入了冲突费档；记一次 observability 计数，
+            # 便于将来从 _FEE_STATS 发现，而不是让 bug 静默混过去。
+            _FEE_STATS["same_rank_multi"] = _FEE_STATS.get("same_rank_multi", 0) + 1
 
     if best is None:
         raise CostNotFoundError(
