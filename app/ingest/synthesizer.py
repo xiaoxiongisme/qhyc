@@ -36,6 +36,72 @@ _BARS = [
     ("bar_60m", "60 minutes"),
 ]
 
+# =============================================================================
+# ★ 2026-10-31 重大口径修正（用户反馈：同花顺小时 K 一天 ≥6 根）
+# -----------------------------------------------------------------------------
+# 原实现用 ``time_bucket(INTERVAL '60 minutes', ts)`` —— 按**自然时间整点**切桶。
+# 于是 SC888 一天得到 09:00 10:00 11:00 13:00 14:00 15:00 21:00 22:00 23:00
+# 这种"整点网格"，**每个交易小节末尾不足 60 分钟的那一段被吞掉**，且每个小节
+# 的 bar 起点被强行对齐到整点，与实际成交节奏脱节。
+#
+# 正确口径（同花顺/文华/博易主流，用户给的 SC 参照：
+#   `10:00 11:15 14:15 15:00 22:00 23:00`，RB888 实测同样 6 根）反推出的规则：
+#   1. 把分钟按 ts 升序串起来，**跳过小节间休市继续累计**（只看有没有分钟数据）；
+#   2. 相邻分钟间隔 > ``_SESSION_MAX_GAP_MIN`` 分钟才切断——商品最长午休 120 分钟
+#      不被切断，日盘↔夜盘的 360 分钟必然切断（所以夜盘不会并进日盘）；
+#   3. 每满 ``step`` 个交易分钟成一根 bar，当前段剩余不足部分单独成一根；
+#   4. bar 时间标签 = 该 bar 最后一根分钟的 ts，再按该源的「分钟时间戳约定」补偏移：
+#        kqm_1m / tqsdk_1min 记分钟【起点】(09:00…14:59) → +1 分钟才是收边界
+#        akshare_1min / wh9999_1m 记分钟【终点】(09:01…15:00) → 本身就是收边界
+#      判定依据：本连续段首根分钟的分钟数能否被 30 整除（整点/半点 = 起点约定）。
+#
+# ⚠ 只有 30m / 60m 走这条规则（用户明确要求）；5m / 15m 仍用 time_bucket，
+#   两者不可互相聚合校验——若将来要统一，请把 _BARS 全部迁到这里并对齐后再验证。
+# =============================================================================
+_SESSION_MAX_GAP_MIN = 150
+
+#: 多源分钟去重优先级（同一 (symbol, ts) 被多个 src 写入时取优先级最高的）
+_SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
+
+_SESSION_INSERT = (
+    "WITH m AS (\n"
+    "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src,\n"
+    "           lag(ts) OVER (PARTITION BY symbol ORDER BY ts) prev\n"
+    "    FROM minute_bar\n"
+    "    {where}\n"
+    "), dedup AS (\n"
+    "    SELECT DISTINCT ON (symbol, ts) * FROM m\n"
+    "    ORDER BY symbol, ts, array_position(:srcs, src)\n"
+    "), gapd AS (\n"
+    "    SELECT *, CASE WHEN prev IS NULL\n"
+    "                     OR extract(epoch FROM (ts - prev)) / 60 > :maxgap\n"
+    "                THEN 1 ELSE 0 END AS brk\n"
+    "    FROM dedup\n"
+    "), segs AS (\n"
+    "    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts) grp FROM gapd\n"
+    "), ranked AS (\n"
+    "    SELECT *, (row_number() OVER (PARTITION BY symbol, grp ORDER BY ts) - 1) / :step bucket,\n"
+    "           min(ts) OVER (PARTITION BY symbol, grp) grp_first\n"
+    "    FROM segs\n"
+    ")\n"
+    "INSERT INTO {t} (symbol, bucket, open, high, low, close, volume, amount, open_interest)\n"
+    "SELECT symbol,\n"
+    "       max(ts) + CASE WHEN mod(extract(minute FROM (min(grp_first)\n"
+    "                             AT TIME ZONE 'Asia/Shanghai'))::int, 30) = 0\n"
+    "                      THEN interval '1 minute' ELSE interval '0 minute' END,\n"
+    "       (array_agg(open  ORDER BY ts))[1],\n"
+    "       max(high), min(low),\n"
+    "       (array_agg(close ORDER BY ts DESC))[1],\n"
+    "       sum(volume)::bigint, sum(amount),\n"
+    "       (array_agg(open_interest ORDER BY ts DESC))[1]\n"
+    "FROM ranked\n"
+    "GROUP BY symbol, grp, bucket\n"
+    "{tail}"
+)
+
+#: 会话式切分只对这两张表生效（见上方口径修正说明）
+_SESSION_BARS = {"bar_30m": 30, "bar_60m": 60}
+
 _INSERT_HEAD = (
     "INSERT INTO {t} (symbol, bucket, open, high, low, close, volume, amount, open_interest)\n"
     "SELECT symbol,\n"
@@ -248,6 +314,25 @@ def _max_minute_ts(session: Session) -> datetime | None:
     return session.execute(text("SELECT max(ts) FROM minute_bar")).scalar()
 
 
+def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
+               tail: str) -> int:
+    """单表合成：自动在「自然整点桶」与「交易分钟会话桶」之间选择正确口径。"""
+    step = _SESSION_BARS.get(t)
+    if step is None:
+        sql = _INSERT_HEAD.format(t=t, iv=iv) + \
+              ("WHERE ts >= :since\n" if since is not None else "") + \
+              "GROUP BY symbol, bucket\n" + tail
+        return _run(session, sql, {"since": since} if since is not None else None)
+    sql = _SESSION_INSERT.format(
+        t=t, where=("WHERE ts >= :since" if since is not None else ""), tail=tail)
+    return _run(session, sql, {
+        "since": since,
+        "srcs": _SESSION_SRC_PRIORITY,
+        "maxgap": _SESSION_MAX_GAP_MIN,
+        "step": step,
+    })
+
+
 def synthesize_bars_incremental(session: Session, days_back: int = 3,
                                 max_retries: int = 2) -> dict:
     """增量重算最近 days_back 天的桶（覆盖在途桶），成本极低。返回各表影响行数。
@@ -268,20 +353,17 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
     绝不静默返回成功——调用方与告警都能看见。
     """
     since = datetime.now(_SH_TZ) - timedelta(days=days_back)
+    # ★ 会话式切分必须向前多看 1 天：它按「连续分钟段」累计交易分钟计数，
+    #   若 since 落在段的中间，前面的分钟没参与计数 → 该段所有 bar 错位。
+    #   单个连续段最长约 6 小时（夜盘 21:00→次日 02:30），留 1 天余量足够。
+    since_session = since - timedelta(days=1)
     stats: dict[str, int] = {}
     for t, iv in _BARS:
-        # ★ 2026-10-08 改为纯 upsert（原先 DELETE + INSERT DO NOTHING）。
-        # 为什么：DELETE 与 INSERT 之间存在**数据消失窗口**——读者在此期间查询
-        # 该表会看到"桶已删、尚未重算"的中间态。实测 2026-08-08 22:09 就撞到过
-        # （`bar_*` 今日 0 行，22:11:11 才恢复）。虽然 DELETE/INSERT 同属一个事务、
-        # 进程被杀会回滚，但把"可见的空窗"消掉更稳，且顺带获得两个性质：
-        #   · **幂等**：重跑直接覆盖，不会因残留旧桶而重复；
-        #   · **自愈**：源数据修正后重跑即修复脏桶（DELETE 方案下旧桶会一直留着）。
-        # 代价：无法删除"源里已消失"的桶。对分钟线这种只增不减的源，
-        # 该情形只可能来自人工清理 minute_bar，可接受（且有 131 行质量标记兜底）。
-        sql = _INSERT_HEAD.format(t=t, iv=iv) + \
-              "WHERE ts >= :since\nGROUP BY symbol, bucket\n" + _UPSERT_TAIL
-        stats[t] = _run(session, sql, {"since": since})
+        stats[t] = _synth_one(
+            session, t, iv,
+            since_session if t in _SESSION_BARS else since,
+            _UPSERT_TAIL,
+        )
     session.commit()
 
     # ---- 落库后校验：bar_* 是否已追平 minute_bar 最新所在桶 ----
@@ -314,10 +396,13 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
             break
         # 重跑：扩大窗口重算，覆盖刚被并发写入的分钟线（纯 upsert，无需先 DELETE）
         since = datetime.now(_SH_TZ) - timedelta(days=days_back)
+        since_session = since - timedelta(days=1)
         for t, iv in _BARS:
-            sql = _INSERT_HEAD.format(t=t, iv=iv) + \
-                  "WHERE ts >= :since\nGROUP BY symbol, bucket\n" + _UPSERT_TAIL
-            stats[t] = _run(session, sql, {"since": since})
+            stats[t] = _synth_one(
+                session, t, iv,
+                since_session if t in _SESSION_BARS else since,
+                _UPSERT_TAIL,
+            )
         session.commit()
 
     if lags:
@@ -336,9 +421,10 @@ def synthesize_bars_full(session: Session, work_mem: str = "2GB") -> dict:
         session.execute(text(f"TRUNCATE {t}"))
     session.commit()
     for t, iv in _BARS:
-        sql = _INSERT_HEAD.format(t=t, iv=iv) + "GROUP BY symbol, bucket\n" \
-              "ON CONFLICT (symbol, bucket) DO NOTHING"
-        stats[t] = _run(session, sql)
+        stats[t] = _synth_one(
+            session, t, iv, None,
+            "ON CONFLICT (symbol, bucket) DO NOTHING",
+        )
     session.commit()
     logger.info(f"[synth] full done: {stats}")
     return stats
