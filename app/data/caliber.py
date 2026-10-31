@@ -98,11 +98,11 @@ ROUTES: dict[tuple[str, str], Route] = {
     #                              time_col="trade_datetime", note="DEPRECATED 前复权"),
     # ("60m", "cont_adj"):   Route("fut_kline", where="freq='min60' AND kind='cont_adj'",
     #                              time_col="trade_datetime", note="DEPRECATED 前复权"),
-    # —— 小时线：融合策略主周期，必须单一源（akshare），杜绝双源混读 ——
-    # 2026-10-04 (G9) 退役 fut_kline.continuous：hourly 未复权主连改读 hourly_bar（L0 原始主连）
-    ("hourly", "continuous"): Route("hourly_bar", where="src='akshare'",
-                                    time_col="trade_datetime",
-                                    note="小时线未复权主连（G9 后改读 hourly_bar，fut_kline.continuous 已退役）"),
+    # —— 小时线：与 60m 同源，统一走 l1_mkt.bar_60m（规范单源，杜绝 hourly_bar 双源漂移）——
+    # 2026-10-31 收口：hourly 与 60m 本应代表同一未复权连续主连，此前 hourly→hourly_bar、
+    # 60m→bar_60m 是冗余平行源，易漂移。现统一到已验证正确网格的 l1_mkt.bar_60m。
+    ("hourly", "continuous"): Route("bar_60m", time_col="bucket",
+                                    note="小时线未复权主连（与 60m 同源 l1_mkt.bar_60m，避免双源漂移）"),
     # ("hourly", "cont_adj"):   Route("fut_kline", where="freq='hourly' AND kind='cont_adj'",
     #                                 time_col="trade_datetime",
     #                                 note="已废弃：小时线前复权（不可达）"),
