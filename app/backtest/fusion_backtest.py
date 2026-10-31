@@ -24,7 +24,7 @@ from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.config import get_settings
 from app.core.logging import logger
@@ -87,7 +87,11 @@ def fusion_params_from_config(overrides: dict | None = None) -> FusionBacktestPa
         sl_atr=cfg.sl_atr, trail_atr=cfg.trail_atr, be_r=cfg.be_r,
         W=cfg.W, entry_mode=cfg.entry_mode, cooldown_bars=cfg.cooldown_bars,
         min_bars=cfg.min_bars, max_bars=cfg.max_bars,
-        src=cfg.hourly_src,
+        # 2026-10-31：回测改用规范化、全量、正确固定网格的 bar_60m 作为唯一真源。
+        # 原 hourly_bar(src=akshare) 历史段被 agg_1m 主键占位导致覆盖空洞，且
+        # agg_1m 自身仍为旧整点网格，回测读它必然口径错误。实盘信号(fusion_signal)
+        # 仍走 cfg.hourly_src=akshare（仅用近期数据，不受影响）。
+        src="bar_60m",
         # V3.1~V3.4 门控/加码全量映射（与线上引擎同一配置来源，保证信号层逐位一致）
         adx_n=cfg.adx_n, adx_min=cfg.adx_min, use_sbull=cfg.use_sbull,
         fib_confl=cfg.fib_confl, fib_ratios=tuple(cfg.fib_ratios),
@@ -108,7 +112,24 @@ def fusion_params_from_config(overrides: dict | None = None) -> FusionBacktestPa
 
 
 def _read_hourly(session, symbol: str, src: str, start: date | None, end: date | None):
-    """单源读取小时线，按时间升序返回 ohlc DataFrame（含 dt）。"""
+    """单源读取小时线，按时间升序返回 ohlc DataFrame（含 dt）。
+
+    2026-10-31 修正：生产回测原读 hourly_bar(src=akshare)。该表历史段与 agg_1m
+    共享 (symbol, trade_datetime) 主键（不含 src），agg_1m 占位导致 akshare 无法写入
+    ——覆盖存在空洞；且 agg_1m 自身仍是旧整点网格（11:00/12:00/14:00…）。故回测改用
+    规范化、全量、正确固定网格的 l1_mkt.bar_60m 作为唯一真源（契合「单一真源」铁律）。
+    """
+    if src == "bar_60m":
+        rows = session.execute(text(
+            "SELECT bucket, open, high, low, close FROM l1_mkt.bar_60m "
+            "WHERE symbol=:sym ORDER BY bucket"
+        ), {"sym": symbol}).all()
+        if not rows:
+            return None
+        df = pd.DataFrame(rows, columns=["dt", "open", "high", "low", "close"])
+        for col in ("open", "high", "low", "close"):
+            df[col] = df[col].astype(float)
+        return df
     q = (
         select(
             HourlyBar.trade_datetime, HourlyBar.open, HourlyBar.high,
