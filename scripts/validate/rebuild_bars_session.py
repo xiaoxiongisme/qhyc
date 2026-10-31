@@ -37,9 +37,36 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 
-from sqlalchemy import text
+from sqlalchemy import text, event as _sa_event
 
-from app.core.db import session_scope
+from app.core.db import session_scope, get_engine
+
+
+def _patch_engine_guc() -> None:
+    """在引擎每个新连接上解除压缩超表整块解压上限。
+
+    仅依赖事务内 `SET` 会被连接池/事务边界重置而失效；挂在 connect 事件上，
+    每次物理连接建立即生效，持久于该连接生命周期，彻底规避
+    `max_tuples_decompressed_per_dml_transaction` 默认 100000 上限导致的重建中断。
+    """
+    eng = get_engine()
+    if getattr(eng, "_qhyc_guc_patched", False):
+        return
+
+    def _on_connect(dbapi_conn, _record):
+        # 原始 DBAPI 连接：用 cursor 执行，并以 autocommit 确保 SET 在连接建立时
+        # 立即持久生效（否则会被后续 SQLAlchemy 事务边界回滚而失效）。
+        old_iso = dbapi_conn.isolation_level
+        try:
+            dbapi_conn.set_isolation_level(0)  # autocommit
+            cur = dbapi_conn.cursor()
+            cur.execute("SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0")
+            cur.close()
+        finally:
+            dbapi_conn.set_isolation_level(old_iso)
+
+    _sa_event.listen(eng, "connect", _on_connect)
+    eng._qhyc_guc_patched = True  # type: ignore[attr-defined]
 
 DEFAULT_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
 
@@ -187,6 +214,10 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
         params["syms"] = symbols
 
     with session_scope() as sess:
+        # bar_5m/bar_30m 等是压缩超表，整范围 DELETE+INSERT 会触发整块解压，
+        # 默认 max_tuples_decompressed_per_dml_transaction=100000 上限会被突破 → 报错中断。
+        # 一次性重建时解除该上限（本会话生效，不影响全局配置）。
+        sess.execute(text("SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0"))
         rows = sess.execute(text(_agg_sql(symbols, step)), params).fetchall()
     print(f"聚合结果：{len(rows):,} 根 {step}m bar   "
           f"（耗时 {(datetime.now(tz=timezone.utc)-t0).total_seconds():.1f}s）")
@@ -236,14 +267,19 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
                 :volume, :amount, :open_interest)
     """)
     with session_scope() as sess:
+        # 解除压缩超表整块解压上限（仅本会话），避免 DELETE/INSERT 触发的整块
+        # 解压超过默认 100000 上限而报错中断（一次性全量重建场景）。
+        sess.execute(text("SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0"))
         dp = dict(params)
-        # ★ 按完整时间范围删（而非只删新算出的自然日）：旧逻辑曾因 bucket_end
-        # 偏移落错日期，导致旧行未被删除 → 主键冲突。范围删可彻底清掉残留。
-        res = sess.execute(text(
-            f"DELETE FROM l1_mkt.{tbl} "
-            f"{'WHERE symbol = ANY(:syms) AND ' if symbols else 'WHERE '}"
-            f"bucket >= :s AND bucket < :e"
-        ), dp)
+        # ★ 按 symbol 整品种删除（不限定 bucket 范围）：全量重建本就替换该品种全部
+        # 历史，去掉范围过滤可彻底避免「残留旧行未被删 → INSERT 主键冲突」。
+        # （范围过滤在历史时区边界上会漏删部分旧行，已实测触发 duplicate key。）
+        del_sql = (
+            f"DELETE FROM l1_mkt.{tbl} WHERE symbol = ANY(:syms)"
+            if symbols else
+            f"DELETE FROM l1_mkt.{tbl} WHERE bucket >= :s AND bucket < :e"
+        )
+        res = sess.execute(text(del_sql), dp)
         print(f"  已删除旧数据 {res.rowcount:,} 行")
 
         batch: list[dict] = []
@@ -274,6 +310,9 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--limit-days", type=int, default=12)
     args = ap.parse_args()
+
+    # 解除压缩超表整块解压上限（挂在引擎 connect 事件，对所有连接生效）
+    _patch_engine_guc()
 
     symbols = None if args.symbols == "ALL" else [x.strip() for x in args.symbols.split(",")]
     if args.symbols == "ALL":
