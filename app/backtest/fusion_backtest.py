@@ -120,10 +120,16 @@ def _read_hourly(session, symbol: str, src: str, start: date | None, end: date |
     规范化、全量、正确固定网格的 l1_mkt.bar_60m 作为唯一真源（契合「单一真源」铁律）。
     """
     if src == "bar_60m":
-        rows = session.execute(text(
-            "SELECT bucket, open, high, low, close FROM l1_mkt.bar_60m "
-            "WHERE symbol=:sym ORDER BY bucket"
-        ), {"sym": symbol}).all()
+        sql = "SELECT bucket, open, high, low, close FROM l1_mkt.bar_60m WHERE symbol=:sym"
+        params = {"sym": symbol}
+        if start:
+            sql += " AND bucket >= :s"
+            params["s"] = pd.Timestamp(start)
+        if end:
+            sql += " AND bucket <= :e"
+            params["e"] = pd.Timestamp(end)
+        sql += " ORDER BY bucket"
+        rows = session.execute(text(sql), params).all()
         if not rows:
             return None
         df = pd.DataFrame(rows, columns=["dt", "open", "high", "low", "close"])
