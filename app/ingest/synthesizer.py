@@ -72,42 +72,84 @@ _SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
 #: ⚠ 若将来接入新的分钟源，务必先到这里登记它的约定，否则整段 bar 会偏 1 分钟。
 _SESSION_END_LABELED_SRCS = ["akshare_1min", "wh9999_1m"]
 
-_SESSION_INSERT = (
-    "WITH m AS (\n"
-    "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
-    "    FROM minute_bar\n"
-    "    {where}\n"
-    "), dedup AS (\n"
-    "    SELECT DISTINCT ON (symbol, ts) * FROM m\n"
-    "    ORDER BY symbol, ts, array_position(:srcs, src)\n"
-    "), norm AS (\n"
-    "    -- 终点约定的源统一减 1 分钟归一到起点约定，之后所有逻辑只需一套公式\n"
-    "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
-    "                        THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n\n"
-    "    FROM dedup\n"
-    "), gapd AS (\n"
-    "    SELECT *, CASE WHEN prev IS NULL\n"
-    "                     OR extract(epoch FROM (ts_n - prev)) / 60 > :maxgap\n"
-    "                THEN 1 ELSE 0 END AS brk\n"
-    "    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM norm) g\n"
-    "), segs AS (\n"
-    "    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) grp FROM gapd\n"
-    "), ranked AS (\n"
-    "    SELECT *, (row_number() OVER (PARTITION BY symbol, grp ORDER BY ts_n) - 1) / :step bucket\n"
-    "    FROM segs\n"
-    ")\n"
-    "INSERT INTO {t} (symbol, bucket, open, high, low, close, volume, amount, open_interest)\n"
-    "SELECT symbol,\n"
-    "       max(ts_n) + interval '1 minute',\n"
-    "       (array_agg(open  ORDER BY ts_n))[1],\n"
-    "       max(high), min(low),\n"
-    "       (array_agg(close ORDER BY ts_n DESC))[1],\n"
-    "       sum(volume)::bigint, sum(amount),\n"
-    "       (array_agg(open_interest ORDER BY ts_n DESC))[1]\n"
-    "FROM ranked\n"
-    "GROUP BY symbol, grp, bucket\n"
-    "{tail}"
-)
+#: 日盘固定边界（相对 09:00 的分钟偏移）：跳过 10:15-10:30 与 11:30-13:30 两段休市。
+#: 60m → 10:00 / 11:15 / 14:15 / 15:00；30m → 上述各点再加中点（避开休市段）。
+_SESSION_DAY_BOUNDS = {60: [60, 135, 315, 360], 30: [30, 60, 105, 135, 285, 315, 360]}
+
+
+def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
+    """按「交易所固定交易时段网格」聚合（见 rebuild_bars_session._build_sql 同源逻辑）。
+
+    日盘从 09:00 起、跳过两段休市，边界固定在墙上；夜盘从 21:00 起（无休市），
+    残段截断到 seg 自然收盘。锚定固定墙钟（09:00/21:00 on seg_date），
+    缺失分钟只让某根 bar 少 1 分钟，标签不变 —— 根治旧 row_number 法对缺失分钟的脆弱。
+    """
+    bounds = _SESSION_DAY_BOUNDS[step]
+    day_when = " ".join(f"WHEN rel_end <= {b} THEN {b}" for b in bounds)
+    day_case = f"CASE {day_when} ELSE {bounds[-1]} END"
+    return (
+        "WITH m AS (\n"
+        "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
+        "    FROM minute_bar\n"
+        f"    {where}\n"
+        "), dedup AS (\n"
+        "    SELECT DISTINCT ON (symbol, ts) * FROM m\n"
+        "    ORDER BY symbol, ts, array_position(:srcs, src)\n"
+        "), norm AS (\n"
+        "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
+        "                        THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n\n"
+        "    FROM dedup\n"
+        "), gapd AS (\n"
+        "    SELECT *, CASE WHEN prev IS NULL\n"
+        "                     OR extract(epoch FROM (ts_n - prev)) / 60 > :maxgap\n"
+        "                THEN 1 ELSE 0 END AS brk\n"
+        "    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM norm) g\n"
+        "), segs AS (\n"
+        "    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) AS grp FROM gapd\n"
+        "), segmeta AS (\n"
+        "    SELECT *, min(ts_n) OVER (PARTITION BY symbol, grp) AS seg_first,\n"
+        "             max(ts_n) OVER (PARTITION BY symbol, grp) AS seg_last\n"
+        "    FROM segs\n"
+        "), typed AS (\n"
+        "    SELECT *, (seg_first AT TIME ZONE 'Asia/Shanghai')::date AS seg_date,\n"
+        "           bool_or(EXTRACT(hour FROM ts_n AT TIME ZONE 'Asia/Shanghai') "
+        "BETWEEN 9 AND 14)\n"
+        "               OVER (PARTITION BY symbol, grp) AS is_day\n"
+        "    FROM segmeta\n"
+        "), bucketed AS (\n"
+        "    SELECT symbol, open, high, low, close, volume, amount, open_interest, ts_n, is_day,\n"
+        "           CASE\n"
+        "             WHEN is_day THEN\n"
+        "               (seg_date + TIME '09:00') AT TIME ZONE 'Asia/Shanghai'\n"
+        f"                 + ( {day_case} ) * interval '1 minute'\n"
+        "             ELSE\n"
+        "               LEAST(\n"
+        "                 (seg_date + TIME '21:00') AT TIME ZONE 'Asia/Shanghai'\n"
+        f"                   + ( floor( EXTRACT(epoch FROM (ts_n\n"
+        "                       - ((seg_date + TIME '21:00') AT TIME ZONE 'Asia/Shanghai')) )"
+        f" / 60 / {step} ) + 1 ) * ({step} * interval '1 minute'),\n"
+        "                 seg_last + interval '1 minute'\n"
+        "               )\n"
+        "           END AS bucket_end\n"
+        "    FROM (\n"
+        "        SELECT *, EXTRACT(epoch FROM ((ts_n + interval '1 minute')\n"
+        "                      - ((seg_date + TIME '09:00') AT TIME ZONE 'Asia/Shanghai')))/60 "
+        "AS rel_end\n"
+        "        FROM typed\n"
+        "    ) t\n"
+        ")\n"
+        "INSERT INTO {t} (symbol, bucket, open, high, low, close, volume, amount, open_interest)\n"
+        "SELECT symbol, bucket_end AS bucket,\n"
+        "       (array_agg(open  ORDER BY ts_n))[1],\n"
+        "       max(high), min(low),\n"
+        "       (array_agg(close ORDER BY ts_n DESC))[1],\n"
+        "       sum(volume)::bigint, sum(amount),\n"
+        "       (array_agg(open_interest ORDER BY ts_n DESC))[1]\n"
+        "FROM bucketed\n"
+        "GROUP BY symbol, bucket_end\n"
+        f"{tail}"
+    ).format(t=t)
+
 
 #: 会话式切分只对这两张表生效（见上方口径修正说明）
 _SESSION_BARS = {"bar_30m": 30, "bar_60m": 60}
@@ -333,14 +375,13 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
               ("WHERE ts >= :since\n" if since is not None else "") + \
               "GROUP BY symbol, bucket\n" + tail
         return _run(session, sql, {"since": since} if since is not None else None)
-    sql = _SESSION_INSERT.format(
-        t=t, where=("WHERE ts >= :since" if since is not None else ""), tail=tail)
+    sql = _session_insert_sql(
+        step, where=("WHERE ts >= :since" if since is not None else ""), tail=tail, t=t)
     return _run(session, sql, {
         "since": since,
         "srcs": _SESSION_SRC_PRIORITY,
         "end_srcs": _SESSION_END_LABELED_SRCS,
         "maxgap": _SESSION_MAX_GAP_MIN,
-        "step": step,
     })
 
 

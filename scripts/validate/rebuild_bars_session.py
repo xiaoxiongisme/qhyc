@@ -9,19 +9,22 @@ EMA/ATR 等指标的 bar 含义被扭曲。
 
 ## 正确规则（用户口径：同花顺小时 K，一个交易日 ≥6 根）
 用户给出的 SC 参照：`10:00 11:15 14:15 15:00 22:00 23:00`
-反推得到的**唯一**能精确复现该序列的规则（已用 SC888 2023-06-15 实测吻合）：
-1. 按自然日（Asia/Shanghai）分组，一个交易日 = 日盘 + 当日夜盘；
-2. 在该组内把分钟按 ts 升序串起来，**跳过午休等小节间休市继续累计**
-   （即只看有没有分钟数据，不看墙钟），每 60 个交易分钟成一根 bar；
-3. 相邻分钟间隔 > --max-gap 分钟（默认 150，> 商品最长午休 120，
-   < 日盘到夜盘的 360）或跨自然日 → 强制收尾，剩余部分单独成一根；
-4. bar 时间标签 = 该 bar 内最后一根分钟的 ts + 1 分钟（即 bar 的结束边界）。
-   例：09:00-10:00 → 10:00；10:00~11:15（含 10:15-10:30 休市）→ 11:15；
-       11:15~14:15（含午休）→ 14:15；余 14:15-15:00 → 15:00。
+→ 锚定到**交易所固定的交易时段网格**（不是"数分钟"，否则缺失分钟会让后续
+bar 整体偏移 1 分钟，实测全库 ~7% 的 bar 因此偏离网格）：
+1. 连续交易段（gap>--max-gap 或日盘↔夜盘 360 断开）内判定日盘/夜盘：
+   段内出现任一 9~14 点分钟 = 日盘；否则（21~23/0~2 点）= 夜盘；
+2. **日盘**：从 09:00 起，跳过两段休市（10:15-10:30 与 11:30-13:30），边界固定在
+   60m → 10:00/11:15/14:15/15:00；30m → 上述各点加中点（避开休市）；
+3. **夜盘**：从 21:00 起无休市，每 step 分钟一根，最后一段截断到该段自然收盘
+   （可容纳 23:00/01:00/02:30 等不同夜盘长度）；
+4. 锚点用**固定墙钟**（09:00/21:00 on seg_date），即使首根分钟缺失也不偏移；
+   缺失分钟只让某根 bar 少 1 分钟，标签永远落在固定网格上。
 
 ## 多源分钟去重
 l0_raw.minute_bar 有 kqm_1m / wh9999_1m / tqsdk_1min / akshare_1min 多个 src，
 同一 (symbol, ts) 可能多行 → 按 --src-priority 取优先级最高的一行，避免重复计数。
+分钟时间戳约定：kqm_1m / tqsdk_1min 记分钟【起点】；akshare_1min / wh9999_1m
+记分钟【终点】（聚合前 -1min 归一）。
 
 ## 用法（安全：默认 dry-run）
     set -a; . /home/ubuntu/qhyc_work/qhyc.env; set +a
@@ -40,7 +43,43 @@ from app.core.db import session_scope
 
 DEFAULT_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
 
-SQL_AGG = """
+# =============================================================================
+# ★ 正确做法：bar 边界锚定到「交易所固定的交易时段网格」，而非"数分钟"。
+# -----------------------------------------------------------------------------
+# 旧逻辑用 row_number()/step 数交易分钟，对**缺失分钟**脆弱：少一根就把后续所有
+# bar 的计数边界整体偏移 1 分钟（SC 夜盘少 1 根 → 00:01/01:01/02:01），全库约 7%
+# 的 bar 因此偏离网格。
+#
+# 新逻辑：边界固定在交易所时段上，缺失分钟只让某根 bar 少 1 分钟，标签不变。
+#   · 日盘（seg 内出现 9~14 点的分钟 → is_day）：从 09:00 起，跳过两段休市
+#       - 上午 10:15-10:30（15 分钟）
+#       - 中午 11:30-13:30（120 分钟）
+#     60m 固定边界（相对 09:00 的分钟偏移）：60, 135, 315, 360
+#        → 10:00 / 11:15 / 14:15 / 15:00（与用户同花顺口径逐位吻合）
+#     30m 固定边界：30, 60, 105, 135, 285, 315, 360
+#   · 夜盘（其余 seg，从 21:00 起，无休市）：边界 = 21:00 + k*step，最后一段
+#       残bar 截断到该 seg 自然收盘（max(ts_n)+1min），自然容纳 23:00/01:00/02:30
+#       等不同夜盘长度。
+# 锚点用**固定墙钟**（09:00 / 21:00 on seg_date），即使首根分钟缺失也不偏移。
+# =============================================================================
+#: 相对 09:00 的固定边界偏移（分钟），按 step 分
+DAY_BOUNDS = {60: [60, 135, 315, 360], 30: [30, 60, 105, 135, 285, 315, 360]}
+
+
+def _build_sql(step: int, sym_filter: str) -> str:
+    bounds = DAY_BOUNDS[step]
+    # 日盘：rel_end = (ts_n+1min - day_start) 的分钟数；取 >= rel_end 的最小边界
+    day_when = []
+    prev = -1
+    for b in bounds:
+        if prev < 0:
+            day_when.append(f"WHEN rel_end <= {b} THEN {b}")
+        else:
+            day_when.append(f"WHEN rel_end <= {b} THEN {b}")
+        prev = b
+    day_case = "CASE " + " ".join(day_when) + f" ELSE {bounds[-1]} END"
+
+    return f"""
 WITH m AS (
     SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src
     FROM l0_raw.minute_bar
@@ -57,18 +96,48 @@ WITH m AS (
                         THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n
     FROM dedup
 ), gapd AS (
+    -- 只在「相邻分钟间隔超过阈值」处切断：日盘↔夜盘 360 必断，午休/小节休市不切断
     SELECT *, CASE WHEN prev IS NULL
                      OR extract(epoch FROM (ts_n - prev)) / 60 > :maxgap
                 THEN 1 ELSE 0 END AS brk
     FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM norm) g
 ), segs AS (
-    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) grp FROM gapd
-), ranked AS (
-    SELECT *, (row_number() OVER (PARTITION BY symbol, grp ORDER BY ts_n) - 1) / :step bucket
+    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) AS grp FROM gapd
+), segmeta AS (
+    SELECT *, min(ts_n) OVER (PARTITION BY symbol, grp) AS seg_first,
+             max(ts_n) OVER (PARTITION BY symbol, grp) AS seg_last
     FROM segs
+), typed AS (
+    -- 日盘判定：该连续段内出现任一 9~14 点（上午/下午）的分钟即判为日盘；
+    -- 夜盘（21~23、0~2 点）永不会出现这些小时，必判为夜盘。
+    SELECT *, (seg_first AT TIME ZONE 'Asia/Shanghai')::date AS seg_date,
+           bool_or(EXTRACT(hour FROM ts_n AT TIME ZONE 'Asia/Shanghai') BETWEEN 9 AND 14)
+               OVER (PARTITION BY symbol, grp) AS is_day
+    FROM segmeta
+), bucketed AS (
+    SELECT symbol, open, high, low, close, volume, amount, open_interest, ts_n, is_day,
+           CASE
+             WHEN is_day THEN
+               -- 日盘：固定墙钟网格（09:00 起），rel_end=本分钟收盘相对 09:00 的分钟数
+               (seg_date + TIME '09:00') AT TIME ZONE 'Asia/Shanghai'
+                 + ( {day_case} ) * interval '1 minute'
+             ELSE
+               -- 夜盘：21:00 起每 step 分钟一根，残段截断到 seg 自然收盘
+               LEAST(
+                 (seg_date + TIME '21:00') AT TIME ZONE 'Asia/Shanghai'
+                   + ( floor( EXTRACT(epoch FROM (ts_n
+                       - ((seg_date + TIME '21:00') AT TIME ZONE 'Asia/Shanghai')) ) / 60
+                       / {step} ) + 1 ) * ({step} * interval '1 minute'),
+                 seg_last + interval '1 minute'
+               )
+           END AS bucket_end
+    FROM (
+        SELECT *, EXTRACT(epoch FROM ((ts_n + interval '1 minute')
+                      - ((seg_date + TIME '09:00') AT TIME ZONE 'Asia/Shanghai')))/60 AS rel_end
+        FROM typed
+    ) t
 )
-SELECT symbol,
-       max(ts_n) + interval '1 minute' AS bucket_end,
+SELECT symbol, bucket_end AS bucket,
        (array_agg(open  ORDER BY ts_n))[1] AS open,
        max(high)  AS high,
        min(low)   AS low,
@@ -77,16 +146,18 @@ SELECT symbol,
        sum(amount) AS amount,
        (array_agg(open_interest ORDER BY ts_n DESC))[1] AS open_interest,
        count(*) AS n_minutes
-FROM ranked
-GROUP BY symbol, grp, bucket
+FROM bucketed
+GROUP BY symbol, bucket_end
 """
+
 
 #: 分钟时间戳约定登记（实测）：这些源把 ts 记为分钟的【终点】
 END_LABELED_SRCS = ["akshare_1min", "wh9999_1m"]
 
 
-def _agg_sql(symbols: list[str] | None) -> str:
-    return SQL_AGG.format(sym_filter="AND symbol = ANY(:syms)" if symbols else "")
+def _agg_sql(symbols: list[str] | None, step: int = 60) -> str:
+    sym_filter = "AND symbol = ANY(:syms)" if symbols else ""
+    return _build_sql(step, sym_filter)
 
 
 def run(symbols: list[str] | None, start: str, end: str, step: int,
@@ -95,13 +166,13 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
     t0 = datetime.now(tz=timezone.utc)
     s_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
     e_dt = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
-    params = {"s": s_dt, "e": e_dt, "step": step, "maxgap": maxgap, "srcs": priority,
+    params = {"s": s_dt, "e": e_dt, "maxgap": maxgap, "srcs": priority,
               "end_srcs": END_LABELED_SRCS}
     if symbols:
         params["syms"] = symbols
 
     with session_scope() as sess:
-        rows = sess.execute(text(_agg_sql(symbols)), params).fetchall()
+        rows = sess.execute(text(_agg_sql(symbols, step)), params).fetchall()
     print(f"聚合结果：{len(rows):,} 根 {step}m bar   "
           f"（耗时 {(datetime.now(tz=timezone.utc)-t0).total_seconds():.1f}s）")
 
@@ -134,13 +205,12 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
         print("\n[dry-run] 未写库。确认形态正确后加 --apply")
         return 0
 
-    print(f"\n[apply] 写入 {target}（仅替换本次能重建出来的自然日，杜绝空洞）…")
+    print(f"\n[apply] 写入 {target}（按完整时间范围删除旧数据后重插，杜绝跨日残留/空洞）…")
     tbl = {60: "bar_60m", 30: "bar_30m"}[step]
-    days = sorted({d for _, d in by_day})
-    if not days:
+    if not rows:
         print("  无产出，跳过")
         return 0
-    print(f"  覆盖自然日 {len(days)} 天：{days[0]} ~ {days[-1]}")
+    print(f"  时间范围 {start} ~ {end}（覆盖全部能重建的分钟区间）")
 
     cols = ("symbol", "bucket", "open", "high", "low", "close",
             "volume", "amount", "open_interest")
@@ -152,13 +222,12 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
     """)
     with session_scope() as sess:
         dp = dict(params)
-        dp["days"] = [datetime.fromisoformat(d).date() for d in days]
+        # ★ 按完整时间范围删（而非只删新算出的自然日）：旧逻辑曾因 bucket_end
+        # 偏移落错日期，导致旧行未被删除 → 主键冲突。范围删可彻底清掉残留。
         res = sess.execute(text(
-            f"DELETE FROM l1_mkt.{tbl} WHERE symbol = ANY(:syms) "
-            f"AND (bucket AT TIME ZONE 'Asia/Shanghai')::date = ANY(:days)"
-        ) if symbols else text(
             f"DELETE FROM l1_mkt.{tbl} "
-            f"WHERE (bucket AT TIME ZONE 'Asia/Shanghai')::date = ANY(:days)"
+            f"{'WHERE symbol = ANY(:syms) AND ' if symbols else 'WHERE '}"
+            f"bucket >= :s AND bucket < :e"
         ), dp)
         print(f"  已删除旧数据 {res.rowcount:,} 行")
 
