@@ -52,7 +52,7 @@ _COL_ALIAS = {
 
 #: 各物理表实际持仓量列名（information_schema 实测 2026-10-01）。
 #:   bar_5m/15m/30m/60m、minute_bar          → open_interest
-#:   fut_kline/hourly_bar/daily_bar/contract_daily → oi
+#:   hourly_bar/daily_bar/contract_daily → oi
 #:   minute_bar_adj                           → 两者皆无
 #: 旧代码写死 `SELECT ... oi FROM bar_5m` 会对分钟表报错并降级成 oi=0，
 #: 静默丢弃真实持仓量；SELECT 必须按物理列名取（见 load()）。
@@ -63,7 +63,6 @@ _OI_COL = {
     "bar_60m": "open_interest",
     "minute_bar": "open_interest",
     "minute_bar_adj": None,   # 无持仓列 → oi 恒 0
-    "fut_kline": "oi",
     "hourly_bar": "oi",
     "daily_bar": "oi",
     "contract_daily": "oi",

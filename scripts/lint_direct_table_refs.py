@@ -32,7 +32,7 @@ for _s in (sys.stdout, sys.stderr):
 
 # 受管行情/复权表（必须经 barstore.load / caliber 路由）
 GUARDED_TABLES = [
-    r"fut_kline", r"minute_bar", r"minute_bar_adj", r"minute_bar_stage",
+    r"minute_bar", r"minute_bar_adj", r"minute_bar_stage",
     r"bar_5m", r"bar_15m", r"bar_30m", r"bar_60m",
     r"daily_bar", r"hourly_bar", r"main_continuous",
     r"roll_segment", r"main_contract_map", r"contract_code_map",

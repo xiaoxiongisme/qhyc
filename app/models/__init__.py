@@ -16,7 +16,6 @@ from app.models.domain import (
     Inventory,            # §18.5 M6a
     SpotBasis,            # §18.5（v1.3.2）基差因子
     ContractDaily,        # §18.6 M6b 合约级日线
-    FutKline,              # futures-data-fetch 技能适配层
     ContractCodeMap,       # 合约代码对照表（全库统一 4 位标准码）
     PipelineRun,           # M8 决策链路运行留痕
     PipelinePushLog,       # M8 决策链路推送留痕
@@ -45,7 +44,6 @@ __all__ = [
     "Inventory",
     "SpotBasis",
     "ContractDaily",
-    "FutKline",
     "ContractCodeMap",
     "PipelineRun",
     "PipelinePushLog",

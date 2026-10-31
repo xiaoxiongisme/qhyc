@@ -133,28 +133,6 @@ class MainContinuous(Base):
 
 
 # -----------------------------------------------------
-# 期货行情统一 K 线（futures-data-fetch 技能适配层，M6 扩展）
-# freq(kind,symbol,dt) 三类型：continuous/contract/cont_adj
-# -----------------------------------------------------
-class FutKline(Base):
-    __tablename__ = "fut_kline"
-
-    freq: Mapped[str] = mapped_column(Text, primary_key=True)
-    kind: Mapped[str] = mapped_column(Text, primary_key=True)
-    symbol: Mapped[str] = mapped_column(Text, primary_key=True)
-    trade_datetime: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True
-    )
-    open: Mapped[Decimal | None] = mapped_column(Numeric20)
-    high: Mapped[Decimal | None] = mapped_column(Numeric20)
-    low: Mapped[Decimal | None] = mapped_column(Numeric20)
-    close: Mapped[Decimal | None] = mapped_column(Numeric20)
-    volume: Mapped[int | None] = mapped_column(BigInteger)
-    oi: Mapped[int | None] = mapped_column(BigInteger)
-    adj: Mapped[Decimal | None] = mapped_column(Numeric20, default=Decimal("0"))
-
-
-# -----------------------------------------------------
 # 小时线（超表，M6 启用）
 # -----------------------------------------------------
 class HourlyBar(Base):

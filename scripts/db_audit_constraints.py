@@ -33,7 +33,6 @@ from pgconn import add_conn_args, conn_from_args  # noqa: E402
 #: 超表（TimescaleDB）的唯一键**必须包含分区时间列**，否则建不上。
 CANDIDATE_KEYS = {
     # —— 行情层（超表，键必须含时间列）——
-    "fut_kline":        ["freq", "kind", "symbol", "trade_datetime"],
     "minute_bar":       ["symbol", "ts"],
     "minute_bar_adj":   ["symbol", "ts"],
     "bar_5m":           ["symbol", "bucket"],
