@@ -35,7 +35,7 @@ l0_raw.minute_bar 有 kqm_1m / wh9999_1m / tqsdk_1min / akshare_1min 多个 src�
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text, event as _sa_event
 
@@ -56,14 +56,21 @@ def _patch_engine_guc() -> None:
     def _on_connect(dbapi_conn, _record):
         # 原始 DBAPI 连接：用 cursor 执行，并以 autocommit 确保 SET 在连接建立时
         # 立即持久生效（否则会被后续 SQLAlchemy 事务边界回滚而失效）。
-        old_iso = dbapi_conn.isolation_level
+        #
+        # ⚠ 这里刻意用 ``autocommit`` 属性而不是 ``set_isolation_level(0)``：
+        #   本项目在医院 VPS 上是 psycopg3（``psycopg``），其
+        #   ``set_isolation_level`` 只接受 ``IsolationLevel`` 枚举，传 psycopg2
+        #   风格的整数 0 会抛 ``ValueError: 0 is not a valid IsolationLevel``，
+        #   把「开了 autocommit 又恢复失败」写进 finally 时尤其容易踩到。
+        #   ``connection.autocommit = True`` 在 psycopg2 / psycopg3 上语义一致。
+        old_auto = getattr(dbapi_conn, "autocommit", False)
         try:
-            dbapi_conn.set_isolation_level(0)  # autocommit
+            dbapi_conn.autocommit = True
             cur = dbapi_conn.cursor()
             cur.execute("SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0")
             cur.close()
         finally:
-            dbapi_conn.set_isolation_level(old_iso)
+            dbapi_conn.autocommit = old_auto
 
     _sa_event.listen(eng, "connect", _on_connect)
     eng._qhyc_guc_patched = True  # type: ignore[attr-defined]
@@ -128,21 +135,30 @@ WITH m AS (
     WHERE ts >= :s AND ts < :e
       {sym_filter}
       AND src = ANY(:srcs)
-), dedup AS (
-    SELECT DISTINCT ON (symbol, ts) *
-    FROM m
-    ORDER BY symbol, ts, array_position(:srcs, src)
 ), norm AS (
     -- 终点约定源（ts 记分钟终点）减 1 分钟归一到起点约定，后续只需一套公式
     SELECT *, ts - CASE WHEN src = ANY(:end_srcs)
                         THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n
-    FROM dedup
+    FROM m
+), dedup AS (
+    -- ★ 去重必须在「时间戳归一化之后」按 ts_n 做，不能在原始 ts 上做。
+    --   反例（2026-10-31 实测 MA888 2026-09-28）：tqsdk_1min 起点约定末根 ts=14:59、
+    --   akshare_1min 终点约定末根 ts=15:00，二者都表示 14:59~15:00 这一分钟，
+    --   归一后 ts_n 同为 14:59；但若按原始 ts 去重（14:59 ≠ 15:00）两者都会被保留：
+    --     · volume/amount 双倍计入（实测 bar_30m 该 bar 多出 856 = akshare 那根的量）
+    --     · min(low) 吃到另一源的脏值（实测 2940 vs 真实 3545）
+    --     · array_agg(close ORDER BY ts_n DESC)[1] 在 ts_n 并列时顺序未定义，
+    --       导致同一份数据在 30m/60m 上给出自相矛盾的收盘价。
+    --   按 ts_n 去重并按 src 优先级取一条，三者同时消除。
+    SELECT DISTINCT ON (symbol, ts_n) *
+    FROM norm
+    ORDER BY symbol, ts_n, array_position(:srcs, src)
 ), gapd AS (
     -- 只在「相邻分钟间隔超过阈值」处切断：日盘↔夜盘 360 必断，午休/小节休市不切断
     SELECT *, CASE WHEN prev IS NULL
                      OR extract(epoch FROM (ts_n - prev)) / 60 > :maxgap
                 THEN 1 ELSE 0 END AS brk
-    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM norm) g
+    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM dedup) g
 ), segs AS (
     SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) AS grp FROM gapd
 ), segmeta AS (
@@ -271,16 +287,28 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
         # 解压超过默认 100000 上限而报错中断（一次性全量重建场景）。
         sess.execute(text("SET timescaledb.max_tuples_decompressed_per_dml_transaction = 0"))
         dp = dict(params)
-        # ★ 按 symbol 整品种删除（不限定 bucket 范围）：全量重建本就替换该品种全部
-        # 历史，去掉范围过滤可彻底避免「残留旧行未被删 → INSERT 主键冲突」。
-        # （范围过滤在历史时区边界上会漏删部分旧行，已实测触发 duplicate key。）
+        # ★ DELETE 范围必须与本次实际要写入的 bucket 区间严格一致。
+        #   曾踩两次坑，写法演化的来龙去脉务必保留：
+        #   ① 早先写 ``bucket >= :s AND bucket < :e``（用用户传入区间），历史时区
+        #      边界上会漏删少量旧行 → INSERT 撞唯一键报 duplicate key；
+        #   ② 为此改成 ``symbol = ANY(:syms)`` 整品种删 —— 但当用户传的是**窄区间**
+        #      （如只重算某一个月）时，DELETE 会清掉该品种全部历史，而 INSERT 只
+        #      补回这一个月 → **历史数据静默丢失**（2026-10-31 实测：MA888 bar_30m
+        #      一次性删掉 34,375 行、只写回 208 行）。
+        #   现在的做法既规避①又规避②：以**聚合结果的真实 min/max bucket** 为界，
+        #   并始终限定 symbol。写入集合 ⊆ 删除集合，幂等且不误伤。
+        _buckets = [r[1] for r in rows if r[1] is not None]
+        dp["dmin"] = min(_buckets)
+        dp["dmax"] = max(_buckets) + timedelta(microseconds=1)  # 上界取开区间
         del_sql = (
-            f"DELETE FROM l1_mkt.{tbl} WHERE symbol = ANY(:syms)"
+            f"DELETE FROM l1_mkt.{tbl} WHERE symbol = ANY(:syms) "
+            f"AND bucket >= :dmin AND bucket < :dmax"
             if symbols else
             f"DELETE FROM l1_mkt.{tbl} WHERE bucket >= :s AND bucket < :e"
         )
         res = sess.execute(text(del_sql), dp)
-        print(f"  已删除旧数据 {res.rowcount:,} 行")
+        print(f"  已删除旧数据 {res.rowcount:,} 行"
+              f"（区间 {dp['dmin']:%Y-%m-%d %H:%M} ~ {dp['dmax']:%Y-%m-%d %H:%M}）")
 
         batch: list[dict] = []
         n = 0

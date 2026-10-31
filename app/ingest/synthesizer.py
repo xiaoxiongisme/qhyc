@@ -55,8 +55,10 @@ _BARS = [
 #        akshare_1min / wh9999_1m 记分钟【终点】(09:01…15:00) → 本身就是收边界
 #      判定依据：本连续段首根分钟的分钟数能否被 30 整除（整点/半点 = 起点约定）。
 #
-# ⚠ 只有 30m / 60m 走这条规则（用户明确要求）；5m / 15m 仍用 time_bucket，
-#   两者不可互相聚合校验——若将来要统一，请把 _BARS 全部迁到这里并对齐后再验证。
+# ⚠ 2026-10-31 起 _BARS 四张表全部走这条规则（30m/60m 自 2026-10-31 引入，
+#   5m/15m 同日补齐——此前 5m/15m 用 time_bucket 自然整点桶，会把全量重建
+#   修好的网格在下次增量时改回 13:30/10:30 等错误标签）。
+#   网格定义见 ``_SESSION_DAY_BOUNDS``，须与 rebuild_bars_session.py 保持一致。
 # =============================================================================
 _SESSION_MAX_GAP_MIN = 150
 
@@ -73,8 +75,24 @@ _SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
 _SESSION_END_LABELED_SRCS = ["akshare_1min", "wh9999_1m"]
 
 #: 日盘固定边界（相对 09:00 的分钟偏移）：跳过 10:15-10:30 与 11:30-13:30 两段休市。
-#: 60m → 10:00 / 11:15 / 14:15 / 15:00；30m → 上述各点再加中点（避开休市段）。
-_SESSION_DAY_BOUNDS = {60: [60, 135, 315, 360], 30: [30, 60, 105, 135, 285, 315, 360]}
+#:   60m → 10:00 / 11:15 / 14:15 / 15:00
+#:   30m → 09:30 / 10:00 / 10:45 / 11:15 / 13:45 / 14:15 / 14:45 / 15:00
+#:   15m → 晨 09:15..10:15(每15) → 10:45..11:30；午 13:45..15:00(每15)
+#:   5m  → 晨 09:05..10:15(每5)  → 10:35..11:30；午 13:35..15:00(每5)
+#: ⚠ 必须与 ``scripts/validate/rebuild_bars_session.py::DAY_BOUNDS`` 逐位相同，
+#:   否则「增量合成」与「全量重建」会给出互相矛盾的 bar（历史上 30m 曾遗漏
+#:   14:45、5m/15m 曾整体退回自然整点桶，均由此处不同步引起）。
+#:   校验脚本：``scripts/validate/check_bar_grid_consistency.py``。
+_SESSION_DAY_BOUNDS = {
+    60: [60, 135, 315, 360],
+    30: [30, 60, 105, 135, 285, 315, 345, 360],
+    15: [15, 30, 45, 60, 75, 105, 120, 135, 150,
+         285, 300, 315, 330, 345, 360],
+    5:  [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75,
+         95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150,
+         275, 280, 285, 290, 295, 300, 305, 310, 315, 320, 325, 330,
+         335, 340, 345, 350, 355, 360],
+}
 
 
 def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
@@ -92,18 +110,23 @@ def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
         "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
         "    FROM minute_bar\n"
         f"    {where}\n"
-        "), dedup AS (\n"
-        "    SELECT DISTINCT ON (symbol, ts) * FROM m\n"
-        "    ORDER BY symbol, ts, array_position(:srcs, src)\n"
         "), norm AS (\n"
         "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
         "                        THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n\n"
-        "    FROM dedup\n"
+        "    FROM m\n"
+        "), dedup AS (\n"
+        "    -- 去重必须在「归一化之后」按 ts_n 做：不同分钟戳约定的源（tqsdk_1min 起点\n"
+        "    -- 约定末根 14:59 与 akshare_1min 终点约定末根 15:00）归一后同为 ts_n=14:59，\n"
+        "    -- 若按原始 ts 去重则两者都保留 → 量额双倍、脏值混进 high/low、\n"
+        "    -- array_agg(close ORDER BY ts_n DESC)[1] 在并列时顺序未定义使收盘价不确定。\n"
+        "    -- 详见 scripts/validate/rebuild_bars_session.py 同名注释。\n"
+        "    SELECT DISTINCT ON (symbol, ts_n) * FROM norm\n"
+        "    ORDER BY symbol, ts_n, array_position(:srcs, src)\n"
         "), gapd AS (\n"
         "    SELECT *, CASE WHEN prev IS NULL\n"
         "                     OR extract(epoch FROM (ts_n - prev)) / 60 > :maxgap\n"
         "                THEN 1 ELSE 0 END AS brk\n"
-        "    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM norm) g\n"
+        "    FROM (SELECT *, lag(ts_n) OVER (PARTITION BY symbol ORDER BY ts_n) prev FROM dedup) g\n"
         "), segs AS (\n"
         "    SELECT *, sum(brk) OVER (PARTITION BY symbol ORDER BY ts_n) AS grp FROM gapd\n"
         "), segmeta AS (\n"
@@ -151,8 +174,21 @@ def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
     ).format(t=t)
 
 
-#: 会话式切分只对这两张表生效（见上方口径修正说明）
-_SESSION_BARS = {"bar_30m": 30, "bar_60m": 60}
+#: 会话式切分对全部 bar_* 表生效（2026-10-31 起）。
+#: 此前只有 30m/60m 走会话式，5m/15m 仍走 ``time_bucket`` 自然整点桶，于是
+#: 全量重建把 5m/15m 修成同花顺网格后，**下一次增量又会用整点桶把它改回去**
+#: （13:30 取代 13:35/13:45、10:30 取代 10:35/10:45），属静默双向拉锯。
+#: 现四条频次统一走会话式，与 rebuild_bars_session.py 同源。
+_SESSION_BARS: dict[str, int] = {
+    "bar_5m": 5, "bar_15m": 15, "bar_30m": 30, "bar_60m": 60,
+}
+
+#: 兜底断言：``_BARS`` 里任何一张表若没在上登记，就会静默退回自然整点桶。
+#: 宁可在 import 期炸掉，也不要让错误的 bar 悄悄落库。
+_MISSING = [t for t, _ in _BARS if t not in _SESSION_BARS]
+if _MISSING:  # pragma: no cover - 配置即瘫痪
+    raise RuntimeError(
+        f"synthesizer: 以下 bar 表未登记会话式切分，会退回自然整点桶: {_MISSING}")
 
 _INSERT_HEAD = (
     "INSERT INTO {t} (symbol, bucket, open, high, low, close, volume, amount, open_interest)\n"
@@ -162,6 +198,8 @@ _INSERT_HEAD = (
     "       sum(volume)::bigint, sum(amount), last(open_interest, ts)\n"
     "FROM minute_bar\n"
 )
+#: ⚠ 已停用（2026-10-31）：自然整点桶口径与同花顺网格互斥，5m/15m 一旦走到
+#: 这条分支就会产出 13:30/10:30 等错误标签。保留仅为追溯，勿重新启用。
 
 #: 冲突时的覆盖子句（2026-10-08 新增，配合「纯 upsert」改造）。
 #:
