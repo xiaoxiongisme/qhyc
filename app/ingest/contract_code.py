@@ -25,8 +25,8 @@
 - ``normalize`` 默认 ``--dry-run``；``--apply`` 前会先**把受影响行导出 CSV 备份**，
   并在同一事务内做「PK 冲突预检」，任何冲突直接回滚（绝不静默丢行）。
 - 只改写**合约码命名空间**；``<品种>888`` / ``KQ.m@...`` / ``IDX:...`` / 天勤码原样保留。
-- ``fut_kline.symbol`` 存的是天勤**原生**码（郑商所 3 位），天勤按此订阅，
-  **不参与物理归一** —— 只在对照表里登记 ``天勤_symbol``。
+- 注：历史上 ``fut_kline.symbol`` 曾存天勤**原生**码（郑商所 3 位）并用于登记；该表已于
+  2026-10-04 随 fdf 退役成为孤儿表，故不再作为观测点（见 OBSERVATIONS 注释）。
 """
 from __future__ import annotations
 
@@ -68,9 +68,10 @@ OBSERVATIONS: list[dict[str, Any]] = [
          day="report_date", src="src", where="near_contract IS NOT NULL"),
     dict(table="spot_basis", sym="dominant_contract", ex=None,
          day="report_date", src="src", where="dominant_contract IS NOT NULL"),
-    # 天勤 K 线（仅具体合约行；原生 3 位码，只登记不改写）
-    dict(table="fut_kline", sym="symbol", ex=None,
-         day="trade_datetime", src="src", where="kind = 'contract'"),
+    # 注：原「天勤 K 线 fut_kline」观测点已于 2026-10-04 随 fdf 模块退役（scheduler
+    # 增量/重建作业停用，表保留为孤儿表待观测、不再有写入通路）。其数据冻结在退役时点，
+    # 不再反映最新合约，故从归一观测点移除，仅保留上述活跃表。若日后需补 天勤原生 3 位码
+    # 登记，应改用 dim_symbol / main_contract_map 等活跃来源，而非孤儿表。
 ]
 
 # ---------------------------------------------------------------------------
@@ -306,11 +307,11 @@ def build_map(only: Optional[list[str]] = None) -> dict[str, Any]:
 
     对每个原生码，参考日取**该码在库内最早出现的日期** —— 这样 3 位码补年
     一定落在「合约尚未到期」的区间，不会因跨年而补成十年后。
-    （``fut_kline`` 横跨 2020→2026 十年边界，``CF001`` 必须靠最早日期才能定成
-      2020-01 而不是 2030-01，故该表的时间聚合不能省。）
+    （合约级表（如 ``contract_daily``/``daily_bar``）同样可能横跨多年边界，``CF001``
+      必须靠最早日期才能定成 2020-01 而不是 2030-01，故时间聚合不能省。）
 
-    ``only``：表名白名单（只扫这些表）。``fut_kline`` 有 700 万+ 行，
-    全量扫描是耗时大头，迭代调试时可先跳过它。
+    ``only``：表名白名单（只扫这些表）。历史曾含 ``fut_kline``（700 万+ 行，是全量扫描
+    耗时大头），但该表已于 2026-10-04 退役为孤儿表、不再作为观测点，见 OBSERVATIONS。
     """
     eng = get_engine()
     stats: dict[str, Any] = {"observed": 0, "mapped": 0, "skipped": [], "per_source": {}}

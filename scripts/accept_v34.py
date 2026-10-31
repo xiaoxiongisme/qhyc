@@ -1,7 +1,7 @@
 """
 V3.4 验收脚本（等价性验证）
 ==========================
-在【生产真数据源 fut_kline 连续主连】上跑 CB 引擎 walk_fusion_states，
+在【生产真数据源 l1_mkt.bar_60m 连续主连】上跑 CB 引擎 walk_fusion_states，
 再用研究侧容量5 FIFO + real_cost(1.0) 回放，核对研发锚点：
   events=16400 / executed=3226 / win_rate=23.5% / net=+69.6万 / mdd=16.8万 / 加码1583
 
@@ -70,10 +70,9 @@ ANCHOR = dict(events=16400, executed=3226, win_rate=0.2349659,
 
 #: ★ 锚点的可复现性元数据（2026-10-07 补记）
 #:
-#: 锚点来自**已退役的数据源** ``fut_kline(freq='hourly', kind='continuous')``，
-#: 且**没有记录品种列表与时间窗口**。G9 退役 continuous 后该口径已无法复现，
-#: 本脚本改用 ``hourly_bar`` 的 888 主力连续（2020-02 起，多数品种 2021+ 才
-#: 有数据）。因此：
+#: 锚点数据源为规范化的 ``l1_mkt.bar_60m``（与 fusion_backtest 回测真源一致；
+#: fut_kline 已于 G9 退役，hourly_bar 亦非规范真源）。本脚本改用 bar_60m 的
+#: 888 主力连续（多数品种 2021+ 有数据）。因此：
 #:
 #:   **锚点与当前实测不在同一数据集上，`ok` 判定不成立、不可作为验收依据。**
 #:
@@ -85,7 +84,7 @@ ANCHOR = dict(events=16400, executed=3226, win_rate=0.2349659,
 #: 结论：偏差来自**数据窗口/品种集合差异**。后续验收应以「同一脚本、同一数据源
 #: 的自洽重跑」为准（`--save-baseline` 落盘后作新锚点），而非继续比对legacy 数字。
 ANCHOR_META = dict(
-    source="fut_kline(freq='hourly', kind='continuous') [已随 G9 退役]",
+    source="l1_mkt.bar_60m (continuous main-contract, 与 fusion_backtest 真源一致)",
     reproducible=False,
     note="锚点未记录品种列表/时间窗口，与当前 hourly_bar 口径不同数据集；"
          "2026-10-07 实测偏差 -2968 已排除加仓语义映射，主因为数据窗口差异。",
@@ -102,9 +101,9 @@ def _resolve_fut_symbol(session, product, exchange):
       kind='continuous')``。但 **continuous 已随 G9 退役、该口径 0 行**（实测
       ``kind='continuous'`` 无任何数据；fut_kline 现只有 ``kind='contract'``），
       导致本脚本「品种覆盖 0/0」、全部指标为 0 —— 是静默失效而非报错。
-      现改用 ``hourly_bar`` 的 888 主力连续（50 品种 / 2020-02~2026-09 / 38.5 万行），
-      与 ``app/backtest/fusion_backtest.py:_read_hourly`` **同源同口径**，
-      保证本验收脚本与融合回测的数字可比。
+      2026-10-31 进一步收敛：本脚本（load_continuous_60m）与 fusion_backtest
+      均改读规范化真源 ``l1_mkt.bar_60m``（已验证正确同花顺网格），
+      二者同源同口径，验收数字与融合回测可比。
     """
     for cand in (f"{product.upper()}888", f"{product.lower()}888"):
         n = session.execute(text(
@@ -114,11 +113,18 @@ def _resolve_fut_symbol(session, product, exchange):
     return None
 
 
-def load_fut_kline(session, symbol):
-    """读 888 主力连续小时线（``hourly_bar``），返回 [dt,open,high,low,close]。"""
+def load_continuous_60m(session, symbol):
+    """读 888 主力连续 60m 线（``l1_mkt.bar_60m``，同 fusion_backtest 真源），
+    返回 [dt,open,high,low,close]。
+
+    ⚠ 历史：本函数原名 load_fut_kline，注释声称读 fut_kline(freq='hourly',
+    kind='continuous')；但 fut_kline 已于 G9（2026-10-04）随 fdf 模块退役，且
+    该函数体实际读的是 hourly_bar。现统一收敛到规范化、已验证正确网格的
+    l1_mkt.bar_60m，与回测真源保持一致，验收方可复现。
+    """
     q = text(
-        "SELECT trade_datetime, open, high, low, close FROM hourly_bar "
-        "WHERE symbol=:s ORDER BY trade_datetime ASC")
+        "SELECT bucket AS dt, open, high, low, close FROM l1_mkt.bar_60m "
+        "WHERE symbol=:s ORDER BY bucket ASC")
     rows = session.execute(q, {"s": symbol}).all()
     if not rows:
         return None
@@ -293,7 +299,7 @@ def main():
     with session_scope() as s:
         for m in mc:
             fk=_resolve_fut_symbol(s, m.product, m.exchange)
-            df=load_fut_kline(s, fk) if fk else None
+            df=load_continuous_60m(s, fk) if fk else None
             if df is None or len(df)<p.min_bars:
                 skipped.append((m.symbol, fk or f"KQ.m@{m.exchange}.{m.product}",
                                 0 if df is None else len(df)))
@@ -312,7 +318,7 @@ def main():
         res_legacy=replay_capacity5(all_pos, mult_map, pnl_mode=PNL_MODE, cost_mode="legacy")
     # 报告
     print("="*60)
-    print("V3.4 验收：CB 引擎(walk_fusion_states) @ fut_kline 连续主连")
+    print("V3.4 验收：CB 引擎(walk_fusion_states) @ l1_mkt.bar_60m 连续主连")
     print(f"成本口径：{COST_MODE}  （dict=库内真实费率；legacy=旧 SPEC 硬编码，仅对照）")
     print("="*60)
     print(f"品种覆盖：{n_sym}/{len(mc)}  （跳过 {len(skipped)} 个：{skipped[:5]}）")
@@ -400,7 +406,8 @@ if __name__=="__main__":
                           "注意 CB 的 add_max_lots 是「总手数上限」，语义不同，勿混用。")
     _ap.add_argument("--save-baseline", action="store_true",
                      help="把本次实测落盘为新基线(accept_v34_baseline.json)。"
-                          "旧锚点来自已退役的 fut_kline continuous、不可复现，"
+                          "旧锚点来自已退役的 fut_kline continuous、不可复现；"
+                          "当前真源已统一为 l1_mkt.bar_60m，"
                           "故自洽基线才是后续回归的正确锚点。")
     _a=_ap.parse_args()
     LEGACY_ALIGN=_a.legacy_align
