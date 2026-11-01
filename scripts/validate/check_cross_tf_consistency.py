@@ -108,8 +108,11 @@ def _check_one(conn, *, hi_tbl: str, lo_tbl: str,
             SELECT {{agg}} AS {{k}}, count(*) AS n
             FROM l1_mkt.{lo_tbl} x
             WHERE x.symbol = b.symbol
-              AND x.bucket::date = b.bucket::date
-              AND to_char(x.bucket, 'HH24:MI') = ANY(m.parts)
+              -- 可索引写法：直接算出低周期目标时刻戳（日期 + 墙钟分），而非对 bucket 套函数，
+              -- 否则会对百万级低周期表做全表顺序扫描（每个高周期行扫一遍）。
+              AND x.bucket = ANY(
+                    ARRAY(SELECT b.bucket::date + p::time FROM unnest(m.parts) AS _(p))
+                  )
         ) a ON true
         WHERE b.bucket::time BETWEEN '09:00' AND '15:00'
           AND b.bucket >= (now() - make_interval(days => :days))
