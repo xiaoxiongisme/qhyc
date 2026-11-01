@@ -47,7 +47,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
@@ -74,6 +74,29 @@ def _symbols(settings, max_symbols: int):
     return syms
 
 
+def _data_range_for_src(session, symbols, src: str):
+    """按数据源取公共可用区间（修正 walkforward._data_range 只查 HourlyBar 的缺陷）。
+
+    - src=bar_60m → l1_mkt.bar_60m（独立表，bucket 字段）
+    - 其余 → hourly_bar WHERE src=:src
+    """
+    if src == "bar_60m":
+        row = session.execute(
+            text("SELECT min(bucket), max(bucket) FROM l1_mkt.bar_60m "
+                 "WHERE symbol=ANY(:syms)"),
+            {"syms": symbols},
+        ).first()
+    else:
+        row = session.execute(
+            text("SELECT min(trade_datetime), max(trade_datetime) FROM hourly_bar "
+                 "WHERE src=:s AND symbol=ANY(:syms)"),
+            {"s": src, "syms": symbols},
+        ).first()
+    if not row or row[0] is None:
+        return None, None
+    return row[0].date(), row[1].date()
+
+
 def _perse_symbol_from_oos(oos_trades: list[dict]) -> list[dict]:
     """从 oos_trades 聚合逐品种 OOS（pnl 为点单位）。IS 为整体口径，不拆分到品种。"""
     agg = defaultdict(lambda: {"n": 0, "oos_net": 0.0, "wins": 0})
@@ -97,11 +120,15 @@ def _perse_symbol_from_oos(oos_trades: list[dict]) -> list[dict]:
     return rows
 
 
-def _core(session, symbols, start, end, max_symbols) -> dict:
-    print("\n=== [core] 基线 WF 逐窗 + 逐品种分解 ===")
-    base = fusion_params_from_config()  # src=bar_60m
+def _core(session, symbols, start, end, max_symbols, src="bar_60m") -> dict:
+    print(f"\n=== [core] 基线 WF 逐窗 + 逐品种分解 (src={src}) ===")
+    rng = _data_range_for_src(session, symbols, src)
+    if rng[0] is None:
+        print(f"  [跳过] src={src} 无数据区间")
+        return {"mode": "core", "src": src, "error": "no_data_range"}
+    base = fusion_params_from_config(overrides={"src": src})
     res = run_walk_forward(session, symbols=symbols, base=base,
-                           params=WF, start=start, end=end, verbose=False)
+                           params=WF, start=rng[0], end=rng[1], verbose=False)
     windows = res.get("windows", [])
     oos_trades = res.get("oos_trades", [])
     per_sym = _perse_symbol_from_oos(oos_trades)
@@ -149,19 +176,29 @@ def _run_wf(session, symbols, override: dict, wf: WalkForwardParams,
 
 
 def _cmp_src(session, symbols, start, end, max_symbols) -> dict:
-    print("\n=== [cmp src] bar_60m vs hourly_bar(akshare) ===")
-    r60 = _run_wf(session, symbols, {}, WF, start, end)
-    rak = _run_wf(session, symbols, {"src": "hourly_bar"}, WF, start, end)
-    print(f"  bar_60m   : OOS净={r60['oos_net']:>+12.1f}  IS净={r60['is_net']:>+10.1f}  "
-          f"decay={r60['decay']}  窗={r60['n_windows']}")
-    print(f"  hourly_bar: OOS净={rak['oos_net']:>+12.1f}  IS净={rak['is_net']:>+10.1f}  "
-          f"decay={rak['decay']}  窗={rak['n_windows']}")
+    print("\n=== [cmp src] bar_60m vs akshare(HourlyBar) ===")
+    rng60 = _data_range_for_src(session, symbols, "bar_60m")
+    rng_ak = _data_range_for_src(session, symbols, "akshare")
+    r60 = (_run_wf(session, symbols, {"src": "bar_60m"}, WF, rng60[0], rng60[1])
+           if rng60[0] else None)
+    rak = (_run_wf(session, symbols, {"src": "akshare"}, WF, rng_ak[0], rng_ak[1])
+           if rng_ak[0] else None)
+    if r60 and rak:
+        print(f"  bar_60m : OOS净={r60['oos_net']:>+12.1f}  IS净={r60['is_net']:>+10.1f}  "
+              f"decay={r60['decay']}  窗={r60['n_windows']}  [{rng60[0]}~{rng60[1]}]")
+        print(f"  akshare : OOS净={rak['oos_net']:>+12.1f}  IS净={rak['is_net']:>+10.1f}  "
+              f"decay={rak['decay']}  窗={rak['n_windows']}  [{rng_ak[0]}~{rng_ak[1]}]")
+    else:
+        print(f"  bar_60m : {'OK' if r60 else '无数据'}")
+        print(f"  akshare : {'OK' if rak else '无数据'}")
     return {
         "mode": "cmp_src", "symbols": len(symbols),
-        "bar_60m": {"oos_net": r60["oos_net"], "is_net": r60["is_net"],
-                    "decay": r60["decay"], "n_windows": r60["n_windows"]},
-        "hourly_bar": {"oos_net": rak["oos_net"], "is_net": rak["is_net"],
-                       "decay": rak["decay"], "n_windows": rak["n_windows"]},
+        "bar_60m": ({"oos_net": r60["oos_net"], "is_net": r60["is_net"],
+                     "decay": r60["decay"], "n_windows": r60["n_windows"],
+                     "range": [str(rng60[0]), str(rng60[1])]} if r60 else None),
+        "akshare": ({"oos_net": rak["oos_net"], "is_net": rak["is_net"],
+                     "decay": rak["decay"], "n_windows": rak["n_windows"],
+                     "range": [str(rng_ak[0]), str(rng_ak[1])]} if rak else None),
     }
 
 
@@ -196,6 +233,8 @@ def main():
     ap.add_argument("--end", default=None, help="结束 YYYY-MM-DD")
     ap.add_argument("--max-symbols", type=int, default=0,
                     help="限制品种数（对照模式默认 25，控时）")
+    ap.add_argument("--src", default="bar_60m",
+                    help="core 模式数据源：bar_60m / akshare（复现 validate 用 akshare）")
     ap.add_argument("--out", default=None, help="结果 JSON 输出路径")
     args = ap.parse_args()
 
@@ -212,7 +251,7 @@ def main():
         elif args.cmp == "reest":
             result = _cmp_reest(session, symbols, start, end, max_sym)
         else:
-            result = _core(session, symbols, start, end, max_sym)
+            result = _core(session, symbols, start, end, max_sym, src=args.src)
 
     if args.out:
         Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2),
