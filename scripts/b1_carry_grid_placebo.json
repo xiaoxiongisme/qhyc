@@ -1,0 +1,153 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "lags": [
+   1,
+   2,
+   3
+  ],
+  "directions": [
+   1,
+   -1
+  ],
+  "value_kinds": [
+   "raw",
+   "z"
+  ],
+  "rebalances": [
+   5,
+   21
+  ],
+  "q": 0.2,
+  "n_intersection": 45,
+  "available_at_note": "探针证实 available_at==trade_date(lag0)，禁用其对齐，改用显式 shift(lag) 滞后防前视",
+  "direction_note": "dir+1=经济先验(贴水做多)为准入判定组；dir-1=方向核验诊断，不作准入依据(避免事后挑方向)",
+  "multiple_comparison_note": "24 格存在多重比较假阳性，主判定只看理论先验固定格",
+  "n_windows": 23
+ },
+ "grids": [],
+ "summary": {},
+ "placebo": {
+  "lag1/dir+1/raw/r5": {
+   "overall": {
+    "n": 388,
+    "win_rate": 54.38,
+    "mean_gross_R": 0.04656,
+    "mean_cost_R": 0.0141,
+    "mean_net_R": 0.03246,
+    "sum_net_R": 12.6,
+    "profit_factor": 1.148
+   },
+   "by_year": {
+    "2022": {
+     "n": 4,
+     "win_rate": 25.0,
+     "mean_gross_R": -0.20945,
+     "mean_cost_R": 0.00675,
+     "mean_net_R": -0.2162,
+     "sum_net_R": -0.9,
+     "profit_factor": 0.353
+    },
+    "2023": {
+     "n": 102,
+     "win_rate": 60.78,
+     "mean_gross_R": 0.09421,
+     "mean_cost_R": 0.01298,
+     "mean_net_R": 0.08124,
+     "sum_net_R": 8.3,
+     "profit_factor": 1.467
+    },
+    "2024": {
+     "n": 100,
+     "win_rate": 54.0,
+     "mean_gross_R": 0.06756,
+     "mean_cost_R": 0.01425,
+     "mean_net_R": 0.05331,
+     "sum_net_R": 5.3,
+     "profit_factor": 1.247
+    },
+    "2025": {
+     "n": 113,
+     "win_rate": 51.33,
+     "mean_gross_R": 0.00531,
+     "mean_cost_R": 0.01565,
+     "mean_net_R": -0.01034,
+     "sum_net_R": -1.2,
+     "profit_factor": 0.958
+    },
+    "2026": {
+     "n": 69,
+     "win_rate": 52.17,
+     "mean_gross_R": 0.02809,
+     "mean_cost_R": 0.01345,
+     "mean_net_R": 0.01464,
+     "sum_net_R": 1.0,
+     "profit_factor": 1.061
+    }
+   },
+   "rand_ge_actual_pct": 6.0,
+   "n_perm": 100
+  },
+  "lag2/dir-1/raw/r21": {
+   "overall": {
+    "n": 93,
+    "win_rate": 44.09,
+    "mean_gross_R": 0.11685,
+    "mean_cost_R": 0.01376,
+    "mean_net_R": 0.1031,
+    "sum_net_R": 9.6,
+    "profit_factor": 1.274
+   },
+   "by_year": {
+    "2022": {
+     "n": 3,
+     "win_rate": 100.0,
+     "mean_gross_R": 0.74151,
+     "mean_cost_R": 0.0064,
+     "mean_net_R": 0.73511,
+     "sum_net_R": 2.2,
+     "profit_factor": "inf"
+    },
+    "2023": {
+     "n": 16,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.38152,
+     "mean_cost_R": 0.01478,
+     "mean_net_R": 0.36674,
+     "sum_net_R": 5.9,
+     "profit_factor": 1.935
+    },
+    "2024": {
+     "n": 35,
+     "win_rate": 28.57,
+     "mean_gross_R": -0.16975,
+     "mean_cost_R": 0.01199,
+     "mean_net_R": -0.18174,
+     "sum_net_R": -6.4,
+     "profit_factor": 0.551
+    },
+    "2025": {
+     "n": 24,
+     "win_rate": 41.67,
+     "mean_gross_R": -0.13301,
+     "mean_cost_R": 0.01608,
+     "mean_net_R": -0.14909,
+     "sum_net_R": -3.6,
+     "profit_factor": 0.595
+    },
+    "2026": {
+     "n": 15,
+     "win_rate": 66.67,
+     "mean_gross_R": 0.77812,
+     "mean_cost_R": 0.01453,
+     "mean_net_R": 0.7636,
+     "sum_net_R": 11.5,
+     "profit_factor": 3.021
+    }
+   },
+   "rand_ge_actual_pct": 26.0,
+   "n_perm": 100
+  }
+ }
+}
