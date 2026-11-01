@@ -95,6 +95,8 @@ def build_main_daily(session, symbol: str, start, end):
         return None
     g = defaultdict(list)
     for b, o, h, l, c in rows:
+        if None in (o, h, l, c):
+            continue
         g[b.date()].append((b, float(o), float(h), float(l), float(c)))
     recs = []
     for d in sorted(g):
