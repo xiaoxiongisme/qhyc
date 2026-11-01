@@ -1,0 +1,230 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "n_pairs": 13,
+  "train_end": "2023-12-31",
+  "vol_thresholds_train": [
+   0.01362871713154125,
+   0.016356206796924174
+  ],
+  "trend_thresholds_train": [
+   0.041910625172375024,
+   0.05411729488844685
+  ],
+  "note": "分档阈值用训练期分位固定，无前视"
+ },
+ "baseline": {
+  "n": 195,
+  "win_rate": 59.49,
+  "mean_gross_R": 0.20464,
+  "mean_cost_R": 0.01457,
+  "mean_net_R": 0.19007,
+  "sum_net_R": 37.1,
+  "profit_factor": 1.734
+ },
+ "regime_groups": {
+  "vol": [
+   {
+    "bucket": "low",
+    "n": 127,
+    "win_rate": 61.42,
+    "mean_gross_R": 0.23143,
+    "mean_cost_R": 0.01568,
+    "mean_net_R": 0.21575,
+    "sum_net_R": 27.4,
+    "profit_factor": 1.878
+   },
+   {
+    "bucket": "mid",
+    "n": 45,
+    "win_rate": 57.78,
+    "mean_gross_R": 0.17675,
+    "mean_cost_R": 0.01472,
+    "mean_net_R": 0.16202,
+    "sum_net_R": 7.3,
+    "profit_factor": 1.583
+   },
+   {
+    "bucket": "high",
+    "n": 23,
+    "win_rate": 52.17,
+    "mean_gross_R": 0.11132,
+    "mean_cost_R": 0.00816,
+    "mean_net_R": 0.10316,
+    "sum_net_R": 2.4,
+    "profit_factor": 1.348
+   }
+  ],
+  "trend": [
+   {
+    "bucket": "low",
+    "n": 94,
+    "win_rate": 61.7,
+    "mean_gross_R": 0.19033,
+    "mean_cost_R": 0.01661,
+    "mean_net_R": 0.17372,
+    "sum_net_R": 16.3,
+    "profit_factor": 1.734
+   },
+   {
+    "bucket": "mid",
+    "n": 54,
+    "win_rate": 61.11,
+    "mean_gross_R": 0.2965,
+    "mean_cost_R": 0.01243,
+    "mean_net_R": 0.28407,
+    "sum_net_R": 15.3,
+    "profit_factor": 1.88
+   },
+   {
+    "bucket": "high",
+    "n": 47,
+    "win_rate": 53.19,
+    "mean_gross_R": 0.12774,
+    "mean_cost_R": 0.01294,
+    "mean_net_R": 0.1148,
+    "sum_net_R": 5.4,
+    "profit_factor": 1.497
+   }
+  ],
+  "direction": [
+   {
+    "bucket": "up",
+    "n": 100,
+    "win_rate": 61.0,
+    "mean_gross_R": 0.21692,
+    "mean_cost_R": 0.01461,
+    "mean_net_R": 0.20231,
+    "sum_net_R": 20.2,
+    "profit_factor": 1.82
+   },
+   {
+    "bucket": "down",
+    "n": 95,
+    "win_rate": 57.89,
+    "mean_gross_R": 0.19173,
+    "mean_cost_R": 0.01453,
+    "mean_net_R": 0.1772,
+    "sum_net_R": 16.8,
+    "profit_factor": 1.651
+   }
+  ]
+ },
+ "halfyear": [
+  {
+   "period": "2022H2",
+   "n": 4,
+   "win_rate": 50.0,
+   "mean_gross_R": 0.09274,
+   "mean_cost_R": 0.0123,
+   "mean_net_R": 0.08043,
+   "sum_net_R": 0.3,
+   "profit_factor": 1.322
+  },
+  {
+   "period": "2023H1",
+   "n": 27,
+   "win_rate": 59.26,
+   "mean_gross_R": 0.19596,
+   "mean_cost_R": 0.01458,
+   "mean_net_R": 0.18138,
+   "sum_net_R": 4.9,
+   "profit_factor": 1.563
+  },
+  {
+   "period": "2023H2",
+   "n": 23,
+   "win_rate": 65.22,
+   "mean_gross_R": 0.24315,
+   "mean_cost_R": 0.0116,
+   "mean_net_R": 0.23155,
+   "sum_net_R": 5.3,
+   "profit_factor": 1.983
+  },
+  {
+   "period": "2024H1",
+   "n": 36,
+   "win_rate": 58.33,
+   "mean_gross_R": 0.19734,
+   "mean_cost_R": 0.01573,
+   "mean_net_R": 0.18162,
+   "sum_net_R": 6.5,
+   "profit_factor": 1.687
+  },
+  {
+   "period": "2024H2",
+   "n": 18,
+   "win_rate": 50.0,
+   "mean_gross_R": 0.12537,
+   "mean_cost_R": 0.01524,
+   "mean_net_R": 0.11013,
+   "sum_net_R": 2.0,
+   "profit_factor": 1.654
+  },
+  {
+   "period": "2025H1",
+   "n": 21,
+   "win_rate": 61.9,
+   "mean_gross_R": 0.19889,
+   "mean_cost_R": 0.01361,
+   "mean_net_R": 0.18529,
+   "sum_net_R": 3.9,
+   "profit_factor": 2.448
+  },
+  {
+   "period": "2025H2",
+   "n": 38,
+   "win_rate": 65.79,
+   "mean_gross_R": 0.26672,
+   "mean_cost_R": 0.01817,
+   "mean_net_R": 0.24855,
+   "sum_net_R": 9.4,
+   "profit_factor": 1.889
+  },
+  {
+   "period": "2026H1",
+   "n": 22,
+   "win_rate": 50.0,
+   "mean_gross_R": 0.1453,
+   "mean_cost_R": 0.00973,
+   "mean_net_R": 0.13557,
+   "sum_net_R": 3.0,
+   "profit_factor": 1.391
+  },
+  {
+   "period": "2026H2",
+   "n": 6,
+   "win_rate": 66.67,
+   "mean_gross_R": 0.29694,
+   "mean_cost_R": 0.01681,
+   "mean_net_R": 0.28013,
+   "sum_net_R": 1.7,
+   "profit_factor": 1.876
+  }
+ ],
+ "predictive": {
+  "vol": {
+   "train_rho": -0.4087,
+   "oos_rho": 0.0246,
+   "same_sign_and_not_decayed": false,
+   "n_train": 1157,
+   "n_oos": 722
+  },
+  "trend": {
+   "train_rho": -0.2562,
+   "oos_rho": 0.1388,
+   "same_sign_and_not_decayed": false,
+   "n_train": 1147,
+   "n_oos": 722
+  }
+ },
+ "verdict": {
+  "n_regime_groups": 8,
+  "n_negative_groups": 0,
+  "n_pf_below_1_1_groups": 0,
+  "any_stable_predictive_regime": false,
+  "shows_regime_dependence": false,
+  "C_guardrail": "未触发：B3 未显出 regime 依赖，C 护栏维持待命"
+ }
+}
