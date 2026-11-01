@@ -23,13 +23,33 @@ for r in sess.execute(text(
     "WHERE table_name='main_contract_map'")).all():
     print(r)
 
-# 若 fut_kline 在某 schema，抽查 SN 类 symbol
-for sch in ('l0_raw', 'public', 'raw', 'l1_mkt', 'l2_adj', 'l3_ref', 'app_state', 'l2_adj'):
+# contract_daily（真实合约日线）schema + SN 样例
+print("=== contract_daily schema + SN 样例 ===")
+for sch in ('public', 'l0_raw'):
     try:
-        sample = sess.execute(text(
-            f"SELECT DISTINCT symbol FROM {sch}.fut_kline "
-            "WHERE symbol ILIKE '%sn%' LIMIT 5")).all()
-        if sample:
-            print(f"{sch}.fut_kline SN 样例:", [x[0] for x in sample])
+        cnt = sess.execute(text(f"SELECT count(*) FROM {sch}.contract_daily")).scalar()
+        print(f"{sch}.contract_daily count={cnt}")
+        samp = sess.execute(text(
+            f"SELECT DISTINCT symbol FROM {sch}.contract_daily "
+            "WHERE symbol ILIKE '%sn%' LIMIT 8")).all()
+        print(f"  SN 样例:", [x[0] for x in samp])
     except Exception as e:
+        print(f"{sch}.contract_daily err {e}")
+
+print("=== main_contract_map SN underlying 格式 ===")
+for r in sess.execute(text(
+    "SELECT DISTINCT underlying FROM public.main_contract_map "
+    "WHERE product='SN' LIMIT 8")).all():
+    print(r)
+
+print("=== contract_daily 列(SN2501 若存在) ===")
+for sch in ('public', 'l0_raw'):
+    try:
+        cols = sess.execute(text(
+            f"SELECT column_name FROM information_schema.columns "
+            f"WHERE table_schema='{sch}' AND table_name='contract_daily' "
+            "ORDER BY ordinal_position")).all()
+        print(f"{sch}.contract_daily cols:", [c[0] for c in cols])
+        break
+    except Exception:
         pass
