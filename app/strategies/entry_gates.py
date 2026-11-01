@@ -24,6 +24,10 @@ from sqlalchemy import text
 K45 = 45          # 摆动确认窗口（日线根数）
 SMA_N = 250       # 市场 regime 年线（交易日）
 MID_LO, MID_HI = 0.33, 0.50   # 中段进度带 [33%, 50%)
+# final_v3：仅豁免「逆 regime 空头停」，K45 中段停仍对这些品种生效。
+# 名单只用 2021-2023 选取，2024-2026 前向验证 +32.9R；当前仅用于影子观察。
+FINAL_V3_REGIME_SHORT_WHITELIST = frozenset({"LH888", "LC888", "B888", "AG888", "L888"})
+ENTRY_GATE_PROFILES = frozenset({"final_v2", "final_v3"})
 
 
 # ---------------------------------------------------------------
@@ -113,7 +117,8 @@ def market_regime_series(session, symbols: list[str]) -> pd.Series | None:
 # 对小时线构造 (long_ok, short_ok) 门控数组
 # ---------------------------------------------------------------
 def build_entry_gates(hourly_dts: np.ndarray, st45: pd.DataFrame | None,
-                      reg_series: pd.Series | None) -> tuple[np.ndarray, np.ndarray]:
+                      reg_series: pd.Series | None, *,
+                      regime_short_enabled: bool = True) -> tuple[np.ndarray, np.ndarray]:
     """逐位复刻 validate_entry_gate.py 的 gate 构造（小时 bar → 前一日日线状态）。
 
     hourly_dts: 小时线 dt 列（tz-aware 或 naive 均可，取 .date() 前先统一）；
@@ -133,7 +138,7 @@ def build_entry_gates(hourly_dts: np.ndarray, st45: pd.DataFrame | None,
     mid = np.isfinite(progs) & (progs >= MID_LO) & (progs < MID_HI)
     gate_l = (~mid).astype(np.int8)
     gate_s = gate_l.copy()
-    if reg_series is not None and len(reg_series):
+    if regime_short_enabled and reg_series is not None and len(reg_series):
         reg_dates = reg_series.index.values
         for i in range(n):
             if mid[i]:
@@ -205,11 +210,21 @@ def get_market_regime(session, symbols: list[str]) -> pd.Series | None:
 
 
 def gates_for_symbol(session, symbol: str, hourly_df: pd.DataFrame,
-                     symbols: list[str] | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """对外主入口：给某品种的小时线构造 C_final_v2 门控数组。"""
+                     symbols: list[str] | None = None,
+                     profile: str = "final_v2") -> tuple[np.ndarray, np.ndarray]:
+    """对外主入口：给某品种的小时线构造入场门控数组。
+
+    final_v2：K45 中段停 + 全品种逆 regime 空头停；
+    final_v3：同 v2，但五个前向验证品种豁免逆 regime 空头停（K45 不豁免）。
+    """
+    if profile not in ENTRY_GATE_PROFILES:
+        raise ValueError(f"未知 entry_gate_profile: {profile}")
     if symbols is None:
         from app.core.config import get_settings
         symbols = [sp.symbol for sp in get_settings().main_contracts]
     st45 = get_k45_state(session, symbol)
     reg = get_market_regime(session, symbols)
-    return build_entry_gates(hourly_df["dt"].to_numpy(), st45, reg)
+    regime_short_enabled = not (
+        profile == "final_v3" and symbol in FINAL_V3_REGIME_SHORT_WHITELIST)
+    return build_entry_gates(hourly_df["dt"].to_numpy(), st45, reg,
+                             regime_short_enabled=regime_short_enabled)
