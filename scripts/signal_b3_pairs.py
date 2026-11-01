@@ -34,10 +34,15 @@ PAIRS = [
 
 
 def compute_targets(closes: pd.DataFrame, opens=None, window: int = 60,
-                    entry_z: float = 2.0, exit_z: float = 0.5) -> pd.DataFrame:
+                    entry_z: float = 2.0, exit_z: float = 0.5,
+                    pairs=None) -> pd.DataFrame:
+    """pairs=None → 默认 PAIRS（基础 8 对，保持与 §9 准入结论逐位可比）；
+    传入自定义互斥对列表用于扩配对敏感性验证（见 signal_b3_grid.py）。"""
+    if pairs is None:
+        pairs = PAIRS
     targets = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
     active = 0
-    for va, vb in PAIRS:
+    for va, vb in pairs:
         sa, sb = va + "888", vb + "888"
         if sa not in closes.columns or sb not in closes.columns:
             continue

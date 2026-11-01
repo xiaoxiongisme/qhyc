@@ -1,0 +1,1228 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "windows": [
+   30,
+   60,
+   120
+  ],
+  "entry_zs": [
+   1.5,
+   2.0,
+   2.5
+  ],
+  "exit_z": 0.5,
+  "base_pairs": [
+   [
+    "RB",
+    "HC"
+   ],
+   [
+    "M",
+    "RM"
+   ],
+   [
+    "Y",
+    "P"
+   ],
+   [
+    "TA",
+    "MA"
+   ],
+   [
+    "FG",
+    "SA"
+   ],
+   [
+    "J",
+    "JM"
+   ],
+   [
+    "PP",
+    "L"
+   ],
+   [
+    "AU",
+    "AG"
+   ]
+  ],
+  "ext_pairs": [
+   [
+    "FU",
+    "SC"
+   ],
+   [
+    "SF",
+    "SM"
+   ],
+   [
+    "C",
+    "CS"
+   ],
+   [
+    "CU",
+    "ZN"
+   ],
+   [
+    "NI",
+    "SS"
+   ]
+  ],
+  "ext_pair_selection": "训练期(<=2023)日收益相关>=0.60 + 经济同板块 + 与base品种互斥，未窥探2024-2026 OOS 表现",
+  "n_windows": 23
+ },
+ "grids": [
+  {
+   "grid": "base:30:1.5",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 30,
+   "entry_z": 1.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 346,
+    "win_rate": 55.2,
+    "mean_gross_R": 0.03896,
+    "mean_cost_R": 0.01334,
+    "mean_net_R": 0.02562,
+    "sum_net_R": 8.9,
+    "profit_factor": 1.102
+   },
+   "by_year": {
+    "2022": {
+     "n": 4,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.05637,
+     "mean_cost_R": 0.01073,
+     "mean_net_R": 0.04563,
+     "sum_net_R": 0.2,
+     "profit_factor": 1.354
+    },
+    "2023": {
+     "n": 88,
+     "win_rate": 55.68,
+     "mean_gross_R": 0.05215,
+     "mean_cost_R": 0.01094,
+     "mean_net_R": 0.04121,
+     "sum_net_R": 3.6,
+     "profit_factor": 1.149
+    },
+    "2024": {
+     "n": 94,
+     "win_rate": 53.19,
+     "mean_gross_R": 0.02346,
+     "mean_cost_R": 0.01319,
+     "mean_net_R": 0.01027,
+     "sum_net_R": 1.0,
+     "profit_factor": 1.043
+    },
+    "2025": {
+     "n": 108,
+     "win_rate": 55.56,
+     "mean_gross_R": 0.03153,
+     "mean_cost_R": 0.01539,
+     "mean_net_R": 0.01613,
+     "sum_net_R": 1.7,
+     "profit_factor": 1.067
+    },
+    "2026": {
+     "n": 52,
+     "win_rate": 57.69,
+     "mean_gross_R": 0.05873,
+     "mean_cost_R": 0.0136,
+     "mean_net_R": 0.04513,
+     "sum_net_R": 2.3,
+     "profit_factor": 1.17
+    }
+   }
+  },
+  {
+   "grid": "base:30:2.0",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 30,
+   "entry_z": 2.0,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 224,
+    "win_rate": 51.79,
+    "mean_gross_R": 0.04689,
+    "mean_cost_R": 0.01364,
+    "mean_net_R": 0.03325,
+    "sum_net_R": 7.4,
+    "profit_factor": 1.12
+   },
+   "by_year": {
+    "2022": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.03531,
+     "mean_cost_R": 0.01469,
+     "mean_net_R": 0.02063,
+     "sum_net_R": 0.0,
+     "profit_factor": 1.101
+    },
+    "2023": {
+     "n": 56,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.04111,
+     "mean_cost_R": 0.01037,
+     "mean_net_R": 0.03073,
+     "sum_net_R": 1.7,
+     "profit_factor": 1.093
+    },
+    "2024": {
+     "n": 60,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.0316,
+     "mean_cost_R": 0.01244,
+     "mean_net_R": 0.01916,
+     "sum_net_R": 1.1,
+     "profit_factor": 1.084
+    },
+    "2025": {
+     "n": 64,
+     "win_rate": 51.56,
+     "mean_gross_R": 0.01453,
+     "mean_cost_R": 0.01584,
+     "mean_net_R": -0.00131,
+     "sum_net_R": -0.1,
+     "profit_factor": 0.996
+    },
+    "2026": {
+     "n": 42,
+     "win_rate": 57.14,
+     "mean_gross_R": 0.1263,
+     "mean_cost_R": 0.0163,
+     "mean_net_R": 0.11,
+     "sum_net_R": 4.6,
+     "profit_factor": 1.482
+    }
+   }
+  },
+  {
+   "grid": "base:30:2.5",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 30,
+   "entry_z": 2.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 144,
+    "win_rate": 52.78,
+    "mean_gross_R": 0.06367,
+    "mean_cost_R": 0.01284,
+    "mean_net_R": 0.05083,
+    "sum_net_R": 7.3,
+    "profit_factor": 1.191
+   },
+   "by_year": {
+    "2022": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.13132,
+     "mean_cost_R": 0.01456,
+     "mean_net_R": 0.11676,
+     "sum_net_R": 0.2,
+     "profit_factor": 1.497
+    },
+    "2023": {
+     "n": 36,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.08019,
+     "mean_cost_R": 0.01092,
+     "mean_net_R": 0.06927,
+     "sum_net_R": 2.5,
+     "profit_factor": 1.242
+    },
+    "2024": {
+     "n": 38,
+     "win_rate": 52.63,
+     "mean_gross_R": 0.03698,
+     "mean_cost_R": 0.012,
+     "mean_net_R": 0.02498,
+     "sum_net_R": 0.9,
+     "profit_factor": 1.123
+    },
+    "2025": {
+     "n": 42,
+     "win_rate": 52.38,
+     "mean_gross_R": 0.01679,
+     "mean_cost_R": 0.01362,
+     "mean_net_R": 0.00316,
+     "sum_net_R": 0.1,
+     "profit_factor": 1.01
+    },
+    "2026": {
+     "n": 26,
+     "win_rate": 57.69,
+     "mean_gross_R": 0.15035,
+     "mean_cost_R": 0.01535,
+     "mean_net_R": 0.135,
+     "sum_net_R": 3.5,
+     "profit_factor": 1.542
+    }
+   }
+  },
+  {
+   "grid": "base:60:1.5",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 60,
+   "entry_z": 1.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 176,
+    "win_rate": 61.93,
+    "mean_gross_R": 0.15231,
+    "mean_cost_R": 0.0141,
+    "mean_net_R": 0.13821,
+    "sum_net_R": 24.3,
+    "profit_factor": 1.588
+   },
+   "by_year": {
+    "2022": {
+     "n": 6,
+     "win_rate": 66.67,
+     "mean_gross_R": 0.2377,
+     "mean_cost_R": 0.01216,
+     "mean_net_R": 0.22555,
+     "sum_net_R": 1.4,
+     "profit_factor": 4.909
+    },
+    "2023": {
+     "n": 54,
+     "win_rate": 62.96,
+     "mean_gross_R": 0.16213,
+     "mean_cost_R": 0.01113,
+     "mean_net_R": 0.151,
+     "sum_net_R": 8.2,
+     "profit_factor": 1.605
+    },
+    "2024": {
+     "n": 48,
+     "win_rate": 60.42,
+     "mean_gross_R": 0.11655,
+     "mean_cost_R": 0.01328,
+     "mean_net_R": 0.10327,
+     "sum_net_R": 5.0,
+     "profit_factor": 1.415
+    },
+    "2025": {
+     "n": 40,
+     "win_rate": 60.0,
+     "mean_gross_R": 0.19414,
+     "mean_cost_R": 0.01649,
+     "mean_net_R": 0.17765,
+     "sum_net_R": 7.1,
+     "profit_factor": 2.323
+    },
+    "2026": {
+     "n": 28,
+     "win_rate": 64.29,
+     "mean_gross_R": 0.11659,
+     "mean_cost_R": 0.0182,
+     "mean_net_R": 0.09839,
+     "sum_net_R": 2.8,
+     "profit_factor": 1.269
+    }
+   }
+  },
+  {
+   "grid": "base:60:2.0",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 60,
+   "entry_z": 2.0,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 100,
+    "win_rate": 59.0,
+    "mean_gross_R": 0.20459,
+    "mean_cost_R": 0.01396,
+    "mean_net_R": 0.19063,
+    "sum_net_R": 19.1,
+    "profit_factor": 1.861
+   },
+   "by_year": {
+    "2022": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.24011,
+     "mean_cost_R": 0.01456,
+     "mean_net_R": 0.22556,
+     "sum_net_R": 0.5,
+     "profit_factor": 3.114
+    },
+    "2023": {
+     "n": 26,
+     "win_rate": 61.54,
+     "mean_gross_R": 0.22098,
+     "mean_cost_R": 0.0101,
+     "mean_net_R": 0.21088,
+     "sum_net_R": 5.5,
+     "profit_factor": 1.944
+    },
+    "2024": {
+     "n": 30,
+     "win_rate": 56.67,
+     "mean_gross_R": 0.16128,
+     "mean_cost_R": 0.01548,
+     "mean_net_R": 0.14581,
+     "sum_net_R": 4.4,
+     "profit_factor": 1.698
+    },
+    "2025": {
+     "n": 28,
+     "win_rate": 64.29,
+     "mean_gross_R": 0.23023,
+     "mean_cost_R": 0.01587,
+     "mean_net_R": 0.21437,
+     "sum_net_R": 6.0,
+     "profit_factor": 2.628
+    },
+    "2026": {
+     "n": 14,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.21062,
+     "mean_cost_R": 0.01402,
+     "mean_net_R": 0.1966,
+     "sum_net_R": 2.8,
+     "profit_factor": 1.446
+    }
+   }
+  },
+  {
+   "grid": "base:60:2.5",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 60,
+   "entry_z": 2.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 60,
+    "win_rate": 60.0,
+    "mean_gross_R": 0.22048,
+    "mean_cost_R": 0.01291,
+    "mean_net_R": 0.20757,
+    "sum_net_R": 12.5,
+    "profit_factor": 2.181
+   },
+   "by_year": {
+    "2022": {
+     "n": 2,
+     "win_rate": 100.0,
+     "mean_gross_R": 0.48784,
+     "mean_cost_R": 0.01446,
+     "mean_net_R": 0.47338,
+     "sum_net_R": 0.9,
+     "profit_factor": "inf"
+    },
+    "2023": {
+     "n": 12,
+     "win_rate": 58.33,
+     "mean_gross_R": 0.28965,
+     "mean_cost_R": 0.00962,
+     "mean_net_R": 0.28003,
+     "sum_net_R": 3.4,
+     "profit_factor": 3.441
+    },
+    "2024": {
+     "n": 18,
+     "win_rate": 55.56,
+     "mean_gross_R": 0.16457,
+     "mean_cost_R": 0.01382,
+     "mean_net_R": 0.15075,
+     "sum_net_R": 2.7,
+     "profit_factor": 1.935
+    },
+    "2025": {
+     "n": 20,
+     "win_rate": 65.0,
+     "mean_gross_R": 0.21579,
+     "mean_cost_R": 0.01367,
+     "mean_net_R": 0.20212,
+     "sum_net_R": 4.0,
+     "profit_factor": 2.51
+    },
+    "2026": {
+     "n": 8,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.1874,
+     "mean_cost_R": 0.01352,
+     "mean_net_R": 0.17388,
+     "sum_net_R": 1.4,
+     "profit_factor": 1.387
+    }
+   }
+  },
+  {
+   "grid": "base:120:1.5",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 120,
+   "entry_z": 1.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 64,
+    "win_rate": 64.06,
+    "mean_gross_R": 0.28553,
+    "mean_cost_R": 0.01362,
+    "mean_net_R": 0.27192,
+    "sum_net_R": 17.4,
+    "profit_factor": 2.229
+   },
+   "by_year": {
+    "2023": {
+     "n": 24,
+     "win_rate": 66.67,
+     "mean_gross_R": 0.3091,
+     "mean_cost_R": 0.00833,
+     "mean_net_R": 0.30077,
+     "sum_net_R": 7.2,
+     "profit_factor": 2.846
+    },
+    "2024": {
+     "n": 24,
+     "win_rate": 62.5,
+     "mean_gross_R": 0.2362,
+     "mean_cost_R": 0.01486,
+     "mean_net_R": 0.22135,
+     "sum_net_R": 5.3,
+     "profit_factor": 1.755
+    },
+    "2025": {
+     "n": 10,
+     "win_rate": 70.0,
+     "mean_gross_R": 0.4213,
+     "mean_cost_R": 0.02059,
+     "mean_net_R": 0.4007,
+     "sum_net_R": 4.0,
+     "profit_factor": 7.942
+    },
+    "2026": {
+     "n": 6,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.16233,
+     "mean_cost_R": 0.01817,
+     "mean_net_R": 0.14416,
+     "sum_net_R": 0.9,
+     "profit_factor": 1.327
+    }
+   }
+  },
+  {
+   "grid": "base:120:2.0",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 120,
+   "entry_z": 2.0,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 30,
+    "win_rate": 70.0,
+    "mean_gross_R": 0.38649,
+    "mean_cost_R": 0.01154,
+    "mean_net_R": 0.37494,
+    "sum_net_R": 11.2,
+    "profit_factor": 5.504
+   },
+   "by_year": {
+    "2022": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.36665,
+     "mean_cost_R": 0.00379,
+     "mean_net_R": 0.36286,
+     "sum_net_R": 0.7,
+     "profit_factor": 22.427
+    },
+    "2023": {
+     "n": 8,
+     "win_rate": 75.0,
+     "mean_gross_R": 0.42248,
+     "mean_cost_R": 0.00776,
+     "mean_net_R": 0.41471,
+     "sum_net_R": 3.3,
+     "profit_factor": 7.569
+    },
+    "2024": {
+     "n": 12,
+     "win_rate": 75.0,
+     "mean_gross_R": 0.34854,
+     "mean_cost_R": 0.01472,
+     "mean_net_R": 0.33382,
+     "sum_net_R": 4.0,
+     "profit_factor": 4.014
+    },
+    "2025": {
+     "n": 4,
+     "win_rate": 75.0,
+     "mean_gross_R": 0.46489,
+     "mean_cost_R": 0.01611,
+     "mean_net_R": 0.44878,
+     "sum_net_R": 1.8,
+     "profit_factor": 26.117
+    },
+    "2026": {
+     "n": 4,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.35986,
+     "mean_cost_R": 0.00887,
+     "mean_net_R": 0.35099,
+     "sum_net_R": 1.4,
+     "profit_factor": 3.515
+    }
+   }
+  },
+  {
+   "grid": "base:120:2.5",
+   "pair_set": "base",
+   "n_pairs": 8,
+   "window": 120,
+   "entry_z": 2.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 18,
+    "win_rate": 66.67,
+    "mean_gross_R": 0.50211,
+    "mean_cost_R": 0.01177,
+    "mean_net_R": 0.49034,
+    "sum_net_R": 8.8,
+    "profit_factor": 4.415
+   },
+   "by_year": {
+    "2023": {
+     "n": 6,
+     "win_rate": 83.33,
+     "mean_gross_R": 0.60932,
+     "mean_cost_R": 0.0065,
+     "mean_net_R": 0.60282,
+     "sum_net_R": 3.6,
+     "profit_factor": 57.098
+    },
+    "2024": {
+     "n": 8,
+     "win_rate": 62.5,
+     "mean_gross_R": 0.42615,
+     "mean_cost_R": 0.01545,
+     "mean_net_R": 0.4107,
+     "sum_net_R": 3.3,
+     "profit_factor": 2.54
+    },
+    "2025": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.51828,
+     "mean_cost_R": 0.01537,
+     "mean_net_R": 0.50291,
+     "sum_net_R": 1.0,
+     "profit_factor": 19.873
+    },
+    "2026": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.46817,
+     "mean_cost_R": 0.00928,
+     "mean_net_R": 0.45889,
+     "sum_net_R": 0.9,
+     "profit_factor": 3.749
+    }
+   }
+  },
+  {
+   "grid": "ext:30:1.5",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 30,
+   "entry_z": 1.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 600,
+    "win_rate": 55.33,
+    "mean_gross_R": 0.06013,
+    "mean_cost_R": 0.01429,
+    "mean_net_R": 0.04584,
+    "sum_net_R": 27.5,
+    "profit_factor": 1.189
+   },
+   "by_year": {
+    "2022": {
+     "n": 6,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.01094,
+     "mean_cost_R": 0.01051,
+     "mean_net_R": 0.00044,
+     "sum_net_R": 0.0,
+     "profit_factor": 1.002
+    },
+    "2023": {
+     "n": 153,
+     "win_rate": 56.86,
+     "mean_gross_R": 0.06882,
+     "mean_cost_R": 0.01193,
+     "mean_net_R": 0.05689,
+     "sum_net_R": 8.7,
+     "profit_factor": 1.236
+    },
+    "2024": {
+     "n": 180,
+     "win_rate": 53.33,
+     "mean_gross_R": 0.04874,
+     "mean_cost_R": 0.01454,
+     "mean_net_R": 0.0342,
+     "sum_net_R": 6.2,
+     "profit_factor": 1.152
+    },
+    "2025": {
+     "n": 181,
+     "win_rate": 56.35,
+     "mean_gross_R": 0.06707,
+     "mean_cost_R": 0.0171,
+     "mean_net_R": 0.04996,
+     "sum_net_R": 9.0,
+     "profit_factor": 1.207
+    },
+    "2026": {
+     "n": 80,
+     "win_rate": 55.0,
+     "mean_gross_R": 0.05713,
+     "mean_cost_R": 0.01216,
+     "mean_net_R": 0.04497,
+     "sum_net_R": 3.6,
+     "profit_factor": 1.155
+    }
+   }
+  },
+  {
+   "grid": "ext:30:2.0",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 30,
+   "entry_z": 2.0,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 380,
+    "win_rate": 54.21,
+    "mean_gross_R": 0.0767,
+    "mean_cost_R": 0.01473,
+    "mean_net_R": 0.06198,
+    "sum_net_R": 23.6,
+    "profit_factor": 1.227
+   },
+   "by_year": {
+    "2022": {
+     "n": 4,
+     "win_rate": 50.0,
+     "mean_gross_R": -0.0223,
+     "mean_cost_R": 0.01237,
+     "mean_net_R": -0.03466,
+     "sum_net_R": -0.1,
+     "profit_factor": 0.87
+    },
+    "2023": {
+     "n": 104,
+     "win_rate": 55.77,
+     "mean_gross_R": 0.07372,
+     "mean_cost_R": 0.01204,
+     "mean_net_R": 0.06169,
+     "sum_net_R": 6.4,
+     "profit_factor": 1.225
+    },
+    "2024": {
+     "n": 104,
+     "win_rate": 51.92,
+     "mean_gross_R": 0.06744,
+     "mean_cost_R": 0.0143,
+     "mean_net_R": 0.05314,
+     "sum_net_R": 5.5,
+     "profit_factor": 1.231
+    },
+    "2025": {
+     "n": 111,
+     "win_rate": 53.15,
+     "mean_gross_R": 0.06997,
+     "mean_cost_R": 0.0177,
+     "mean_net_R": 0.05227,
+     "sum_net_R": 5.8,
+     "profit_factor": 1.17
+    },
+    "2026": {
+     "n": 57,
+     "win_rate": 57.89,
+     "mean_gross_R": 0.1191,
+     "mean_cost_R": 0.01478,
+     "mean_net_R": 0.10432,
+     "sum_net_R": 5.9,
+     "profit_factor": 1.373
+    }
+   }
+  },
+  {
+   "grid": "ext:30:2.5",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 30,
+   "entry_z": 2.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 250,
+    "win_rate": 56.8,
+    "mean_gross_R": 0.10338,
+    "mean_cost_R": 0.01433,
+    "mean_net_R": 0.08904,
+    "sum_net_R": 22.3,
+    "profit_factor": 1.343
+   },
+   "by_year": {
+    "2022": {
+     "n": 4,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.11061,
+     "mean_cost_R": 0.01196,
+     "mean_net_R": 0.09865,
+     "sum_net_R": 0.4,
+     "profit_factor": 1.431
+    },
+    "2023": {
+     "n": 66,
+     "win_rate": 59.09,
+     "mean_gross_R": 0.1374,
+     "mean_cost_R": 0.01258,
+     "mean_net_R": 0.12482,
+     "sum_net_R": 8.2,
+     "profit_factor": 1.547
+    },
+    "2024": {
+     "n": 60,
+     "win_rate": 53.33,
+     "mean_gross_R": 0.0463,
+     "mean_cost_R": 0.01356,
+     "mean_net_R": 0.03275,
+     "sum_net_R": 2.0,
+     "profit_factor": 1.153
+    },
+    "2025": {
+     "n": 80,
+     "win_rate": 57.5,
+     "mean_gross_R": 0.11507,
+     "mean_cost_R": 0.01685,
+     "mean_net_R": 0.09822,
+     "sum_net_R": 7.9,
+     "profit_factor": 1.314
+    },
+    "2026": {
+     "n": 40,
+     "win_rate": 57.5,
+     "mean_gross_R": 0.10873,
+     "mean_cost_R": 0.01359,
+     "mean_net_R": 0.09514,
+     "sum_net_R": 3.8,
+     "profit_factor": 1.345
+    }
+   }
+  },
+  {
+   "grid": "ext:60:1.5",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 60,
+   "entry_z": 1.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 299,
+    "win_rate": 60.87,
+    "mean_gross_R": 0.15446,
+    "mean_cost_R": 0.01466,
+    "mean_net_R": 0.1398,
+    "sum_net_R": 41.8,
+    "profit_factor": 1.603
+   },
+   "by_year": {
+    "2022": {
+     "n": 8,
+     "win_rate": 62.5,
+     "mean_gross_R": 0.16462,
+     "mean_cost_R": 0.01163,
+     "mean_net_R": 0.15299,
+     "sum_net_R": 1.2,
+     "profit_factor": 2.082
+    },
+    "2023": {
+     "n": 79,
+     "win_rate": 63.29,
+     "mean_gross_R": 0.16957,
+     "mean_cost_R": 0.01243,
+     "mean_net_R": 0.15713,
+     "sum_net_R": 12.4,
+     "profit_factor": 1.67
+    },
+    "2024": {
+     "n": 88,
+     "win_rate": 57.95,
+     "mean_gross_R": 0.12273,
+     "mean_cost_R": 0.01441,
+     "mean_net_R": 0.10832,
+     "sum_net_R": 9.5,
+     "profit_factor": 1.429
+    },
+    "2025": {
+     "n": 82,
+     "win_rate": 59.76,
+     "mean_gross_R": 0.19417,
+     "mean_cost_R": 0.0173,
+     "mean_net_R": 0.17687,
+     "sum_net_R": 14.5,
+     "profit_factor": 2.019
+    },
+    "2026": {
+     "n": 42,
+     "win_rate": 64.29,
+     "mean_gross_R": 0.1131,
+     "mean_cost_R": 0.0148,
+     "mean_net_R": 0.0983,
+     "sum_net_R": 4.1,
+     "profit_factor": 1.312
+    }
+   }
+  },
+  {
+   "grid": "ext:60:2.0",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 60,
+   "entry_z": 2.0,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 195,
+    "win_rate": 59.49,
+    "mean_gross_R": 0.20464,
+    "mean_cost_R": 0.01457,
+    "mean_net_R": 0.19007,
+    "sum_net_R": 37.1,
+    "profit_factor": 1.734
+   },
+   "by_year": {
+    "2022": {
+     "n": 4,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.09274,
+     "mean_cost_R": 0.0123,
+     "mean_net_R": 0.08043,
+     "sum_net_R": 0.3,
+     "profit_factor": 1.322
+    },
+    "2023": {
+     "n": 50,
+     "win_rate": 62.0,
+     "mean_gross_R": 0.21767,
+     "mean_cost_R": 0.01321,
+     "mean_net_R": 0.20446,
+     "sum_net_R": 10.2,
+     "profit_factor": 1.725
+    },
+    "2024": {
+     "n": 54,
+     "win_rate": 55.56,
+     "mean_gross_R": 0.17335,
+     "mean_cost_R": 0.01556,
+     "mean_net_R": 0.15779,
+     "sum_net_R": 8.5,
+     "profit_factor": 1.679
+    },
+    "2025": {
+     "n": 59,
+     "win_rate": 64.41,
+     "mean_gross_R": 0.24258,
+     "mean_cost_R": 0.01654,
+     "mean_net_R": 0.22603,
+     "sum_net_R": 13.3,
+     "profit_factor": 2.001
+    },
+    "2026": {
+     "n": 28,
+     "win_rate": 53.57,
+     "mean_gross_R": 0.17779,
+     "mean_cost_R": 0.01124,
+     "mean_net_R": 0.16655,
+     "sum_net_R": 4.7,
+     "profit_factor": 1.488
+    }
+   }
+  },
+  {
+   "grid": "ext:60:2.5",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 60,
+   "entry_z": 2.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 115,
+    "win_rate": 62.61,
+    "mean_gross_R": 0.28568,
+    "mean_cost_R": 0.01368,
+    "mean_net_R": 0.272,
+    "sum_net_R": 31.3,
+    "profit_factor": 2.263
+   },
+   "by_year": {
+    "2022": {
+     "n": 4,
+     "win_rate": 75.0,
+     "mean_gross_R": 0.30248,
+     "mean_cost_R": 0.01191,
+     "mean_net_R": 0.29058,
+     "sum_net_R": 1.2,
+     "profit_factor": 3.067
+    },
+    "2023": {
+     "n": 21,
+     "win_rate": 61.9,
+     "mean_gross_R": 0.21994,
+     "mean_cost_R": 0.01139,
+     "mean_net_R": 0.20855,
+     "sum_net_R": 4.4,
+     "profit_factor": 2.182
+    },
+    "2024": {
+     "n": 30,
+     "win_rate": 60.0,
+     "mean_gross_R": 0.21249,
+     "mean_cost_R": 0.01544,
+     "mean_net_R": 0.19705,
+     "sum_net_R": 5.9,
+     "profit_factor": 2.001
+    },
+    "2025": {
+     "n": 41,
+     "win_rate": 65.85,
+     "mean_gross_R": 0.36613,
+     "mean_cost_R": 0.01566,
+     "mean_net_R": 0.35047,
+     "sum_net_R": 14.4,
+     "profit_factor": 2.542
+    },
+    "2026": {
+     "n": 19,
+     "win_rate": 57.89,
+     "mean_gross_R": 0.29675,
+     "mean_cost_R": 0.00954,
+     "mean_net_R": 0.2872,
+     "sum_net_R": 5.5,
+     "profit_factor": 2.034
+    }
+   }
+  },
+  {
+   "grid": "ext:120:1.5",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 120,
+   "entry_z": 1.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 143,
+    "win_rate": 62.24,
+    "mean_gross_R": 0.27632,
+    "mean_cost_R": 0.01484,
+    "mean_net_R": 0.26147,
+    "sum_net_R": 37.4,
+    "profit_factor": 2.091
+   },
+   "by_year": {
+    "2022": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.19203,
+     "mean_cost_R": 0.00963,
+     "mean_net_R": 0.1824,
+     "sum_net_R": 0.4,
+     "profit_factor": 2.316
+    },
+    "2023": {
+     "n": 31,
+     "win_rate": 67.74,
+     "mean_gross_R": 0.35957,
+     "mean_cost_R": 0.0098,
+     "mean_net_R": 0.34977,
+     "sum_net_R": 10.8,
+     "profit_factor": 3.601
+    },
+    "2024": {
+     "n": 44,
+     "win_rate": 63.64,
+     "mean_gross_R": 0.23783,
+     "mean_cost_R": 0.01553,
+     "mean_net_R": 0.2223,
+     "sum_net_R": 9.8,
+     "profit_factor": 1.71
+    },
+    "2025": {
+     "n": 41,
+     "win_rate": 65.85,
+     "mean_gross_R": 0.35085,
+     "mean_cost_R": 0.02024,
+     "mean_net_R": 0.33061,
+     "sum_net_R": 13.6,
+     "profit_factor": 2.838
+    },
+    "2026": {
+     "n": 25,
+     "win_rate": 48.0,
+     "mean_gross_R": 0.12533,
+     "mean_cost_R": 0.01147,
+     "mean_net_R": 0.11386,
+     "sum_net_R": 2.8,
+     "profit_factor": 1.328
+    }
+   }
+  },
+  {
+   "grid": "ext:120:2.0",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 120,
+   "entry_z": 2.0,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 63,
+    "win_rate": 61.9,
+    "mean_gross_R": 0.34089,
+    "mean_cost_R": 0.013,
+    "mean_net_R": 0.32789,
+    "sum_net_R": 20.7,
+    "profit_factor": 2.331
+   },
+   "by_year": {
+    "2022": {
+     "n": 2,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.36665,
+     "mean_cost_R": 0.00379,
+     "mean_net_R": 0.36286,
+     "sum_net_R": 0.7,
+     "profit_factor": 22.427
+    },
+    "2023": {
+     "n": 8,
+     "win_rate": 75.0,
+     "mean_gross_R": 0.42248,
+     "mean_cost_R": 0.00776,
+     "mean_net_R": 0.41471,
+     "sum_net_R": 3.3,
+     "profit_factor": 7.569
+    },
+    "2024": {
+     "n": 28,
+     "win_rate": 67.86,
+     "mean_gross_R": 0.33734,
+     "mean_cost_R": 0.01519,
+     "mean_net_R": 0.32215,
+     "sum_net_R": 9.0,
+     "profit_factor": 2.275
+    },
+    "2025": {
+     "n": 10,
+     "win_rate": 60.0,
+     "mean_gross_R": 0.55004,
+     "mean_cost_R": 0.01991,
+     "mean_net_R": 0.53013,
+     "sum_net_R": 5.3,
+     "profit_factor": 2.306
+    },
+    "2026": {
+     "n": 15,
+     "win_rate": 46.67,
+     "mean_gross_R": 0.16115,
+     "mean_cost_R": 0.00834,
+     "mean_net_R": 0.15281,
+     "sum_net_R": 2.3,
+     "profit_factor": 1.597
+    }
+   }
+  },
+  {
+   "grid": "ext:120:2.5",
+   "pair_set": "ext",
+   "n_pairs": 13,
+   "window": 120,
+   "entry_z": 2.5,
+   "exit_z": 0.5,
+   "overall": {
+    "n": 35,
+    "win_rate": 60.0,
+    "mean_gross_R": 0.49322,
+    "mean_cost_R": 0.01243,
+    "mean_net_R": 0.48079,
+    "sum_net_R": 16.8,
+    "profit_factor": 2.701
+   },
+   "by_year": {
+    "2023": {
+     "n": 6,
+     "win_rate": 83.33,
+     "mean_gross_R": 0.60932,
+     "mean_cost_R": 0.0065,
+     "mean_net_R": 0.60282,
+     "sum_net_R": 3.6,
+     "profit_factor": 57.098
+    },
+    "2024": {
+     "n": 14,
+     "win_rate": 57.14,
+     "mean_gross_R": 0.46885,
+     "mean_cost_R": 0.01505,
+     "mean_net_R": 0.45381,
+     "sum_net_R": 6.4,
+     "profit_factor": 2.306
+    },
+    "2025": {
+     "n": 6,
+     "win_rate": 50.0,
+     "mean_gross_R": 0.69415,
+     "mean_cost_R": 0.01783,
+     "mean_net_R": 0.67632,
+     "sum_net_R": 4.1,
+     "profit_factor": 2.182
+    },
+    "2026": {
+     "n": 9,
+     "win_rate": 55.56,
+     "mean_gross_R": 0.31976,
+     "mean_cost_R": 0.00872,
+     "mean_net_R": 0.31104,
+     "sum_net_R": 2.8,
+     "profit_factor": 2.832
+    }
+   }
+  }
+ ],
+ "summary": {
+  "base": {
+   "n_grids": 9,
+   "netR_pos_grids": 9,
+   "pf_ge_1_1_grids": 9,
+   "netR_min": 0.02562,
+   "netR_median": 0.19063,
+   "netR_max": 0.49034,
+   "n_trades_min": 18,
+   "n_trades_max": 346,
+   "year_2024_26_all_pos_grids": 8
+  },
+  "ext": {
+   "n_grids": 9,
+   "netR_pos_grids": 9,
+   "pf_ge_1_1_grids": 9,
+   "netR_min": 0.04584,
+   "netR_median": 0.19007,
+   "netR_max": 0.48079,
+   "n_trades_min": 35,
+   "n_trades_max": 600,
+   "year_2024_26_all_pos_grids": 9
+  },
+  "ext_vs_base_sample_check": "⚠ EXT 与 BASE 样本量未拉开：先查 pairs 参数是否静默退化，别怀疑市场"
+ },
+ "placebo": {}
+}
