@@ -98,9 +98,17 @@ def _data_range_for_src(session, symbols, src: str):
 
 
 def _perse_symbol_from_oos(oos_trades: list[dict]) -> list[dict]:
-    """从 oos_trades 聚合逐品种 OOS（pnl 为点单位）。IS 为整体口径，不拆分到品种。"""
+    """从 oos_trades 聚合逐品种 OOS（pnl 为点单位）。IS 为整体口径，不拆分到品种。
+
+    ⚠ 必须排除「未平仓(open=True)」成交：run_walk_forward 在每个测试窗末尾会把
+    仍在手的头寸按末价强平并标记 open=True，这些是**未实现**盈亏。若计入逐品种 OOS
+    归因，会让「持有 11 年未平仓」的品种（如 SN/NI 在 60m）被误算成巨额亏损，
+    制造「亏损高度集中」的假象（与聚合 oos_net（_net 已排除 open）口径不一致）。
+    """
     agg = defaultdict(lambda: {"n": 0, "oos_net": 0.0, "wins": 0})
     for t in oos_trades:
+        if t.get("open"):
+            continue
         sym = t.get("symbol")
         if not sym:
             continue
@@ -204,24 +212,34 @@ def _cmp_src(session, symbols, start, end, max_symbols) -> dict:
 
 def _cmp_reest(session, symbols, start, end, max_symbols) -> dict:
     print("\n=== [cmp reest] reestimate=False vs True ===")
+    # ⚠ 必须显式传区间：run_walk_forward 内部 _data_range 只认 HourlyBar，不认
+    # bar_60m（生产 src），start/end=None 时会取到 None → 返回全 0（假崩塌/假持平）。
+    # 用脚本自带 _data_range_for_src 取 bar_60m 真实区间（与 _core 同口径）。
+    rng = _data_range_for_src(session, symbols, "bar_60m")
+    if rng[0] is None:
+        print("  [跳过] bar_60m 无数据区间")
+        return {"mode": "cmp_reest", "error": "no_bar60_range"}
     wf_false = WF
     wf_true = WalkForwardParams(
         train_days=720, test_days=60, step_days=60, warmup_days=150,
         reestimate=True, reestimate_grid=[{}, {"sl_atr": 1.5}, {"sl_atr": 2.5}],
         min_oos_trades=5, decay_pass=0.50,
     )
-    r_false = _run_wf(session, symbols, {}, wf_false, start, end)
-    r_true = _run_wf(session, symbols, {}, wf_true, start, end)
+    r_false = _run_wf(session, symbols, {}, wf_false, rng[0], rng[1])
+    r_true = _run_wf(session, symbols, {}, wf_true, rng[0], rng[1])
     print(f"  reest=False: OOS净={r_false['oos_net']:>+12.1f}  IS净={r_false['is_net']:>+10.1f}  "
-          f"decay={r_false['decay']}")
+          f"decay={r_false['decay']}  窗={r_false.get('n_windows')}  [{rng[0]}~{rng[1]}]")
     print(f"  reest=True : OOS净={r_true['oos_net']:>+12.1f}  IS净={r_true['is_net']:>+10.1f}  "
-          f"decay={r_true['decay']}")
+          f"decay={r_true['decay']}  窗={r_true.get('n_windows')}")
     return {
         "mode": "cmp_reest", "symbols": len(symbols),
+        "range": [str(rng[0]), str(rng[1])],
         "reest_false": {"oos_net": r_false["oos_net"], "is_net": r_false["is_net"],
-                        "decay": r_false["decay"]},
+                        "decay": r_false["decay"], "n_windows": r_false.get("n_windows"),
+                        "n_oos_trades": r_false.get("n_oos_trades")},
         "reest_true": {"oos_net": r_true["oos_net"], "is_net": r_true["is_net"],
-                       "decay": r_true["decay"]},
+                       "decay": r_true["decay"], "n_windows": r_true.get("n_windows"),
+                       "n_oos_trades": r_true.get("n_oos_trades")},
     }
 
 
