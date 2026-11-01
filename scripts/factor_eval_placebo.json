@@ -1,0 +1,225 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "factors": [
+   "cross_rank_z",
+   "member_ls_z",
+   "member_net_z",
+   "member_trend_z",
+   "vol_concentration_z",
+   "warehouse_receipt_z"
+  ],
+  "weights": {
+   "cross_rank_z": 0.04,
+   "member_ls_z": 0.06,
+   "member_net_z": 0.08,
+   "member_trend_z": 0.05,
+   "vol_concentration_z": -0.05,
+   "warehouse_receipt_z": -0.06
+  },
+  "sign_from_weight": true,
+  "lags": [
+   1,
+   2,
+   3
+  ],
+  "q": 0.2,
+  "rebalance_n": 5,
+  "value_kind": "z",
+  "both_directions": false,
+  "available_at_note": "探针证实 available_at==trade_date(lag0)，禁用其对齐，改用显式 shift(lag) 滞后防前视（沿用 §14 P0）",
+  "direction_note": "方向取平台 default_weight 符号，外部先验、非事后挑选",
+  "n_windows": 23
+ },
+ "grids": [],
+ "summary": {},
+ "placebo": {
+  "cross_rank_z:1:z:anti": {
+   "overall": {
+    "n": 722,
+    "win_rate": 57.76,
+    "mean_gross_R": 0.08628,
+    "mean_cost_R": 0.01393,
+    "mean_net_R": 0.07235,
+    "sum_net_R": 52.2,
+    "profit_factor": 1.377
+   },
+   "by_year": {
+    "2022": {
+     "n": 5,
+     "win_rate": 60.0,
+     "mean_gross_R": 0.36415,
+     "mean_cost_R": 0.01126,
+     "mean_net_R": 0.35288,
+     "sum_net_R": 1.8,
+     "profit_factor": 11.73
+    },
+    "2023": {
+     "n": 188,
+     "win_rate": 61.17,
+     "mean_gross_R": 0.07409,
+     "mean_cost_R": 0.01253,
+     "mean_net_R": 0.06157,
+     "sum_net_R": 11.6,
+     "profit_factor": 1.312
+    },
+    "2024": {
+     "n": 184,
+     "win_rate": 57.07,
+     "mean_gross_R": 0.08525,
+     "mean_cost_R": 0.01364,
+     "mean_net_R": 0.07161,
+     "sum_net_R": 13.2,
+     "profit_factor": 1.347
+    },
+    "2025": {
+     "n": 198,
+     "win_rate": 57.58,
+     "mean_gross_R": 0.1156,
+     "mean_cost_R": 0.01663,
+     "mean_net_R": 0.09896,
+     "sum_net_R": 19.6,
+     "profit_factor": 1.613
+    },
+    "2026": {
+     "n": 147,
+     "win_rate": 54.42,
+     "mean_gross_R": 0.05421,
+     "mean_cost_R": 0.01254,
+     "mean_net_R": 0.04167,
+     "sum_net_R": 6.1,
+     "profit_factor": 1.195
+    }
+   },
+   "mode": "anti",
+   "sign": -1,
+   "rand_ge_actual_pct": 0.0,
+   "n_perm": 100
+  },
+  "member_ls_z:2:z:anti": {
+   "overall": {
+    "n": 345,
+    "win_rate": 55.07,
+    "mean_gross_R": 0.09026,
+    "mean_cost_R": 0.01347,
+    "mean_net_R": 0.07679,
+    "sum_net_R": 26.5,
+    "profit_factor": 1.352
+   },
+   "by_year": {
+    "2022": {
+     "n": 4,
+     "win_rate": 100.0,
+     "mean_gross_R": 0.3189,
+     "mean_cost_R": 0.00732,
+     "mean_net_R": 0.31158,
+     "sum_net_R": 1.2,
+     "profit_factor": "inf"
+    },
+    "2023": {
+     "n": 92,
+     "win_rate": 59.78,
+     "mean_gross_R": 0.22979,
+     "mean_cost_R": 0.01422,
+     "mean_net_R": 0.21557,
+     "sum_net_R": 19.8,
+     "profit_factor": 2.302
+    },
+    "2024": {
+     "n": 86,
+     "win_rate": 45.35,
+     "mean_gross_R": -0.05058,
+     "mean_cost_R": 0.01291,
+     "mean_net_R": -0.06349,
+     "sum_net_R": -5.5,
+     "profit_factor": 0.795
+    },
+    "2025": {
+     "n": 80,
+     "win_rate": 66.25,
+     "mean_gross_R": 0.13293,
+     "mean_cost_R": 0.01457,
+     "mean_net_R": 0.11836,
+     "sum_net_R": 9.5,
+     "profit_factor": 1.841
+    },
+    "2026": {
+     "n": 83,
+     "win_rate": 46.99,
+     "mean_gross_R": 0.02937,
+     "mean_cost_R": 0.01246,
+     "mean_net_R": 0.01691,
+     "sum_net_R": 1.4,
+     "profit_factor": 1.063
+    }
+   },
+   "mode": "anti",
+   "sign": -1,
+   "rand_ge_actual_pct": 4.0,
+   "n_perm": 100
+  },
+  "member_net_z:1:z:anti": {
+   "overall": {
+    "n": 272,
+    "win_rate": 63.24,
+    "mean_gross_R": 0.18468,
+    "mean_cost_R": 0.01367,
+    "mean_net_R": 0.17101,
+    "sum_net_R": 46.5,
+    "profit_factor": 1.849
+   },
+   "by_year": {
+    "2022": {
+     "n": 5,
+     "win_rate": 80.0,
+     "mean_gross_R": 0.04537,
+     "mean_cost_R": 0.01116,
+     "mean_net_R": 0.03422,
+     "sum_net_R": 0.2,
+     "profit_factor": 1.373
+    },
+    "2023": {
+     "n": 77,
+     "win_rate": 71.43,
+     "mean_gross_R": 0.25585,
+     "mean_cost_R": 0.01235,
+     "mean_net_R": 0.2435,
+     "sum_net_R": 18.7,
+     "profit_factor": 2.972
+    },
+    "2024": {
+     "n": 62,
+     "win_rate": 56.45,
+     "mean_gross_R": 0.29659,
+     "mean_cost_R": 0.01492,
+     "mean_net_R": 0.28167,
+     "sum_net_R": 17.5,
+     "profit_factor": 2.176
+    },
+    "2025": {
+     "n": 72,
+     "win_rate": 61.11,
+     "mean_gross_R": 0.15605,
+     "mean_cost_R": 0.01577,
+     "mean_net_R": 0.14028,
+     "sum_net_R": 10.1,
+     "profit_factor": 1.804
+    },
+    "2026": {
+     "n": 56,
+     "win_rate": 60.71,
+     "mean_gross_R": 0.01217,
+     "mean_cost_R": 0.01165,
+     "mean_net_R": 0.00053,
+     "sum_net_R": 0.0,
+     "profit_factor": 1.002
+    }
+   },
+   "mode": "anti",
+   "sign": -1,
+   "rand_ge_actual_pct": 0.0,
+   "n_perm": 100
+  }
+ }
+}
