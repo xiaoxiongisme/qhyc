@@ -305,17 +305,21 @@ def main():
                                          date(2015, 1, 1), end)
                 main_full[sym] = mf
 
+        # 仅保留实际产出交易的品种（EX_MAP 缺省或数据缺失的品种会被跳过）
+        valid_syms = [s for s in syms if s in trades_by_sym
+                      and trades_by_sym[s].get("main_c") is not None]
+
         # walk-forward 双口径（同窗 start~end）
-        rc_wf = _wf_for_mode(trades_by_sym, syms, wf, start, end, "rc")
-        main_wf = _wf_for_mode(trades_by_sym, syms, wf, start, end, "main_c")
+        rc_wf = _wf_for_mode(trades_by_sym, valid_syms, wf, start, end, "rc")
+        main_wf = _wf_for_mode(trades_by_sym, valid_syms, wf, start, end, "main_c")
         main_full_wf = None
         if args.full_history:
             mfull = {sym: {"main_full": mf} for sym, mf in main_full.items()}
-            main_full_wf = _wf_for_mode(mfull, syms, wf, date(2015, 1, 1), end, "main_full")
+            main_full_wf = _wf_for_mode(mfull, valid_syms, wf, date(2015, 1, 1), end, "main_full")
 
         # 全量单跑汇总
-        all_rc = [t for sym in syms for t in trades_by_sym[sym]["rc"]]
-        all_main_c = [t for sym in syms for t in trades_by_sym[sym]["main_c"]]
+        all_rc = [t for sym in valid_syms for t in trades_by_sym[sym].get("rc", [])]
+        all_main_c = [t for sym in valid_syms for t in trades_by_sym[sym].get("main_c", [])]
         full_rc = _summarize(all_rc, is_cut=date(2024, 1, 1))
         full_main_c = _summarize(all_main_c, is_cut=date(2024, 1, 1))
 
