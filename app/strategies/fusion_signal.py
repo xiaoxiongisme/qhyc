@@ -252,6 +252,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
     ph: list[int] = []
     pl: list[int] = []
     state = 0
+    entry_leg = None         # 入场支路标签（研究用，2026-11-01）：pullback/breakout/both
     entry_px = 0.0           # 首次买入价（= 加权均价在 lots==1 时相同）
     avg_px = 0.0             # 加权均价（加码后上移）
     lots = 1.0
@@ -435,6 +436,8 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
             if (s_tl or s_bkl) and _entry_gate >= _gate_threshold \
                     and (gate_l is None or gate_l[i]):
                 state = 1
+                entry_leg = ("pullback" if s_tl and not s_bkl
+                             else "breakout" if s_bkl and not s_tl else "both")
                 entry_px = c[i]
                 avg_px = c[i]
                 lots = 1.0
@@ -446,6 +449,8 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
             elif (s_ts or s_bks) and _entry_gate >= _gate_threshold \
                     and (gate_s is None or gate_s[i]):
                 state = 2
+                entry_leg = ("pullback" if s_ts and not s_bks
+                             else "breakout" if s_bks and not s_ts else "both")
                 entry_px = c[i]
                 avg_px = c[i]
                 lots = 1.0
@@ -477,6 +482,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
         lv = _levels(state, avg_px, e_atr, peak, trough, be_done, p)
         yield {
             "state": state,
+            "entry_leg": entry_leg if state != 0 else None,
             "entry_i": entry_i if state != 0 else -1,
             "entry_px": avg_px if state != 0 else None,
             "first_px": entry_px if state != 0 else None,
