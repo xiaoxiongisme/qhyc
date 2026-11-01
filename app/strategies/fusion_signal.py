@@ -489,7 +489,8 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
         }
 
 
-def fusion_state_detail(o, h, l, c, htf_dir, p, symbol=None, trade_date=None) -> dict:
+def fusion_state_detail(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
+                        entry_gates=None) -> dict:
     """融合策略主循环，返回最后一根已收盘K之后的持仓**明细**（单一真源）。
 
     返回 dict：
@@ -513,7 +514,8 @@ def fusion_state_detail(o, h, l, c, htf_dir, p, symbol=None, trade_date=None) ->
         "entry_atr": None, "peak": None, "trough": None, "be_done": False,
         "be_trigger": None, "init_stop": None, "trail_stop": None, "cur_stop": None,
     }
-    for d in walk_fusion_states(o, h, l, c, htf_dir, p, symbol=symbol, trade_date=trade_date):
+    for d in walk_fusion_states(o, h, l, c, htf_dir, p, symbol=symbol, trade_date=trade_date,
+                                entry_gates=entry_gates):
         last = d
     return last
 
@@ -865,10 +867,21 @@ def evaluate_symbol(session, symbol: str, p) -> dict:
     l = df["low"].to_numpy(float)
     c = df["close"].to_numpy(float)
     htf_dir = htf_direction(c, p.ema_k)   # 单一真源（见 htf_direction；无前视）
+    # 入场门控 C_final_v2（entry_gate_profile，默认 off 零影响）：
+    # 构造失败（如日线数据缺失）时降级为不启用并告警，绝不让门控异常阻断信号评估。
+    gates = None
+    if getattr(p, "entry_gate_profile", "off") == "final_v2":
+        try:
+            from app.strategies.entry_gates import gates_for_symbol
+            gates = gates_for_symbol(session, symbol, df)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[fusion] entry_gate 构造失败 {symbol}: {e}，本轮不启用门控")
+            gates = None
     det = fusion_state_detail(
         o, h, l, c, htf_dir, p,
         symbol=symbol,
         trade_date=pd.Timestamp(df["dt"].iloc[-1]).date(),
+        entry_gates=gates,
     )
     st = det["state"]
     latest_dt = df["dt"].iloc[-1]

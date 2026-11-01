@@ -347,6 +347,13 @@ class FusionConfig(BaseModel):
     add_thr_atr: float = 1.0        # V3.4 新增：加码浮盈门槛（×ATR，随手数线性抬升）
     add_guard_atr: float = 0.0      # V3.2 结构保本放宽量；V3.4 停用（保留字段兼容旧配置）
     min_bars: int = 160             # 最少历史根数（需 >= ema_k + 缓冲）
+    # ---- 入场门控 C_final_v2（2026-11-01 双验证通过，影子观察中）----
+    # "off"（默认）= 不启用，与历史行为逐位一致；"final_v2" = 启用两条结构层门控：
+    #   ① K45 中段停（日线摆动段进度 33-50% 禁新开仓，双侧）；
+    #   ② 逆 regime 空头停（50 主连等权指数 > SMA250 前一日值时停发空头）。
+    # 实现在 app/strategies/entry_gates.py；只拦新开仓，离场/保本/吊灯/加码不受影响。
+    # 注意与 factor_bias 的 entry_gate 标量乘子是两个不同概念（那是当日偏置）。
+    entry_gate_profile: str = "off"
     stale_minutes: int = 90         # 「信号新鲜度」上限（分钟）：最新K超过此值则抑制状态变化信号
     display_max_age_min: int = 14400  # 「播报展示」上限（分钟，默认10天）
     #   为什么两个阈值：夜盘收盘到次日早盘天然有 585 分钟空档，周末/长假更是几十小时。
