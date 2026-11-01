@@ -889,6 +889,20 @@ def _fusion_scan_job() -> None:
                 _eff_stale, _why = _effective_stale_minutes(now, f.stale_minutes)
                 fresh = (age_min is not None) and (-10.0 <= age_min <= _eff_stale)
 
+                # ---------- 部署侧隐患修复（2026-11-01）：持仓超 max_hold_days 强制平仓+再入场 ----------
+                # 在线引擎每轮只重算最近 max_bars(800) 根；若行情持续同向，eng 在滚动窗口内恒为同向、
+                # db 与 eng 长期一致 → entry_at 冻结、永不重估 → 强趋势下"持11年不平仓"。超时则强制
+                # eng=FLAT，复用下方 db!=eng 分支生成平仓信号；下一轮若趋势仍在则正常再入场。
+                # 仅在数据新鲜时执行，避免用过期/异常 K 误平。
+                if (f.max_hold_days > 0 and db != "FLAT" and old is not None
+                        and old.entry_at is not None and fresh):
+                    _held_days = (now_utc - old.entry_at).total_seconds() / 86400.0
+                    if _held_days > f.max_hold_days:
+                        logger.info(
+                            f"[fusion] {sym} 持仓 {_held_days:.0f}天 > {f.max_hold_days}天上限，"
+                            f"强制平仓+再入场（防持11年不平仓）")
+                        eng = "FLAT"
+
                 if db != eng:
                     # ---------- 状态变化 → 信号 ----------
                     if not fresh:
