@@ -216,6 +216,12 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
     adx_arr = adx14(h, l, c, int(getattr(p, "adx_n", 14)))
     adx_min = float(getattr(p, "adx_min", 0.0) or 0.0)
     use_sbull = bool(getattr(p, "use_sbull", True))
+    # ---- 部署侧隐患修复（2026-11-01）：持仓上限（根）----
+    # 吊灯止损用「固定入场 ATR」，强趋势下 trailing stop 跟随 running peak/trough 永不触发
+    # → 单笔可持 11 年不平仓。max_hold_bars>0 时，持仓超过该根数强制平仓（再入场由冷却后
+    # 正常信号决定）。默认 0=关闭（回测研究基线不变）；FusionConfig 无此字段→线上 walk_fusion_states
+    # 走 getattr 兜底 0，不受此影响，线上改用 scheduler 的 max_hold_days（时间口径）保障。
+    max_hold_bars = int(getattr(p, "max_hold_bars", 0) or 0)
 
     # ---- V3.2 可选项（默认关闭 = 与 V3.1 逐位一致）----
     # P0 斐波那契·汇流：回踩极值须落在斐波位 ± tol×ATR 内（只作用于回踩支路，不动 EMA20 体系）。
@@ -310,6 +316,8 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
 
         # ---------------- 离场（多空镜像，close-only） ----------------
         # 成本基准用加权均价 avg_px（未加码时 == entry_px，与 V3.1 逐位一致）。
+        # 持仓超限（max_hold_bars>0）与吊灯/初始止损同为离场触发，复用同一退出复位逻辑。
+        force_exit = max_hold_bars > 0 and state != 0 and (i - entry_i) > max_hold_bars
         if state == 1:
             if c[i] > peak:
                 peak = c[i]
@@ -322,7 +330,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
                 be_done = True
             if be_done and entry_px > st:
                 st = entry_px
-            if c[i] <= st:
+            if c[i] <= st or force_exit:
                 state = 0
                 cooldown = p.cooldown_bars
                 be_done = False
@@ -340,7 +348,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
                 be_done = True
             if be_done and entry_px < st:
                 st = entry_px
-            if c[i] >= st:
+            if c[i] >= st or force_exit:
                 state = 0
                 cooldown = p.cooldown_bars
                 be_done = False

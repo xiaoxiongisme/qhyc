@@ -389,6 +389,13 @@ class FusionConfig(BaseModel):
     # 历史 CSV 回测为起点标签口径，与 akshare 时间戳不同，不可混入实时引擎；本字段强制
     # 引擎只读取单一 src，杜绝"同一段行情数两遍"。
     hourly_src: str = "akshare"
+    # ---- 部署侧隐患修复（2026-11-01）：持仓上限（天）----
+    # 在线引擎每轮只重算最近 max_bars(800) 根；若行情持续同向，eng 在滚动窗口内恒为同向、
+    # db 与 eng 长期一致 → entry_at 冻结、永不重估 → 强趋势下可"持11年不平仓"。
+    # max_hold_days>0 时，持仓超过该天数（按 FusionPosition.entry_at 计）强制平仓+再入场，
+    # 把"长期持仓"也纳入强制重估。0=关闭。默认 365 天（≈1 个合约年）：正常趋势由吊灯止损
+    # 在数日~数周内离场，365 天阈值实际只捕获"吊灯永不触发"的病态持仓，不干扰正常交易。
+    max_hold_days: int = 365
 
 
 class RankPositionConfig(BaseModel):

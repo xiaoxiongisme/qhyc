@@ -77,6 +77,9 @@ class FusionBacktestParams:
     seed: int = 0                    # 多 seed 鲁棒性：扰动止损用
     seed_jitter: float = 0.0         # sl/trail 相对扰动幅度（0=关）；多 seed 时各 seed 取不同值
     lookback_bars: int = 0           # 0=全历史 walk-forward；>0 则仅用最后 N 根
+    max_hold_bars: int = 0           # 持仓上限（根）：>0 时单笔持仓超过该根数强制平仓+再入场；
+                                     # 0=关闭（默认关闭，避免改变研究基线；实盘/全历史模拟可开启
+                                     # 以杜绝"强趋势下吊灯止损永不触发→持11年不平仓"的部署隐患）
 
 
 def fusion_params_from_config(overrides: dict | None = None) -> FusionBacktestParams:
