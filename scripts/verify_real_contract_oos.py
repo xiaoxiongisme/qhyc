@@ -1,27 +1,31 @@
-"""V2 崩塌排查 · 决定性验证：真实合约回测路径。
+"""V2 崩塌排查 · 决定性验证：真实合约日线 vs 主连(复权)日线。
 
 核心思想（隔离单一变量「数据源 / 主连复权」）：
-  用**同一套**已验证的信号层(walk_fusion_states)与组合层(_simulate_trades)，
-  在同一套 walk-forward 窗口/参数下，只替换「输入价格序列」：
-    · 对照（主连）：fusion_backtest._read_hourly —— 主连 SN888，经 roll_segment.cum_offset 复权
-    · 实验（真实合约）：l0_raw.fut_kline 原始价拼接连续序列（绕过 cum_offset 复权 bug）
+  用**同一套**信号层(_generate_states)与组合层(_simulate_trades)，在同一套
+  walk-forward 窗口/参数下，只替换「输入日线价格序列」：
+    · 对照 A（主连·复权）：l1_mkt.bar_60m(SN888) 重采样日线
+        —— 生产回测真用的序列，携带 l2_adj.roll_segment.cum_offset 累计复权；
+           probe 证实它在每次换月处相对真实主力合约价出现数千~上万点的台阶跳变。
+    · 实验 B（真实合约·未复权）：public.contract_daily 经 public.main_contract_map
+        逐日取「当日主力真实合约」的日线 OHLC 拼接（绕过 cum_offset）。
 
-  若实验口径下 SN/NI 不再巨亏、整体 OOS/decay 显著改善 → 实锤「主连复权缺陷（设定问题）」；
-  若两口径同崩 → 指向策略本身（真失效）。
+  若 B 口径下 SN/NI 不再巨亏、整体 OOS/decay 显著改善 → 实锤「主连复权缺陷（设定问题）」；
+  若 A/B 同崩 → 指向策略本身（真失效）。
 
-实现：逐品种预计算全历史 trades（仅留存 trades，不囤 K，控内存），再按窗口切分 IS/OOS，
-      复刻 walkforward._windows / _net 语义。主连(akshare)口径若复现 core 的
-      IS≈-680k / OOS≈-479k，即证明本框架与 core 一致、rc 对比可信。
+  重要约束（probe 实测）：contract_daily 仅覆盖 2021+（SN 起 2021-01-18），
+  故本实验窗口限定 2021-01-01 ~ end；A 额外跑全历史[2015,end]用于框架校验
+  （验证「复权日线 A 能复现生产崩塌」）。
 
 用法：
-  python3 scripts/verify_real_contract_oos.py [--symbols SN,NI] [--src akshare]
-          [--out /tmp/rc_verify.json] [--start 2015-01-01] [--end 2026-12-31]
+  python3 scripts/verify_real_contract_oos.py --symbols SN888,NI888
+          [--src bar_60m] [--out /tmp/rc.json] [--start 2021-01-01] [--end 2026-12-31]
+          [--focus SN,NI] [--full-history]  (默认开；关掉可省一半 A 计算)
 """
 from __future__ import annotations
 
 import argparse
 import json
-import sys
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import numpy as np
@@ -35,10 +39,9 @@ from app.backtest.fusion_backtest import (
     fusion_params_from_config,
     _generate_states,
     _simulate_trades,
-    _read_hourly,
 )
 
-# —— 交易所映射（源自分析侧 live_stage_a2_bars，SN/NI→SHFE 正确）——
+# —— 交易所映射 ——
 EX_MAP = {
     "CF": "CZCE", "FG": "CZCE", "SR": "CZCE", "SA": "CZCE", "TA": "CZCE", "MA": "CZCE",
     "RM": "CZCE", "OI": "CZCE", "AP": "CZCE", "UR": "CZCE", "PF": "CZCE", "PK": "CZCE",
@@ -56,88 +59,64 @@ EX_MAP = {
 }
 
 
-def _to_naive(ts):
-    ts = pd.to_datetime(ts)
-    if ts.dt.tz is not None:
-        ts = ts.dt.tz_convert(None)
-    return ts
+def _to_ts(d):
+    if isinstance(d, pd.Timestamp):
+        return d
+    if isinstance(d, datetime):
+        return pd.Timestamp(d)
+    if isinstance(d, date):
+        return pd.Timestamp(d)
+    return pd.Timestamp(str(d))
 
 
 # --------------------------------------------------------------------------
-# 真实合约连续序列构造（绕过 roll_segment.cum_offset 复权，用原始价拼接）
+# A：主连复权日线（bar_60m 重采样）
 # --------------------------------------------------------------------------
-def _fk_symbol_candidates(underlying: str, ex: str) -> list[str]:
-    """underlying 可能带/不带交易所前缀、大小写不一 → 构造 fut_kline 候选 symbol。"""
-    u = underlying.strip()
-    cands: list[str] = []
-    if "." in u:
-        cands.append(u)
-        base = u.split(".", 1)[1]
-    else:
-        base = u
-    cands.append(f"{ex}.{base.lower()}")
-    cands.append(f"{ex}.{base}")
-    return cands
+def build_main_daily(session, symbol: str, start, end):
+    rows = session.execute(text(
+        "SELECT bucket, open, high, low, close FROM l1_mkt.bar_60m "
+        "WHERE symbol=:s AND bucket>=:a AND bucket<=:b ORDER BY bucket"
+    ), {"s": symbol, "a": pd.Timestamp(start), "b": pd.Timestamp(end)}).all()
+    if not rows:
+        return None
+    g = defaultdict(list)
+    for b, o, h, l, c in rows:
+        g[b.date()].append((b, float(o), float(h), float(l), float(c)))
+    recs = []
+    for d in sorted(g):
+        bars = sorted(g[d], key=lambda x: x[0])
+        o0 = bars[0][1]
+        h0 = max(x[2] for x in bars)
+        l0 = min(x[3] for x in bars)
+        c0 = bars[-1][4]
+        recs.append((_to_ts(d), o0, h0, l0, c0))
+    return pd.DataFrame(recs, columns=["dt", "open", "high", "low", "close"])
 
 
-def build_continuous(session, product: str, ex: str, start: date | None, end: date | None):
-    """用 l3_ref.main_contract_map + l0_raw.fut_kline 拼接「主力合约连续序列」。
-
-    返回 df[dt,open,high,low,close]（dt 已转 naive），或 None（无数据）。
-    """
+# --------------------------------------------------------------------------
+# B：真实合约日线（contract_daily 经 main_contract_map 逐日取主力真实合约）
+# --------------------------------------------------------------------------
+def build_continuous(session, product: str, ex: str, start, end):
     mcm = session.execute(text(
-        "SELECT trade_date, underlying FROM l3_ref.main_contract_map "
+        "SELECT trade_date, underlying FROM public.main_contract_map "
         "WHERE product=:p ORDER BY trade_date"
     ), {"p": product}).all()
     if not mcm:
         return None
-    underlyings = sorted({u for _, u in mcm}, key=lambda x: str(x))
-    # 解析每个 underlying 实际存在的 fut_kline symbol
-    fk_by_u: dict[str, str] = {}
-    for u in underlyings:
-        for c in _fk_symbol_candidates(u, ex):
-            n = session.execute(text(
-                "SELECT count(*) FROM l0_raw.fut_kline "
-                "WHERE freq='hourly' AND symbol=:s"), {"s": c}).scalar()
-            if n and n > 30:
-                fk_by_u[u] = c
-                break
-    if not fk_by_u:
-        return None
-    # 批量取所有合约 K（一次查询）
-    fks = list(fk_by_u.values())
+    date2u = {d: u for d, u in mcm}
     rows = session.execute(text(
-        "SELECT symbol, trade_datetime, open, high, low, close FROM l0_raw.fut_kline "
-        "WHERE freq='hourly' AND symbol=ANY(:s) ORDER BY symbol, trade_datetime"
-    ), {"s": fks}).all()
-    by_fk: dict[str, pd.DataFrame] = {}
-    for s_, ts, o, h, l, c in rows:
-        if None in (o, h, l, c):
-            continue
-        by_fk.setdefault(s_, []).append((ts, float(o), float(h), float(l), float(c)))
-    # 按主力段切分拼接
-    frames = []
-    for i, (d, u) in enumerate(mcm):
-        e = mcm[i + 1][0] if i + 1 < len(mcm) else None
-        fk = fk_by_u.get(u)
-        if not fk or fk not in by_fk:
-            continue
-        df = pd.DataFrame(by_fk[fk], columns=["dt", "open", "high", "low", "close"])
-        d0 = pd.Timestamp(d)
-        hi = pd.Timestamp(e) if e else pd.Timestamp.max
-        seg = df[(_to_naive(df["dt"]).dt.date >= d0.date()) &
-                 (_to_naive(df["dt"]).dt.date < hi.date())]
-        frames.append(seg)
-    if not frames:
+        "SELECT trade_date, symbol, open, high, low, close FROM public.contract_daily "
+        "WHERE product=:p AND trade_date>=:a AND trade_date<=:b ORDER BY trade_date"
+    ), {"p": product, "a": start, "b": end}).all()
+    recs = []
+    for d, s, o, h, l, c in rows:
+        if s == date2u.get(d):
+            if None in (o, h, l, c):
+                continue
+            recs.append((_to_ts(d), float(o), float(h), float(l), float(c)))
+    if len(recs) < 160:
         return None
-    out = pd.concat(frames).drop_duplicates(subset=["dt"]).sort_values("dt").reset_index(drop=True)
-    out["dt"] = _to_naive(out["dt"])
-    # 范围过滤
-    if start:
-        out = out[out["dt"].dt.date >= start]
-    if end:
-        out = out[out["dt"].dt.date <= end]
-    return out if len(out) >= 160 else None
+    return pd.DataFrame(recs, columns=["dt", "open", "high", "low", "close"]).sort_values("dt").reset_index(drop=True)
 
 
 # --------------------------------------------------------------------------
@@ -146,7 +125,7 @@ def build_continuous(session, product: str, ex: str, start: date | None, end: da
 def backtest_symbol_full(session, symbol: str, base: FusionBacktestParams,
                          mode: str, ex: str, start, end) -> list[dict]:
     if mode == "main":
-        df = _read_hourly(session, symbol, base.src, start, end)
+        df = build_main_daily(session, symbol, start, end)
     else:
         product = symbol[:-3]
         df = build_continuous(session, product, ex, start, end)
@@ -164,6 +143,8 @@ def _dt(v):
         return v
     if isinstance(v, date):
         return datetime(v.year, v.month, v.day)
+    if isinstance(v, pd.Timestamp):
+        return v.to_pydatetime()
     return None
 
 
@@ -172,7 +153,7 @@ def _pnl_yuan(t: dict) -> float:
 
 
 # --------------------------------------------------------------------------
-# walk-forward 窗口（复刻 walkforward._windows）
+# walk-forward 窗口（复刻 walkforward._windows 720/60/60）
 # --------------------------------------------------------------------------
 def _windows(start: date, end: date, wf) -> list[tuple]:
     trd, ted, st = wf["train_days"], wf["test_days"], max(1, wf["step_days"])
@@ -206,7 +187,7 @@ def _wf_for_mode(trades_by_sym: dict, symbols: list[str], wf: dict,
                 edd = ed.date()
                 if tr_s <= edd <= tr_e:
                     is_net += float(t["pnl"])
-                if (not t.get("open")) and te_s <= edd <= te_e:
+                if te_s <= edd <= te_e:
                     oos_net += float(t["pnl"])
                     n_oos += 1
         if n_oos < wf["min_oos_trades"]:
@@ -228,20 +209,19 @@ def _wf_for_mode(trades_by_sym: dict, symbols: list[str], wf: dict,
     }
 
 
-# --------------------------------------------------------------------------
-# 全量单跑汇总（IS/OOS 分界 + 全量）
-# --------------------------------------------------------------------------
-def _summarize(trades: list[dict], is_cut=pd.Timestamp("2020-12-31")):
+def _summarize(trades: list[dict], is_cut):
     closed = [t for t in trades if not t.get("open")]
     def stat(rows):
         n = len(rows)
         if n == 0:
-            return {"n": 0, "win_rate": None, "net_yuan": 0.0, "net_pct": 0.0}
+            return {"n": 0, "win_rate": None, "net_yuan": 0.0, "net_pct": 0.0, "net_pts": 0.0}
         pnls = [_pnl_yuan(t) for t in rows]
         pcts = [float(t["pnl_pct"]) for t in rows]
+        pts = [float(t["pnl"]) for t in rows]
         ws = [t for t in rows if _pnl_yuan(t) > 0]
         return {"n": n, "win_rate": round(len(ws) / n, 4),
                 "net_yuan": round(float(sum(pnls)), 2),
+                "net_pts": round(float(sum(pts)), 2),
                 "net_pct": round(float(np.mean(pcts)), 4)}
     is_t = [t for t in closed if _dt(t.get("entry_dt")) is not None
             and _dt(t.get("entry_dt")) <= is_cut]
@@ -252,19 +232,20 @@ def _summarize(trades: list[dict], is_cut=pd.Timestamp("2020-12-31")):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--symbols", default="", help="逗号分隔品种主连码，如 SN,NI；空=全部")
-    ap.add_argument("--src", default="akshare", help="主连对照数据源(akshare/bar_60m)")
+    ap.add_argument("--symbols", default="", help="逗号分隔主连码，如 SN888,NI888；空=全部")
     ap.add_argument("--out", default="/tmp/rc_verify.json")
-    ap.add_argument("--start", default="2015-01-01")
+    ap.add_argument("--start", default="2021-01-01", help="真实合约对照起点(contract_daily 仅2021+)")
     ap.add_argument("--end", default="2026-12-31")
     ap.add_argument("--focus", default="SN,NI", help="重点对比品种(主连码)")
+    ap.add_argument("--full-history", action="store_true", default=True,
+                    help="额外跑 A 全历史[2015,end]做框架校验(复现生产崩塌)")
+    ap.add_argument("--no-full-history", dest="full_history", action="store_false")
     args = ap.parse_args()
 
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
     settings = get_settings()
     base = fusion_params_from_config()
-    base.src = args.src  # 主连对照源
 
     if args.symbols:
         syms = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -273,58 +254,75 @@ def main():
 
     focus = [s.strip() for s in args.focus.split(",") if s.strip()]
     wf = {"train_days": 720, "test_days": 60, "step_days": 60,
-          "warmup_days": 150, "min_oos_trades": 5}
+          "warmup_days": 150, "min_oos_trades": 3}
 
     from app.core.db import session_scope
     with session_scope() as session:
-        # 逐品种预计算双口径全历史 trades
         trades_by_sym: dict[str, dict] = {}
         per_symbol_full: dict[str, dict] = {}
         for sym in syms:
             ex = EX_MAP.get(sym[:-3])
             if not ex:
                 continue
+            # B：真实合约日线（仅 start~end 有数据）
             rc = backtest_symbol_full(session, sym, base, "rc", ex, start, end)
-            main = backtest_symbol_full(session, sym, base, "main", ex, start, end)
-            trades_by_sym[sym] = {"rc": rc, "main": main}
+            # A：主连复权日线（start~end，与 B 同窗对照）
+            main_c = backtest_symbol_full(session, sym, base, "main", ex, start, end)
+            trades_by_sym[sym] = {"rc": rc, "main_c": main_c}
             per_symbol_full[sym] = {
-                "rc": _summarize(rc), "main": _summarize(main),
+                "rc": _summarize(rc, is_cut=date(2024, 1, 1)),
+                "main_c": _summarize(main_c, is_cut=date(2024, 1, 1)),
                 "n_rc": len([t for t in rc if not t.get("open")]),
-                "n_main": len([t for t in main if not t.get("open")]),
+                "n_main_c": len([t for t in main_c if not t.get("open")]),
             }
             print(f"[preload] {sym}: rc_n={per_symbol_full[sym]['n_rc']} "
-                  f"main_n={per_symbol_full[sym]['n_main']}", flush=True)
+                  f"main_n={per_symbol_full[sym]['n_main_c']}", flush=True)
 
-        # walk-forward 双口径
+        # A 全历史（框架校验）
+        main_full = {}
+        if args.full_history:
+            for sym in syms:
+                ex = EX_MAP.get(sym[:-3])
+                if not ex:
+                    continue
+                mf = backtest_symbol_full(session, sym, base, "main", ex,
+                                         date(2015, 1, 1), end)
+                main_full[sym] = mf
+
+        # walk-forward 双口径（同窗 start~end）
         rc_wf = _wf_for_mode(trades_by_sym, syms, wf, start, end, "rc")
-        main_wf = _wf_for_mode(trades_by_sym, syms, wf, start, end, "main")
+        main_wf = _wf_for_mode(trades_by_sym, syms, wf, start, end, "main_c")
+        main_full_wf = None
+        if args.full_history:
+            mfull = {sym: {"main_full": mf} for sym, mf in main_full.items()}
+            main_full_wf = _wf_for_mode(mfull, syms, wf, date(2015, 1, 1), end, "main_full")
 
         # 全量单跑汇总
         all_rc = [t for sym in syms for t in trades_by_sym[sym]["rc"]]
-        all_main = [t for sym in syms for t in trades_by_sym[sym]["main"]]
-        full_rc = _summarize(all_rc)
-        full_main = _summarize(all_main)
+        all_main_c = [t for sym in syms for t in trades_by_sym[sym]["main_c"]]
+        full_rc = _summarize(all_rc, is_cut=date(2024, 1, 1))
+        full_main_c = _summarize(all_main_c, is_cut=date(2024, 1, 1))
 
-        # 重点品种（focus）
         focus_tbl = {}
         for f in focus:
             if f in trades_by_sym:
                 focus_tbl[f] = {
-                    "rc": _summarize(trades_by_sym[f]["rc"]),
-                    "main": _summarize(trades_by_sym[f]["main"]),
+                    "rc": _summarize(trades_by_sym[f]["rc"], is_cut=date(2024, 1, 1)),
+                    "main_c": _summarize(trades_by_sym[f]["main_c"], is_cut=date(2024, 1, 1)),
                 }
 
         result = {
             "meta": {
-                "src": args.src, "start": args.start, "end": args.end,
-                "n_symbols": len(syms), "params": {
-                    "sl_atr": base.sl_atr, "trail_atr": base.trail_atr,
-                    "be_r": base.be_r, "entry_mode": base.entry_mode,
-                },
+                "start": args.start, "end": args.end, "n_symbols": len(syms),
+                "params": {"sl_atr": base.sl_atr, "trail_atr": base.trail_atr,
+                           "be_r": base.be_r, "entry_mode": base.entry_mode,
+                           "ema_k": base.ema_k, "ma_n": base.ma_n, "W": base.W},
                 "wf": wf,
+                "note": "A=bar_60m复权日线(生产口径)；B=contract_daily真实主力日线(未复权)；"
+                        "合约日线仅2021+，故对照窗=2021~end；A另跑全历史[2015,end]校验。",
             },
-            "walk_forward": {"rc": rc_wf, "main": main_wf},
-            "full_single_run": {"rc": full_rc, "main": full_main},
+            "walk_forward": {"rc": rc_wf, "main_c": main_wf, "main_full": main_full_wf},
+            "full_single_run": {"rc": full_rc, "main_c": full_main_c},
             "focus": focus_tbl,
             "per_symbol_full": per_symbol_full,
         }
@@ -332,24 +330,28 @@ def main():
             json.dump(result, f, ensure_ascii=False, default=str)
 
     # 文本报告
-    print("\n================ 决定性验证结果 ================")
-    print(f"主连对照源: {args.src}  区间: {args.start}~{args.end}  品种数: {len(syms)}")
-    print(f"参数: SL{base.sl_atr} TR{base.trail_atr} BE{base.be_r} mode={base.entry_mode}")
-    print("\n--- walk-forward（复刻 core 窗口 720/60/60）---")
-    for lab, w in (("主连(main)", main_wf), ("真实合约(rc)", rc_wf)):
+    print("\n================ 决定性验证结果（日线对照）================")
+    print(f"对照窗: {args.start}~{args.end}  品种数: {len(syms)}")
+    print(f"参数: SL{base.sl_atr} TR{base.trail_atr} BE{base.be_r} mode={base.entry_mode} "
+          f"ema_k={base.ema_k} ma_n={base.ma_n} W={base.W}")
+    print("\n--- walk-forward（720/60/60，同窗 2021+）---")
+    for lab, w in (("主连复权A(main_c)", main_wf), ("真实合约B(rc)", rc_wf)):
         print(f"  [{lab}] 窗数={w['n_windows']} OOS笔={w['n_oos_trades']} "
               f"IS净={w['is_net']:>+.0f} OOS净={w['oos_net']:>+.0f} decay={w['decay']}")
-    print("\n--- 全量单跑（IS/OOS 分界 2020-12-31，金额元）---")
-    for lab, s in (("主连(main)", full_main), ("真实合约(rc)", full_rc)):
-        print(f"  [{lab}] 全量净={s['all']['net_yuan']:>+.0f}元 "
-              f"胜率={s['all']['win_rate']} | IS净={s['is']['net_yuan']:>+.0f} "
-              f"OOS净={s['oos']['net_yuan']:>+.0f}")
+    if main_full_wf:
+        print(f"  [主连复权A全历史 main_full] 窗数={main_full_wf['n_windows']} "
+              f"OOS笔={main_full_wf['n_oos_trades']} IS净={main_full_wf['is_net']:>+.0f} "
+              f"OOS净={main_full_wf['oos_net']:>+.0f} decay={main_full_wf['decay']}")
+    print("\n--- 全量单跑（按 2024-01-01 切 IS/OOS，金额元）---")
+    for lab, s in (("主连复权A(main_c)", full_main_c), ("真实合约B(rc)", full_rc)):
+        print(f"  [{lab}] 全量净={s['all']['net_yuan']:>+.0f}元(胜{s['all']['win_rate']}) "
+              f"IS净={s['is']['net_yuan']:>+.0f} OOS净={s['oos']['net_yuan']:>+.0f}")
     print("\n--- 重点品种 SN/NI（金额元，全量单跑）---")
     for f, d in focus_tbl.items():
-        rc_n = d["rc"]["all"]; mn = d["main"]["all"]
-        print(f"  {f}: 真实合约净={rc_n['net_yuan']:>+.0f}(胜{rc_n['win_rate']}) "
-              f"| 主连净={mn['net_yuan']:>+.0f}(胜{mn['win_rate']}) "
-              f"| Δ={rc_n['net_yuan']-mn['net_yuan']:>+.0f}")
+        rc_n = d["rc"]["all"]; mn = d["main_c"]["all"]
+        print(f"  {f}: 真实合约B净={rc_n['net_yuan']:>+.0f}(胜{rc_n['win_rate']}) "
+              f"| 主连A净={mn['net_yuan']:>+.0f}(胜{mn['win_rate']}) "
+              f"| Δ(B-A)={rc_n['net_yuan']-mn['net_yuan']:>+.0f}")
     print(f"\nJSON -> {args.out}")
 
 
