@@ -192,7 +192,8 @@ def fusion_state(o, h, l, c, htf_dir, p) -> int:
     return fusion_state_detail(o, h, l, c, htf_dir, p)["state"]
 
 
-def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
+def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
+                       entry_gates=None):
     """逐根生成融合策略持仓明细（**单一真源**，与 `fusion_state_detail` 同一套循环）。
 
     在每根已收盘 bar `i` 上，只使用 `≤ i` 的数据推断该 bar 收盘后的持仓状态——
@@ -201,10 +202,26 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
     Yields:
         dict（与 `fusion_state_detail` 返回结构完全一致）：
           state/entry_i/entry_px/entry_atr/peak/trough/be_done/be_trigger/init_stop/trail_stop/cur_stop
+
+    entry_gates（2026-11-01 新增，入场门控研究钩子，默认 None = 与旧行为逐位一致）:
+        可选二元组 (long_ok, short_ok)：与 c 等长的 0/1 数组。
+        - long_ok[i] == 0  → bar i 的多头**新开仓**信号作废（回踩/突破均拦）；
+        - short_ok[i] == 0 → bar i 的空头**新开仓**信号作废。
+        - 只作用于新开仓：离场、保本、吊灯、阶梯加码**一律不受影响**；
+        - 不设置冷却：被拦的 bar 不消耗 cooldown，下一根满足条件即可再触发。
+        设计依据：K45 中段停入场 + 逆市场 regime 空头停发（信号级验证 IS +25% /
+        OOS +449%，安慰剂 300 次双侧 0%）。生产不传该参数，零影响。
     """
     n = len(c)
     if n < 40:
         return
+    gate_l, gate_s = (None, None)
+    if entry_gates is not None:
+        gate_l, gate_s = entry_gates
+        if gate_l is not None and len(gate_l) != n:
+            raise ValueError(f"entry_gates.long_ok 长度 {len(gate_l)} != bar 数 {n}")
+        if gate_s is not None and len(gate_s) != n:
+            raise ValueError(f"entry_gates.short_ok 长度 {len(gate_s)} != bar 数 {n}")
     ma20 = ema(c, p.ma_n)
     atr_arr = atr14(h, l, c, p.atr_n)
     ok_l = htf_dir >= 0
@@ -414,7 +431,9 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
             if adx_min > 0 and adx_arr[i - 1] < adx_min:
                 s_tl = s_ts = s_bkl = s_bks = False
 
-            if (s_tl or s_bkl) and _entry_gate >= _gate_threshold:
+            # ---- 入场门控（entry_gates）：只拦新开仓，不设冷却（2026-11-01）----
+            if (s_tl or s_bkl) and _entry_gate >= _gate_threshold \
+                    and (gate_l is None or gate_l[i]):
                 state = 1
                 entry_px = c[i]
                 avg_px = c[i]
@@ -424,7 +443,8 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
                 peak = c[i]
                 trough = c[i]
                 be_done = False
-            elif (s_ts or s_bks) and _entry_gate >= _gate_threshold:
+            elif (s_ts or s_bks) and _entry_gate >= _gate_threshold \
+                    and (gate_s is None or gate_s[i]):
                 state = 2
                 entry_px = c[i]
                 avg_px = c[i]
