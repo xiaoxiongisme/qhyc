@@ -1,0 +1,721 @@
+[
+ {
+  "schema": "l0_raw",
+  "table": "inventory",
+  "columns": [
+   [
+    "report_date",
+    "date"
+   ],
+   [
+    "exchange",
+    "text"
+   ],
+   [
+    "symbol",
+    "text"
+   ],
+   [
+    "warehouse",
+    "text"
+   ],
+   [
+    "inventory_qty",
+    "bigint"
+   ],
+   [
+    "receipt_qty",
+    "bigint"
+   ],
+   [
+    "unit",
+    "text"
+   ],
+   [
+    "change_qty",
+    "bigint"
+   ],
+   [
+    "src",
+    "text"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 3542,
+  "time_range": {
+   "report_date": [
+    "2026-05-26",
+    "2026-10-30"
+   ]
+  },
+  "variety": {
+   "symbol": {
+    "distinct": 41,
+    "sample": [
+     "A",
+     "AG",
+     "AL",
+     "AU",
+     "BU",
+     "C",
+     "CF",
+     "CU"
+    ]
+   }
+  },
+  "sample": [
+   "[datetime.date(2026, 6, 22), 'CZCE', 'FG', '', 731, None, '手', 0, 'akshare:futures_inventory_em', 'v1.0', datetime.datetime(2026, 9, 28, 0, 19, 32, 52612, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "[datetime.date(2026, 6, 23), 'CZCE', 'FG', '', 681, None, '手', -50, 'akshare:futures_inventory_em', 'v1.0', datetime.datetime(2026, 9, 28, 0, 19, 32, 52612, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l0_raw",
+  "table": "warehouse_receipt",
+  "columns": [
+   [
+    "report_date",
+    "date"
+   ],
+   [
+    "exchange",
+    "text"
+   ],
+   [
+    "symbol",
+    "text"
+   ],
+   [
+    "warehouse",
+    "text"
+   ],
+   [
+    "receipt_qty",
+    "bigint"
+   ],
+   [
+    "change_qty",
+    "bigint"
+   ],
+   [
+    "unit",
+    "text"
+   ],
+   [
+    "src",
+    "text"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 897063,
+  "time_range": {
+   "report_date": [
+    "2020-07-02",
+    "2026-10-30"
+   ]
+  },
+  "variety": {
+   "symbol": {
+    "distinct": 74,
+    "sample": [
+     "A888",
+     "AG888",
+     "AL888",
+     "AO888",
+     "AP888",
+     "AU888",
+     "B888",
+     "BC888"
+    ]
+   }
+  },
+  "sample": [
+   "[datetime.date(2020, 7, 2), 'SHFE', 'CU888', '国储天威', 25, 0, '吨', 'scrapling:warehouse_receipt', 'v1.0', datetime.datetime(2026, 9, 26, 14, 16, 51, 908317, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "[datetime.date(2020, 7, 2), 'SHFE', 'CU888', '国储外高桥', 0, 0, '吨', 'scrapling:warehouse_receipt', 'v1.0', datetime.datetime(2026, 9, 26, 14, 16, 51, 908317, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l0_raw",
+  "table": "spot_basis",
+  "columns": [
+   [
+    "report_date",
+    "date"
+   ],
+   [
+    "exchange",
+    "text"
+   ],
+   [
+    "symbol",
+    "text"
+   ],
+   [
+    "spot_price",
+    "numeric"
+   ],
+   [
+    "near_contract",
+    "text"
+   ],
+   [
+    "near_contract_price",
+    "numeric"
+   ],
+   [
+    "dominant_contract",
+    "text"
+   ],
+   [
+    "dominant_contract_price",
+    "numeric"
+   ],
+   [
+    "near_month",
+    "text"
+   ],
+   [
+    "dominant_month",
+    "text"
+   ],
+   [
+    "near_basis",
+    "numeric"
+   ],
+   [
+    "dom_basis",
+    "numeric"
+   ],
+   [
+    "near_basis_rate",
+    "numeric"
+   ],
+   [
+    "dom_basis_rate",
+    "numeric"
+   ],
+   [
+    "src",
+    "text"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 117321,
+  "time_range": {
+   "report_date": [
+    "2015-01-05",
+    "2026-10-30"
+   ]
+  },
+  "variety": {
+   "symbol": {
+    "distinct": 50,
+    "sample": [
+     "A",
+     "AG",
+     "AL",
+     "AU",
+     "BR",
+     "BU",
+     "C",
+     "CF"
+    ]
+   },
+   "near_contract": {
+    "distinct": 5192,
+    "sample": [
+     "A1501",
+     "A1503",
+     "A1505",
+     "A1507",
+     "A1509",
+     "A1511",
+     "A1601",
+     "A1603"
+    ]
+   }
+  },
+  "sample": [
+   "[datetime.date(2018, 1, 3), 'auto', 'OI', Decimal('6606.6700'), 'OI1801', Decimal('6368.0000'), 'OI1805', Decimal('6560.0000'), '1801', '1805', Decimal('-238.6700'), Decimal('-46.6700'), Decimal('-0.036126'), Decimal('-0.007064'), 'akshare:futures_spot_price_daily', 'v1.0', datetime.datetime(2026, 10, 1, 23, 32, 51, 556856, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "[datetime.date(2018, 1, 3), 'auto', 'MA', Decimal('3300.0000'), 'MA1801', Decimal('3300.0000'), 'MA1805', Decimal('2909.0000'), '1801', '1805', Decimal('0.0000'), Decimal('-391.0000'), Decimal('0.000000'), Decimal('-0.118485'), 'akshare:futures_spot_price_daily', 'v1.0', datetime.datetime(2026, 10, 1, 23, 32, 51, 556856, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l0_raw",
+  "table": "roll_yield",
+  "columns": [
+   [
+    "report_date",
+    "date"
+   ],
+   [
+    "symbol",
+    "text"
+   ],
+   [
+    "exchange",
+    "text"
+   ],
+   [
+    "near_contract",
+    "text"
+   ],
+   [
+    "far_contract",
+    "text"
+   ],
+   [
+    "near_price",
+    "numeric"
+   ],
+   [
+    "far_price",
+    "numeric"
+   ],
+   [
+    "roll_yield",
+    "numeric"
+   ],
+   [
+    "src",
+    "text"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 15249,
+  "time_range": {
+   "report_date": [
+    "2018-01-02",
+    "2026-10-30"
+   ]
+  },
+  "variety": {
+   "symbol": {
+    "distinct": 48,
+    "sample": [
+     "A888",
+     "AG888",
+     "AL888",
+     "AO888",
+     "AP888",
+     "AU888",
+     "BU888",
+     "C888"
+    ]
+   },
+   "near_contract": {
+    "distinct": 412,
+    "sample": [
+     "A2611",
+     "AG1801",
+     "AG1806",
+     "AG1809",
+     "AG1812",
+     "AG1901",
+     "AG1906",
+     "AG1909"
+    ]
+   }
+  },
+  "sample": [
+   "[datetime.date(2026, 9, 24), 'FG888', None, 'FG611', 'FG701', None, None, Decimal('-0.119341'), 'akshare:get_roll_yield', 'v1.0', datetime.datetime(2026, 9, 26, 11, 3, 4, 343193, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "[datetime.date(2026, 9, 24), 'SA888', None, 'SA611', 'SA701', None, None, Decimal('-0.206707'), 'akshare:get_roll_yield', 'v1.0', datetime.datetime(2026, 9, 26, 11, 3, 4, 849343, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l0_raw",
+  "table": "contract_daily",
+  "columns": [
+   [
+    "symbol",
+    "text"
+   ],
+   [
+    "product",
+    "text"
+   ],
+   [
+    "exchange",
+    "text"
+   ],
+   [
+    "trade_date",
+    "date"
+   ],
+   [
+    "open",
+    "numeric"
+   ],
+   [
+    "high",
+    "numeric"
+   ],
+   [
+    "low",
+    "numeric"
+   ],
+   [
+    "close",
+    "numeric"
+   ],
+   [
+    "settle",
+    "numeric"
+   ],
+   [
+    "volume",
+    "bigint"
+   ],
+   [
+    "oi",
+    "bigint"
+   ],
+   [
+    "src",
+    "text"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 755039,
+  "time_range": {
+   "trade_date": [
+    "2016-01-04",
+    "2026-10-30"
+   ]
+  },
+  "variety": {
+   "symbol": {
+    "distinct": 3461,
+    "sample": [
+     "A2011",
+     "A2101",
+     "A2103",
+     "A2105",
+     "A2107",
+     "A2109",
+     "A2111",
+     "A2201"
+    ]
+   },
+   "product": {
+    "distinct": 57,
+    "sample": [
+     "A",
+     "AG",
+     "AL",
+     "AO",
+     "AP",
+     "AU",
+     "BR",
+     "BU"
+    ]
+   }
+  },
+  "sample": [
+   "['AU2612', 'AU', 'SHFE', datetime.date(2026, 7, 13), Decimal('899.9600'), Decimal('902.6600'), Decimal('888.6800'), Decimal('890.3200'), Decimal('895.4200'), 14251, 47188, 'akshare:sina', 'v1.0', datetime.datetime(2026, 10, 2, 20, 57, 19, 903729, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "['AU2612', 'AU', 'SHFE', datetime.date(2026, 7, 15), Decimal('895.1600'), Decimal('899.3000'), Decimal('881.7000'), Decimal('884.6800'), Decimal('890.4400'), 13259, 48512, 'akshare:sina', 'v1.0', datetime.datetime(2026, 10, 2, 20, 57, 19, 903729, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l0_raw",
+  "table": "macro_china",
+  "columns": [
+   [
+    "indicator",
+    "text"
+   ],
+   [
+    "period_date",
+    "date"
+   ],
+   [
+    "value",
+    "numeric"
+   ],
+   [
+    "unit",
+    "text"
+   ],
+   [
+    "src",
+    "text"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 461,
+  "time_range": {
+   "period_date": [
+    "2020-01-01",
+    "2026-08-01"
+   ]
+  },
+  "variety": {},
+  "sample": [
+   "['PMI', datetime.date(2020, 1, 31), Decimal('50.0000'), '点', 'akshare:macro_china', 'v1.0', datetime.datetime(2026, 9, 20, 19, 1, 55, 836651, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "['PMI', datetime.date(2020, 2, 29), Decimal('35.7000'), '点', 'akshare:macro_china', 'v1.0', datetime.datetime(2026, 9, 20, 19, 1, 55, 836651, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l0_raw",
+  "table": "member_position_rank",
+  "columns": [
+   [
+    "trade_date",
+    "date"
+   ],
+   [
+    "exchange",
+    "text"
+   ],
+   [
+    "symbol",
+    "text"
+   ],
+   [
+    "member",
+    "text"
+   ],
+   [
+    "rank",
+    "integer"
+   ],
+   [
+    "long_pos",
+    "bigint"
+   ],
+   [
+    "short_pos",
+    "bigint"
+   ],
+   [
+    "long_chg",
+    "bigint"
+   ],
+   [
+    "short_chg",
+    "bigint"
+   ],
+   [
+    "vol_pos",
+    "bigint"
+   ],
+   [
+    "src",
+    "text"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 7954972,
+  "time_range": {
+   "trade_date": [
+    "2015-01-05",
+    "2026-10-30"
+   ]
+  },
+  "variety": {
+   "symbol": {
+    "distinct": 4463,
+    "sample": [
+     "A2009",
+     "A2101",
+     "A2105",
+     "A2107",
+     "A2109",
+     "A2111",
+     "A2201",
+     "A2203"
+    ]
+   }
+  },
+  "sample": [
+   "[datetime.date(2026, 9, 1), 'CZCE', 'UR2705', '国泰君安（代客）', 1, 964, 2629, 38, 0, 630, 'akshare:get_rank_table_czce', 'v1.0', datetime.datetime(2026, 9, 20, 22, 3, 55, 625017, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "[datetime.date(2026, 9, 1), 'CZCE', 'UR2705', '冠通期货（代客）', 2, 881, 1267, 0, 23, 523, 'akshare:get_rank_table_czce', 'v1.0', datetime.datetime(2026, 9, 20, 22, 3, 55, 625017, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l2_adj",
+  "table": "factor_registry",
+  "columns": [
+   [
+    "factor_id",
+    "text"
+   ],
+   [
+    "name",
+    "text"
+   ],
+   [
+    "category",
+    "text"
+   ],
+   [
+    "description",
+    "text"
+   ],
+   [
+    "data_sources",
+    "ARRAY"
+   ],
+   [
+    "min_history_days",
+    "integer"
+   ],
+   [
+    "horizon",
+    "text"
+   ],
+   [
+    "lag_days",
+    "integer"
+   ],
+   [
+    "enabled",
+    "boolean"
+   ],
+   [
+    "default_weight",
+    "numeric"
+   ],
+   [
+    "max_weight",
+    "numeric"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 26,
+  "time_range": {
+   "min_history_days": [
+    "60",
+    "60"
+   ],
+   "lag_days": [
+    "0",
+    "1"
+   ]
+  },
+  "variety": {},
+  "sample": [
+   "['vol_concentration_z', '成交量集中度 z', 'B', '前5会员成交占比(Crane)横截面标准化', ['member_position_rank'], 60, 'B', 1, True, Decimal('-0.05'), Decimal('0.08'), '1.0', datetime.datetime(2026, 9, 26, 12, 2, 58, 303453, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "['cross_rank_z', '横截面分位 z', 'B', '品种综合因子分位横截面标准化', ['spot_basis', 'member_position_rank', 'roll_yield', 'inventory'], 60, 'B', 1, True, Decimal('0.04'), Decimal('0.08'), '1.0', datetime.datetime(2026, 9, 26, 12, 2, 58, 303453, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ },
+ {
+  "schema": "l2_adj",
+  "table": "factor_value",
+  "columns": [
+   [
+    "factor_id",
+    "text"
+   ],
+   [
+    "trade_date",
+    "date"
+   ],
+   [
+    "symbol",
+    "text"
+   ],
+   [
+    "raw_value",
+    "numeric"
+   ],
+   [
+    "z_value",
+    "numeric"
+   ],
+   [
+    "available_at",
+    "date"
+   ],
+   [
+    "version",
+    "text"
+   ],
+   [
+    "created_at",
+    "timestamp with time zone"
+   ]
+  ],
+  "real_rows": 2604203,
+  "time_range": {
+   "trade_date": [
+    "2015-01-05",
+    "2026-10-31"
+   ]
+  },
+  "variety": {
+   "symbol": {
+    "distinct": 60,
+    "sample": [
+     "A888",
+     "AG888",
+     "AL888",
+     "AO888",
+     "AP888",
+     "AU888",
+     "B888",
+     "BR888"
+    ]
+   }
+  },
+  "sample": [
+   "['f_vol_ratio', datetime.date(2026, 10, 8), 'B888', None, None, datetime.date(2026, 10, 8), '1.0', datetime.datetime(2026, 10, 13, 16, 20, 1, 150169, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]",
+   "['f_vol_ratio', datetime.date(2026, 10, 9), 'I888', Decimal('0.6834106821900904'), Decimal('-0.08375938522673236'), datetime.date(2026, 10, 9), '1.0', datetime.datetime(2026, 10, 11, 16, 20, 0, 837879, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai'))]"
+  ]
+ }
+]
