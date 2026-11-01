@@ -59,20 +59,28 @@ EX_MAP = {
 }
 
 
+TZ = "Asia/Shanghai"
+
+
 def _to_ts(d):
-    # 返回 tz-naive python datetime（日线以 15:00 代表收盘）。
-    # 必须用 python datetime 而非 pd.Timestamp/datetime64：
-    # _simulate_trades 内部把 dt 喂给成本查库 SQL，numpy datetime64 无法被 psycopg 适配。
-    if isinstance(d, datetime):
-        return d.replace(tzinfo=None)
+    # 必须返回 **tz-aware** pd.Timestamp，以匹配生产 _read_hourly 路径：
+    # bar_60m 的 bucket 是 tz-aware，pandas 据此把 dt 列存为 tz-aware datetime64，
+    # .to_numpy() 后得到 pd.Timestamp 对象（带 .date()），_simulate_trades 成本查库
+    # 才能用 d.date() 取费率。若返回 tz-naive python datetime，pandas 会 coercion 成
+    # datetime64[ns]，.to_numpy() 变 np.datetime64（无 .date()），psycopg 无法适配。
     if isinstance(d, pd.Timestamp):
-        return (d.tz_localize(None).to_pydatetime() if d.tzinfo
-                else d.to_pydatetime())
-    if isinstance(d, date):
-        return datetime(d.year, d.month, d.day, 15, 0, 0)
-    if isinstance(d, np.datetime64):
-        return pd.Timestamp(d).tz_localize(None).to_pydatetime()
-    return pd.Timestamp(str(d)).tz_localize(None).to_pydatetime()
+        ts = d
+    elif isinstance(d, datetime):
+        ts = pd.Timestamp(d)
+    elif isinstance(d, date):
+        ts = pd.Timestamp(datetime(d.year, d.month, d.day, 15, 0, 0))
+    elif isinstance(d, np.datetime64):
+        ts = pd.Timestamp(d)
+    else:
+        ts = pd.Timestamp(str(d))
+    if ts.tzinfo is None:
+        ts = ts.tz_localize(TZ)
+    return ts
 
 
 # --------------------------------------------------------------------------
