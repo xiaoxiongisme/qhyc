@@ -45,7 +45,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -141,11 +140,13 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=15, help="每种字段打印的明细上限")
     args = ap.parse_args()
 
-    if not os.getenv("DATABASE_URL"):
-        print("[FAIL] 缺少 DATABASE_URL（请先 source qhyc.env）")
+    # get_engine() 从 settings.db_url 取 DSN（容器内 / 已配置环境下可用），
+    # 不再依赖 DATABASE_URL 环境变量（该变量 get_engine 本身并不读取）。
+    try:
+        eng = get_engine()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FAIL] 无法获取数据库引擎（settings.db_url 未配置或 DB 不可达）：{exc}")
         return 1
-
-    eng = get_engine()
     problems: list[str] = []
     with eng.connect() as conn:
         problems += _check_one(conn, hi_tbl="bar_30m", lo_tbl="bar_15m",
