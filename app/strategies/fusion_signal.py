@@ -334,7 +334,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None,
         # ---------------- 离场（多空镜像，close-only） ----------------
         # 成本基准用加权均价 avg_px（未加码时 == entry_px，与 V3.1 逐位一致）。
         # 持仓超限（max_hold_bars>0）与吊灯/初始止损同为离场触发，复用同一退出复位逻辑。
-        force_exit = max_hold_bars > 0 and state != 0 and (i - entry_i) > max_hold_bars
+        force_exit = max_hold_bars > 0 and state != 0 and (i - entry_i) >= max_hold_bars
         if state == 1:
             if c[i] > peak:
                 peak = c[i]
