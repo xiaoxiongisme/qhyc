@@ -313,6 +313,9 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
             pl.pop(0)
         if cooldown > 0:
             cooldown -= 1
+        # 入场/离场原因（纯元数据，不影响 state/lots/pnl；供 alpha 入场质量研究使用）
+        _entry_reason = None
+        _exit_reason = None
 
         # ---------------- 离场（多空镜像，close-only） ----------------
         # 成本基准用加权均价 avg_px（未加码时 == entry_px，与 V3.1 逐位一致）。
@@ -331,6 +334,14 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
             if be_done and entry_px > st:
                 st = entry_px
             if c[i] <= st or force_exit:
+                if force_exit:
+                    _exit_reason = "force"
+                elif be_done and entry_px >= st:
+                    _exit_reason = "be"
+                elif p.trail_atr > 0 and t is not None and t >= (avg_px - p.sl_atr * e_atr):
+                    _exit_reason = "trail"
+                else:
+                    _exit_reason = "sl"
                 state = 0
                 cooldown = p.cooldown_bars
                 be_done = False
@@ -349,6 +360,14 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
             if be_done and entry_px < st:
                 st = entry_px
             if c[i] >= st or force_exit:
+                if force_exit:
+                    _exit_reason = "force"
+                elif be_done and entry_px <= st:
+                    _exit_reason = "be"
+                elif p.trail_atr > 0 and t is not None and t <= (avg_px + p.sl_atr * e_atr):
+                    _exit_reason = "trail"
+                else:
+                    _exit_reason = "sl"
                 state = 0
                 cooldown = p.cooldown_bars
                 be_done = False
@@ -432,6 +451,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
                 peak = c[i]
                 trough = c[i]
                 be_done = False
+                _entry_reason = "bk_l" if s_bkl else "pb_l"
             elif (s_ts or s_bks) and _entry_gate >= _gate_threshold:
                 state = 2
                 entry_px = c[i]
@@ -442,6 +462,7 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
                 peak = c[i]
                 trough = c[i]
                 be_done = False
+                _entry_reason = "bk_s" if s_bks else "pb_s"
 
         # ---------------- P1 利弗莫尔·阶梯加码（V3.4：浮盈门槛门控） ----------------
         # 开仓恒为 1 手；仅当「收盘创入场以来新高/新低」且「浮盈 >= lots × add_thr_atr × ATR」
@@ -473,6 +494,8 @@ def walk_fusion_states(o, h, l, c, htf_dir, p, symbol=None, trade_date=None):
             "peak": peak if state == 1 else None,
             "trough": trough if state == 2 else None,
             "be_done": bool(be_done) if state != 0 else False,
+            "entry_reason": _entry_reason,
+            "exit_reason": _exit_reason,
             **lv,
         }
 

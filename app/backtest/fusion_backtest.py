@@ -199,12 +199,18 @@ def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
     n = len(c)
     states = np.zeros(n, dtype=int)
     lots_arr = np.zeros(n, dtype=int)
+    entry_reasons = np.array([None] * n, dtype=object)
+    exit_reasons = np.array([None] * n, dtype=object)
     for k, d in enumerate(walk_fusion_states(o, h, l, c, htf, p)):
         states[k + 2] = d["state"]
         lots_arr[k + 2] = int(d.get("lots", 1) or 1)
+        entry_reasons[k + 2] = d.get("entry_reason")
+        exit_reasons[k + 2] = d.get("exit_reason")
     out = df.reset_index(drop=True).copy()
     out["state"] = states
     out["lots"] = lots_arr
+    out["entry_reason"] = entry_reasons
+    out["exit_reason"] = exit_reasons
     # 波动率基准：用于把成交归一化为 R（robustness 六项检查的硬要求）
     out["atr"] = _atr(out, getattr(p, "atr_n", 14)).to_numpy(dtype=float)
     return out
@@ -235,6 +241,12 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     lots_arr = states_df["lots"].to_numpy()
     atr_arr = (states_df["atr"].to_numpy(dtype=float)
                if "atr" in states_df.columns else np.full(len(states), np.nan))
+    entry_reason_arr = (states_df["entry_reason"].to_numpy()
+                        if "entry_reason" in states_df.columns
+                        else np.array([None] * len(states), dtype=object))
+    exit_reason_arr = (states_df["exit_reason"].to_numpy()
+                       if "exit_reason" in states_df.columns
+                       else np.array([None] * len(states), dtype=object))
     with np.errstate(all="ignore"):
         _m = np.nanmean(atr_arr) if len(atr_arr) else float("nan")
         atr_mean = float(_m) if np.isfinite(_m) else 0.0
@@ -310,6 +322,9 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         _a = lt.get("atr")
         risk = float(p.sl_atr * _a) if (_a and np.isfinite(_a) and _a > 0) else 0.0
         r_unit = float(dirn * (xp - ep) / risk) if risk > 0 else 0.0
+        _holding_bars = int(i - lt["entry_i"]) if lt.get("entry_i") is not None else 0
+        _exit_reason = ("eod" if open_pos
+                        else (exit_reason_arr[i] if i < len(exit_reason_arr) else None))
         t = {
             "symbol": None,
             "side": "LONG" if pos == 1 else "SHORT",
@@ -319,6 +334,9 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
             "pnl": round(float(pnl), 4),
             "pnl_pct": round(float(pnl / ep * 100.0), 4) if ep else 0.0,
             "addon": lt["addon"],
+            "entry_reason": lt.get("entry_reason"),
+            "exit_reason": _exit_reason,
+            "holding_bars": _holding_bars,
             # —— robustness 六项检查口径（R / risk / 进出场时价）——
             # ⚠ 这几个字段**禁止 round**：robustness.price_sign_symmetry 用
             #   abs_tol=1e-9 校验价格取负对称性，任何舍入都会被误判为不一致。
@@ -343,7 +361,9 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         if pos != 0 and tgt == pos and cur_lots > len(open_lots):
             for _ in range(cur_lots - len(open_lots)):
                 open_lots.append({"entry_px": float(closes[i]), "entry_i": i,
-                                  "addon": True, "atr": _atr_at(i)})
+                                  "addon": True, "atr": _atr_at(i),
+                                  "entry_reason": (entry_reason_arr[i]
+                                                  if i < len(entry_reason_arr) else None)})
         if tgt != pos:
             if open_lots:
                 for lt in open_lots:
@@ -352,7 +372,9 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
             if tgt != 0:
                 pos = tgt
                 open_lots.append({"entry_px": float(closes[i]), "entry_i": i,
-                                  "addon": False, "atr": _atr_at(i)})
+                                  "addon": False, "atr": _atr_at(i),
+                                  "entry_reason": (entry_reason_arr[i]
+                                                  if i < len(entry_reason_arr) else None)})
             else:
                 pos = 0
     # 末尾仍持仓：以最后收盘价强平（标记未实现，不计入已平仓统计）
