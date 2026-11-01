@@ -238,9 +238,9 @@ def _summarize(trades: list[dict], is_cut):
                 "net_pts": round(float(sum(pts)), 2),
                 "net_pct": round(float(np.mean(pcts)), 4)}
     is_t = [t for t in closed if _dt(t.get("entry_dt")) is not None
-            and _dt(t.get("entry_dt")) <= is_cut]
+            and _dt(t.get("entry_dt")).date() <= is_cut]
     oos_t = [t for t in closed if _dt(t.get("entry_dt")) is not None
-             and _dt(t.get("entry_dt")) > is_cut]
+             and _dt(t.get("entry_dt")).date() > is_cut]
     return {"all": stat(closed), "is": stat(is_t), "oos": stat(oos_t)}
 
 
