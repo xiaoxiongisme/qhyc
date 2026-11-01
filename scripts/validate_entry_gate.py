@@ -135,7 +135,11 @@ def agg(trades):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/tmp/eg_validate.json")
+    ap.add_argument("--profile", choices=("final_v2", "final_v3"), default="final_v2",
+                    help="final_v3=final_v2 + 2021-2023 选出的五品种逆regime空头豁免")
     args = ap.parse_args()
+    # D4 防过拟合名单：只用 2021-2023 逆regime空头净R排名选取，2024-2026 前向验证。
+    REGIME_SHORT_WHITELIST = {"LH888", "LC888", "B888", "AG888", "L888"}
 
     settings = get_settings()
     symbols = [s.symbol for s in settings.main_contracts] or []
@@ -208,7 +212,7 @@ def main():
             if mid[i]:
                 continue
             ru = _prev_regime_up(pd.Timestamp(dts[i]))
-            if ru:  # 指数在年线上方 → 停发空头
+            if ru and not (args.profile == "final_v3" and sym in REGIME_SHORT_WHITELIST):
                 gate_s[i] = 0
         sdf_base = build_states_df(df, p, gates=None)
         sdf_cand = build_states_df(df, p, gates=(gate_l, gate_s))
@@ -245,6 +249,9 @@ def main():
     bi, bo = split(base_trades)
     ci, co = split(cand_trades)
     report = {
+        "profile": args.profile,
+        "regime_short_whitelist": (sorted(REGIME_SHORT_WHITELIST)
+                                   if args.profile == "final_v3" else []),
         "base": {"ALL": agg(base_trades), "IS": agg(bi), "OOS": agg(bo)},
         "cand": {"ALL": agg(cand_trades), "IS": agg(ci), "OOS": agg(co)},
     }
