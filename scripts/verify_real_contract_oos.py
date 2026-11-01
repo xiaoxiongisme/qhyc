@@ -321,10 +321,13 @@ def main():
 
         focus_tbl = {}
         for f in focus:
-            if f in trades_by_sym:
+            sym = next((s for s in syms if s[:-3] == f), None)
+            if sym and sym in trades_by_sym:
                 focus_tbl[f] = {
-                    "rc": _summarize(trades_by_sym[f]["rc"], is_cut=date(2024, 1, 1)),
-                    "main_c": _summarize(trades_by_sym[f]["main_c"], is_cut=date(2024, 1, 1)),
+                    "rc": _summarize(trades_by_sym[sym]["rc"], is_cut=date(2024, 1, 1)),
+                    "main_c": _summarize(trades_by_sym[sym]["main_c"], is_cut=date(2024, 1, 1)),
+                    "rc_wf": _wf_for_mode({sym: trades_by_sym[sym]}, [sym], wf, start, end, "rc"),
+                    "main_wf": _wf_for_mode({sym: trades_by_sym[sym]}, [sym], wf, start, end, "main_c"),
                 }
 
         result = {
@@ -362,12 +365,15 @@ def main():
     for lab, s in (("主连复权A(main_c)", full_main_c), ("真实合约B(rc)", full_rc)):
         print(f"  [{lab}] 全量净={s['all']['net_yuan']:>+.0f}元(胜{s['all']['win_rate']}) "
               f"IS净={s['is']['net_yuan']:>+.0f} OOS净={s['oos']['net_yuan']:>+.0f}")
-    print("\n--- 重点品种 SN/NI（金额元，全量单跑）---")
+    print("\n--- 重点品种 SN/NI（金额元，全量单跑 + 各自 walk-forward OOS）---")
     for f, d in focus_tbl.items():
         rc_n = d["rc"]["all"]; mn = d["main_c"]["all"]
         print(f"  {f}: 真实合约B净={rc_n['net_yuan']:>+.0f}(胜{rc_n['win_rate']}) "
               f"| 主连A净={mn['net_yuan']:>+.0f}(胜{mn['win_rate']}) "
               f"| Δ(B-A)={rc_n['net_yuan']-mn['net_yuan']:>+.0f}")
+        print(f"     B_wf: OOS净={d['rc_wf']['oos_net']:>+.0f}(窗{d['rc_wf']['n_windows']},"
+              f"笔{d['rc_wf']['n_oos_trades']})  A_wf: OOS净={d['main_wf']['oos_net']:>+.0f}"
+              f"(窗{d['main_wf']['n_windows']},笔{d['main_wf']['n_oos_trades']})")
     print(f"\nJSON -> {args.out}")
 
 
