@@ -1,0 +1,480 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "pair_set": "ext",
+  "n_pairs": 13,
+  "window": 60,
+  "entry_z": 2.0,
+  "exit_z": 0.5,
+  "caps": [
+   3,
+   5,
+   7,
+   10,
+   13
+  ],
+  "cost_mults": [
+   1.0,
+   2.0,
+   3.0
+  ],
+  "sizing_rule": "size=2 if |z| at entry > 3.0 else 1",
+  "capacity_rule": "持仓感知、只限制新开仓；已持仓对自然平仓，按|z|强度补位至K",
+  "amount_rule": "归一收益率 pnl/entry_px（跨品种可比）；原始点数仅同对内可比",
+  "cost_rule": "逐笔 cost_pts 整体乘 mult（含手续费+滑点的整体加压，偏保守；滑点原假设1跳/边）"
+ },
+ "baseline": {
+  "n": 195,
+  "mean_net_R": 0.19007,
+  "sum_net_R": 37.06,
+  "profit_factor": 1.734,
+  "win_rate": 59.49,
+  "mdd_R": 3.52811
+ },
+ "capacity": [
+  {
+   "K": 3,
+   "r": {
+    "n": 102,
+    "mean_net_R": 0.14334,
+    "sum_net_R": 14.62,
+    "profit_factor": 1.552,
+    "win_rate": 58.82,
+    "mdd_R": 4.46324
+   },
+   "amount": {
+    "n": 102,
+    "sum_net_return": 0.68915,
+    "sum_pnl_points": 1820.7,
+    "sum_cost_points": 717.2,
+    "profit_factor": 1.413,
+    "mdd_return": 0.43871,
+    "size2_trades": 0
+   },
+   "by_year_netR": {
+    "2023": 0.1685,
+    "2024": 0.11486,
+    "2025": 0.16786,
+    "2026": 0.12936
+   }
+  },
+  {
+   "K": 5,
+   "r": {
+    "n": 151,
+    "mean_net_R": 0.16908,
+    "sum_net_R": 25.53,
+    "profit_factor": 1.645,
+    "win_rate": 60.26,
+    "mdd_R": 3.30225
+   },
+   "amount": {
+    "n": 151,
+    "sum_net_return": 1.15884,
+    "sum_pnl_points": 11497.0,
+    "sum_cost_points": 962.0,
+    "profit_factor": 1.489,
+    "mdd_return": 0.34045,
+    "size2_trades": 0
+   },
+   "by_year_netR": {
+    "2023": 0.21952,
+    "2024": 0.14842,
+    "2025": 0.16096,
+    "2026": 0.13763
+   }
+  },
+  {
+   "K": 7,
+   "r": {
+    "n": 181,
+    "mean_net_R": 0.16364,
+    "sum_net_R": 29.62,
+    "profit_factor": 1.638,
+    "win_rate": 58.56,
+    "mdd_R": 3.32661
+   },
+   "amount": {
+    "n": 181,
+    "sum_net_return": 1.45078,
+    "sum_pnl_points": 13537.5,
+    "sum_cost_points": 1148.7,
+    "profit_factor": 1.567,
+    "mdd_return": 0.35671,
+    "size2_trades": 0
+   },
+   "by_year_netR": {
+    "2022": -0.06469,
+    "2023": 0.18504,
+    "2024": 0.15053,
+    "2025": 0.18513,
+    "2026": 0.11303
+   }
+  },
+  {
+   "K": 10,
+   "r": {
+    "n": 195,
+    "mean_net_R": 0.19007,
+    "sum_net_R": 37.06,
+    "profit_factor": 1.734,
+    "win_rate": 59.49,
+    "mdd_R": 3.52811
+   },
+   "amount": {
+    "n": 195,
+    "sum_net_return": 1.89933,
+    "sum_pnl_points": 18583.3,
+    "sum_cost_points": 1204.9,
+    "profit_factor": 1.662,
+    "mdd_return": 0.46394,
+    "size2_trades": 0
+   },
+   "by_year_netR": {
+    "2022": 0.08043,
+    "2023": 0.20446,
+    "2024": 0.15779,
+    "2025": 0.22603,
+    "2026": 0.16655
+   }
+  },
+  {
+   "K": 13,
+   "r": {
+    "n": 195,
+    "mean_net_R": 0.19007,
+    "sum_net_R": 37.06,
+    "profit_factor": 1.734,
+    "win_rate": 59.49,
+    "mdd_R": 3.52811
+   },
+   "amount": {
+    "n": 195,
+    "sum_net_return": 1.89933,
+    "sum_pnl_points": 18583.3,
+    "sum_cost_points": 1204.9,
+    "profit_factor": 1.662,
+    "mdd_return": 0.46394,
+    "size2_trades": 0
+   },
+   "by_year_netR": {
+    "2022": 0.08043,
+    "2023": 0.20446,
+    "2024": 0.15779,
+    "2025": 0.22603,
+    "2026": 0.16655
+   }
+  }
+ ],
+ "capacity_naive": [
+  {
+   "K": 3,
+   "r": {
+    "n": 1323,
+    "mean_net_R": -0.00185,
+    "sum_net_R": -2.45,
+    "profit_factor": 0.987,
+    "win_rate": 49.13,
+    "mdd_R": 8.03944
+   }
+  },
+  {
+   "K": 5,
+   "r": {
+    "n": 1514,
+    "mean_net_R": -0.00078,
+    "sum_net_R": -1.18,
+    "profit_factor": 0.995,
+    "win_rate": 50.26,
+    "mdd_R": 10.09984
+   }
+  },
+  {
+   "K": 7,
+   "r": {
+    "n": 1451,
+    "mean_net_R": 0.0047,
+    "sum_net_R": 6.81,
+    "profit_factor": 1.028,
+    "win_rate": 50.65,
+    "mdd_R": 8.44216
+   }
+  },
+  {
+   "K": 10,
+   "r": {
+    "n": 1409,
+    "mean_net_R": 0.00235,
+    "sum_net_R": 3.31,
+    "profit_factor": 1.013,
+    "win_rate": 50.32,
+    "mdd_R": 9.47784
+   }
+  },
+  {
+   "K": 13,
+   "r": {
+    "n": 1389,
+    "mean_net_R": 0.00386,
+    "sum_net_R": 5.36,
+    "profit_factor": 1.02,
+    "win_rate": 50.68,
+    "mdd_R": 10.26406
+   }
+  }
+ ],
+ "cost_stress": [
+  {
+   "cost_mult": 1.0,
+   "r": {
+    "n": 195,
+    "mean_net_R": 0.19007,
+    "sum_net_R": 37.06,
+    "profit_factor": 1.734,
+    "win_rate": 59.49,
+    "mdd_R": 3.52811
+   },
+   "amount": {
+    "n": 195,
+    "sum_net_return": 1.89933,
+    "sum_pnl_points": 18583.3,
+    "sum_cost_points": 1204.9,
+    "profit_factor": 1.662,
+    "mdd_return": 0.46394,
+    "size2_trades": 0
+   }
+  },
+  {
+   "cost_mult": 2.0,
+   "r": {
+    "n": 195,
+    "mean_net_R": 0.17551,
+    "sum_net_R": 34.22,
+    "profit_factor": 1.662,
+    "win_rate": 58.46,
+    "mdd_R": 3.60073
+   },
+   "amount": {
+    "n": 195,
+    "sum_net_return": 1.75184,
+    "sum_pnl_points": 18583.3,
+    "sum_cost_points": 2409.9,
+    "profit_factor": 1.597,
+    "mdd_return": 0.47038,
+    "size2_trades": 0
+   }
+  },
+  {
+   "cost_mult": 3.0,
+   "r": {
+    "n": 195,
+    "mean_net_R": 0.16094,
+    "sum_net_R": 31.38,
+    "profit_factor": 1.593,
+    "win_rate": 58.46,
+    "mdd_R": 3.67334
+   },
+   "amount": {
+    "n": 195,
+    "sum_net_return": 1.60434,
+    "sum_pnl_points": 18583.3,
+    "sum_cost_points": 3614.8,
+    "profit_factor": 1.535,
+    "mdd_return": 0.47682,
+    "size2_trades": 0
+   }
+  }
+ ],
+ "sizing": {
+  "flat_size1": {
+   "n": 195,
+   "sum_net_return": 1.89933,
+   "sum_pnl_points": 18583.3,
+   "sum_cost_points": 1204.9,
+   "profit_factor": 1.662,
+   "mdd_return": 0.46394,
+   "size2_trades": 0
+  },
+  "z_gt3_size2": {
+   "n": 195,
+   "sum_net_return": 1.93566,
+   "sum_pnl_points": 18736.4,
+   "sum_cost_points": 1215.1,
+   "profit_factor": 1.659,
+   "mdd_return": 0.46394,
+   "size2_trades": 6
+  }
+ },
+ "by_pair": [
+  {
+   "pair": "AU-AG",
+   "n": 12,
+   "mean_net_R": 0.41693,
+   "sum_net_R": 5.0,
+   "PF": 11.879,
+   "sum_net_return": 0.19511,
+   "sum_pnl_points": 2308.3,
+   "sum_cost_points": 15.3,
+   "cost_over_gross_pct": 0.66
+  },
+  {
+   "pair": "C-CS",
+   "n": 18,
+   "mean_net_R": 0.11544,
+   "sum_net_R": 2.08,
+   "PF": 1.37,
+   "sum_net_return": 0.10519,
+   "sum_pnl_points": 346.0,
+   "sum_cost_points": 40.9,
+   "cost_over_gross_pct": 11.82
+  },
+  {
+   "pair": "CU-ZN",
+   "n": 18,
+   "mean_net_R": 0.21939,
+   "sum_net_R": 3.95,
+   "PF": 1.494,
+   "sum_net_return": 0.13853,
+   "sum_pnl_points": -11595.0,
+   "sum_cost_points": 355.8,
+   "cost_over_gross_pct": 3.07
+  },
+  {
+   "pair": "FG-SA",
+   "n": 14,
+   "mean_net_R": 0.06535,
+   "sum_net_R": 0.91,
+   "PF": 1.249,
+   "sum_net_return": 0.03768,
+   "sum_pnl_points": 12.0,
+   "sum_cost_points": 39.6,
+   "cost_over_gross_pct": 330.0
+  },
+  {
+   "pair": "FU-SC",
+   "n": 15,
+   "mean_net_R": 0.12719,
+   "sum_net_R": 1.91,
+   "PF": 1.494,
+   "sum_net_return": 0.06213,
+   "sum_pnl_points": 886.0,
+   "sum_cost_points": 18.6,
+   "cost_over_gross_pct": 2.1
+  },
+  {
+   "pair": "J-JM",
+   "n": 12,
+   "mean_net_R": 0.15581,
+   "sum_net_R": 1.87,
+   "PF": 1.458,
+   "sum_net_return": 0.29597,
+   "sum_pnl_points": 276.0,
+   "sum_cost_points": 15.5,
+   "cost_over_gross_pct": 5.62
+  },
+  {
+   "pair": "M-RM",
+   "n": 18,
+   "mean_net_R": 0.24937,
+   "sum_net_R": 4.49,
+   "PF": 2.715,
+   "sum_net_return": 0.24413,
+   "sum_pnl_points": 794.0,
+   "sum_cost_points": 41.4,
+   "cost_over_gross_pct": 5.21
+  },
+  {
+   "pair": "NI-SS",
+   "n": 24,
+   "mean_net_R": 0.32845,
+   "sum_net_R": 7.88,
+   "PF": 1.989,
+   "sum_net_return": 0.30349,
+   "sum_pnl_points": 21825.0,
+   "sum_cost_points": 441.9,
+   "cost_over_gross_pct": 2.02
+  },
+  {
+   "pair": "PP-L",
+   "n": 2,
+   "mean_net_R": -0.12171,
+   "sum_net_R": -0.24,
+   "PF": 0.788,
+   "sum_net_return": -0.00068,
+   "sum_pnl_points": 7.0,
+   "sum_cost_points": 4.8,
+   "cost_over_gross_pct": 68.57
+  },
+  {
+   "pair": "RB-HC",
+   "n": 14,
+   "mean_net_R": 0.02958,
+   "sum_net_R": 0.41,
+   "PF": 1.078,
+   "sum_net_return": -0.02499,
+   "sum_pnl_points": -15.0,
+   "sum_cost_points": 38.1,
+   "cost_over_gross_pct": 254.0
+  },
+  {
+   "pair": "SF-SM",
+   "n": 20,
+   "mean_net_R": 0.1092,
+   "sum_net_R": 2.18,
+   "PF": 1.743,
+   "sum_net_return": 0.14021,
+   "sum_pnl_points": 966.0,
+   "sum_cost_points": 104.1,
+   "cost_over_gross_pct": 10.78
+  },
+  {
+   "pair": "TA-MA",
+   "n": 14,
+   "mean_net_R": 0.35806,
+   "sum_net_R": 5.01,
+   "PF": 3.455,
+   "sum_net_return": 0.26257,
+   "sum_pnl_points": 1573.0,
+   "sum_cost_points": 53.9,
+   "cost_over_gross_pct": 3.43
+  },
+  {
+   "pair": "Y-P",
+   "n": 14,
+   "mean_net_R": 0.1145,
+   "sum_net_R": 1.6,
+   "PF": 1.576,
+   "sum_net_return": 0.13998,
+   "sum_pnl_points": 1200.0,
+   "sum_cost_points": 35.0,
+   "cost_over_gross_pct": 2.92
+  }
+ ],
+ "posthoc_drop_thin": {
+  "dropped": [
+   "FG-SA",
+   "PP-L",
+   "RB-HC"
+  ],
+  "n_pairs_kept": 10,
+  "r": {
+   "n": 165,
+   "mean_net_R": 0.21805,
+   "sum_net_R": 35.98,
+   "profit_factor": 1.891,
+   "win_rate": 61.82,
+   "mdd_R": 3.52811
+  },
+  "amount": {
+   "n": 165,
+   "sum_net_return": 1.88732,
+   "sum_pnl_points": 18579.3,
+   "sum_cost_points": 1122.5,
+   "profit_factor": 1.835,
+   "mdd_return": 0.46394,
+   "size2_trades": 0
+  },
+  "note": "事后观察：剔除理由含全样本成本占比，存在选择偏差；仅供下一步「训练期先验剔除 + OOS 验证」，不作本次准入依据"
+ }
+}

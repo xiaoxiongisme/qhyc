@@ -35,12 +35,19 @@ PAIRS = [
 
 def compute_targets(closes: pd.DataFrame, opens=None, window: int = 60,
                     entry_z: float = 2.0, exit_z: float = 0.5,
-                    pairs=None) -> pd.DataFrame:
+                    pairs=None, return_strength: bool = False):
     """pairs=None → 默认 PAIRS（基础 8 对，保持与 §9 准入结论逐位可比）；
-    传入自定义互斥对列表用于扩配对敏感性验证（见 signal_b3_grid.py）。"""
+    传入自定义互斥对列表用于扩配对敏感性验证（见 signal_b3_grid.py）。
+
+    return_strength=True → 额外返回 |z| 强度矩阵（date×symbol，每对两腿同值），
+    供 signal_b3_capacity.py 做「按信号强度选 top-K 对」的容量梯度与加仓分档；
+    默认 False，返回类型与 §9/§10 完全一致（已回归校验逐位不变）。
+    """
     if pairs is None:
         pairs = PAIRS
     targets = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
+    strength = (pd.DataFrame(np.nan, index=closes.index, columns=closes.columns)
+                if return_strength else None)
     active = 0
     for va, vb in pairs:
         sa, sb = va + "888", vb + "888"
@@ -51,6 +58,10 @@ def compute_targets(closes: pd.DataFrame, opens=None, window: int = 60,
         m = ratio.rolling(window, min_periods=max(10, window // 2)).mean()
         sd = ratio.rolling(window, min_periods=max(10, window // 2)).std()
         z = ((ratio - m) / sd).shift(1)  # 无前视
+        if return_strength:
+            az = z.abs().to_numpy()
+            strength.loc[z.index, sa] = az
+            strength.loc[z.index, sb] = az
         state = 0
         for d in z.index:
             zv = z.at[d]
@@ -70,6 +81,8 @@ def compute_targets(closes: pd.DataFrame, opens=None, window: int = 60,
             targets.at[d, sb] = -state
         active += 1
     # 注：PAIRS 已互斥，不会冲突
+    if return_strength:
+        return targets, strength
     return targets
 
 
