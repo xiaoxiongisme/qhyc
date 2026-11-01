@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""通用信号 WF-OOS 回测底座（2026-11-01，研究分支 cb/v2-oos-investigation，未碰 main/cb/dev）。
+"""通用信号 WF-OOS 回测底座（2026-11-02 修订：消除安慰剂置换内循环里的逐笔 DB 成本查询）。
+
+研究分支 cb/v2-oos-investigation，未碰 main/cb/dev。
 
 目的：为「新信号源」候选（B1 截面动量 / B3 配对回归 / …）提供**与 V2 §8 同口径**的
 严格 OOS 评估底座，使每个候选都能直接套用 §6 的准入门槛（净R>0、PF≥1.1、
@@ -11,6 +13,11 @@
     与 fusion 回测同一张表（仅主连 888 可用，故 B1 基差 carry 不适用，改用截面动量）。
   - 成本：app.data.cost 的 cost_coefficients + cost_points_at，按**建仓日**历史费率、
     真实主力合约码（main_contract_at）取真实开平成本点数 —— 与 fusion 逐笔口径一致。
+    ★ 修订点：main_contract_at / cost_coefficients 原来在 simulate 内循环里「逐笔、
+    逐建仓日」查库，置换后（尤其 B3 日频翻仓 rebalance_n=1）开仓数从 ~100 爆到 ~4700/次，
+    单次置换 225s（其中 ~211s 是 DB）。现改为：run_signal_wf 一次性用「每品种一条 roll
+    历史 SQL + bisect」预建 contract_map[(symbol,date)]，并把 cost_coefficients 按
+    (symbol, contract) 缓存进 coef_cache，simulate 内零 DB 调用 —— 成本数值与原口径逐位一致。
   - OOS：walk-forward 测试窗（train720/test60/step60/warmup150, reestimate=False），
     仅收集 entry_date >= te_start 的成交（与 §8 同 OOS 定义，使 2024/2025/2026 子期对齐）。
   - R 口径：逐笔 R = (pnl_points - cost_points) / risk_points，risk = sl_mult × 日线 ATR。
@@ -23,7 +30,7 @@
 （不跨窗持仓，保证 OOS 自洽）。无 intra-trade 止损（R 仅作风险归一分母）。
 
 用法（被 signal_b1_*.py / signal_b3_*.py 调用）：
-  from signal_oos_backtest import run_signal_wf, load_market, compute_targets_dummy
+  from signal_oos_backtest import run_signal_wf
 """
 from __future__ import annotations
 
@@ -36,6 +43,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from bisect import bisect_right
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -95,7 +103,6 @@ def load_market(session, symbols: list[str], start: date, end: date):
         closes[sym] = daily["close"]
         highs[sym] = daily["high"]
         lows[sym] = daily["low"]
-    # 统一 index 为 date 类型（去 tz），便于按 te_s/te_e 切片
     for f in (opens, closes, highs, lows):
         f.index = f.index.date
     return opens, closes, highs, lows
@@ -113,6 +120,43 @@ def daily_atr(highs: pd.DataFrame, lows: pd.DataFrame, closes: pd.DataFrame,
                          (l - prev_c).abs()], axis=1).max(axis=1)
         tr[sym] = rng.rolling(n, min_periods=max(5, n // 2)).mean()
     return tr
+
+
+# ------------------------------------------------------------------- 成本面预计算
+def main_contract_surface(session, symbols: list[str], dates) -> dict:
+    """一次性预建 contract_map[(symbol, date)] -> 主力合约码 | None。
+
+    原来 simulate 内循环对每个开仓日调 main_contract_at(variety, date) —— 逐 (品种,日期)
+    一条 SQL，置换后开仓数爆增导致每置换 200s+。本函数改为：**每个品种只发一条** roll 历史
+    SQL（main_contract_map 全表按品种），再对每个目标日 bisect 取「<= d 的最近一条」。
+    结果与 main_contract_at 逐位一致（同一张表、同一 latest<=d 语义），但 DB 调用从
+    O(开仓数×置换数) 降到 O(品种数)。
+    """
+    roll_hist: dict[str, list] = {}   # variety -> [(trade_date, contract), ...] 升序
+    for sym in symbols:
+        v = _variety(sym)
+        if v in roll_hist:
+            continue
+        rows = session.execute(text(
+            "SELECT trade_date, COALESCE(underlying, main_symbol) FROM main_contract_map "
+            "WHERE upper(product) = :v ORDER BY trade_date"
+        ), {"v": v}).all()
+        hist = []
+        for r in rows:
+            td = r[0].date() if isinstance(r[0], datetime) else r[0]
+            hist.append((td, r[1]))
+        hist.sort(key=lambda x: x[0])
+        roll_hist[v] = hist
+    surface: dict = {}
+    for sym in symbols:
+        v = _variety(sym)
+        hist = roll_hist[v]
+        tds = [h[0] for h in hist]
+        for d in dates:
+            dd = d.date() if isinstance(d, datetime) else d
+            j = bisect_right(tds, dd) - 1
+            surface[(sym, d)] = hist[j][1] if j >= 0 else None
+    return surface
 
 
 # ------------------------------------------------------------------- 指标
@@ -141,67 +185,86 @@ def seg_stats(rows: list[dict]) -> dict:
 # ------------------------------------------------------------------- 模拟
 def simulate(targets: pd.DataFrame, opens: pd.DataFrame, closes: pd.DataFrame,
              atr: pd.DataFrame, rebalance_n: int = REBALANCE_N,
-             sl_mult: float = SL_MULT) -> list[dict]:
-    """open-to-open 模拟。targets 已用 ≤t-1 数据计算（外部 shift），本函数只在 rebalance
-    日按 target 调仓，窗口结束强制平仓（不跨窗）。返回逐笔成交（含 R 口径）。
-
+             sl_mult: float = SL_MULT, contract_map: dict | None = None,
+             coef_cache: dict | None = None) -> list[dict]:
+    """open-to-open 模拟（numpy 位置索引版）。targets 已用 <=t-1 数据
+    计算（外部 shift），本函数只在 rebalance 日按 target 调仓，窗口结束强制平仓（不跨窗）。
     targets: date×symbol ∈ {-1,0,1}；opens/closes/atr: date×symbol。
+
+    contract_map / coef_cache：由 run_signal_wf 预建的成本面，使内循环零 DB 调用；
+    传 None 时回退到原「逐开仓日查库」路径（用于离线单步调试）。
     """
-    dates = list(targets.index)
     syms = list(targets.columns)
+    ncol = len(syms)
+    idx = targets.index
+    nrow = len(idx)
+    dates = np.array([d for d in idx], dtype=object)
+    T = np.asarray(targets.to_numpy(), dtype=float)
+    O = np.asarray(opens.reindex(idx).to_numpy(), dtype=float)
+    A = np.asarray(atr.reindex(idx).to_numpy(), dtype=float)
     trades: list[dict] = []
-    # 全局 rebalance 标尺：从数据起点起每 rebalance_n 个交易日一次
-    # 用日期位置做模，保证各窗一致
-    pos = {s: 0 for s in syms}
-    entry = {}
-    for i, d in enumerate(dates):
+    pos = [0] * ncol
+    e_px = [0.0] * ncol
+    e_atr = [0.0] * ncol
+    e_cost = [0.0] * ncol
+    e_i = [-1] * ncol
+    for i in range(nrow):
         is_rebal = (i % rebalance_n == 0)
-        is_last = (i == len(dates) - 1)
-        for s in syms:
-            tgt = targets.at[d, s]
-            if pd.isna(tgt):
-                tgt = 0
-            else:
-                tgt = int(round(tgt))
+        is_last = (i == nrow - 1)
+        di = dates[i]
+        for s in range(ncol):
+            tgt_v = T[i, s]
+            tgt = 0 if (tgt_v != tgt_v) else int(round(tgt_v))  # NaN 判否
             cur = pos[s]
-            op = opens.at[d, s] if d in opens.index else np.nan
-            # 强制平仓（窗口末或信号变 0/反向）
+            o = O[i, s]
+            o_nan = (o != o)
+            # 强制平仓（窗口末或信号变 0/反向）：无论当日 open 是否缺失都重置仓位，
+            # 仅 open 有效时记成交（避免旧仓位滞留导致漏记/错记）
             if cur != 0 and (is_last or is_rebal) and tgt != cur:
-                if not pd.isna(op) and s in entry:
-                    e = entry[s]
+                if (not o_nan) and e_i[s] >= 0:
                     dirn = 1.0 if cur == 1 else -1.0
-                    pnl = dirn * (op - e["px"])
-                    risk = sl_mult * e["atr"]
-                    if risk and np.isfinite(risk) and risk > 0:
-                        cost_pts = e["cost_pts"]
+                    pnl = dirn * (o - e_px[s])
+                    risk = sl_mult * e_atr[s]
+                    if risk > 0:
+                        cost_pts = e_cost[s]
                         net = pnl - cost_pts
-                        R = net / risk
                         trades.append({
-                            "symbol": s, "side": "LONG" if cur == 1 else "SHORT",
-                            "entry_dt": e["dt"], "exit_dt": d,
-                            "entry_px": e["px"], "exit_px": op,
+                            "symbol": syms[s],
+                            "side": "LONG" if cur == 1 else "SHORT",
+                            "entry_dt": dates[e_i[s]], "exit_dt": dates[i],
+                            "entry_px": e_px[s], "exit_px": o,
                             "pnl": pnl, "cost_pts": cost_pts, "risk": risk,
-                            "gross": pnl / risk, "cost": cost_pts / risk, "net": R,
-                            "holding_days": (d - e["dt"]).days,
+                            "gross": pnl / risk, "cost": cost_pts / risk,
+                            "net": net / risk,
+                            "holding_days": (dates[i] - dates[e_i[s]]).days,
                         })
-                    pos[s] = 0
-                    entry.pop(s, None)
+                pos[s] = 0
+                e_i[s] = -1
             # 开仓（rebalance 日且 target 非零且与当前不同；避免末日开仓）
             if tgt != 0 and tgt != cur and is_rebal and not is_last:
-                o = opens.at[d, s] if d in opens.index else np.nan
-                a = atr.at[d, s] if d in atr.index else np.nan
-                if pd.isna(o) or pd.isna(a) or not np.isfinite(a) or a <= 0:
-                    continue
-                # 真实成本（建仓日历史费率 + 真实主力合约码）
-                try:
-                    ctr = main_contract_at(_variety(s), d)
-                    coef = cost_coefficients(s, contract=ctr,
-                                            close_action="CLOSE_YEST", on_date=d)
-                    cost_pts = cost_points_at(coef, o)
-                except Exception:
-                    cost_pts = 0.0
-                pos[s] = tgt
-                entry[s] = {"px": o, "atr": a, "dt": d, "cost_pts": cost_pts}
+                a = A[i, s]
+                if (not o_nan) and (a == a) and a > 0:
+                    if contract_map is None:
+                        ctr = main_contract_at(_variety(syms[s]), di)
+                    else:
+                        ctr = contract_map.get((syms[s], di))
+                    key = (syms[s], ctr)
+                    coef = coef_cache.get(key) if coef_cache is not None else None
+                    if coef is None:
+                        try:
+                            coef = cost_coefficients(syms[s], contract=ctr,
+                                                    close_action="CLOSE_YEST",
+                                                    on_date=di)
+                        except Exception:
+                            coef = None
+                        if coef_cache is not None and coef is not None:
+                            coef_cache[key] = coef
+                    cp = cost_points_at(coef, o) if coef is not None else 0.0
+                    pos[s] = tgt
+                    e_px[s] = o
+                    e_atr[s] = a
+                    e_cost[s] = cp
+                    e_i[s] = i
     return trades
 
 
@@ -210,27 +273,47 @@ def permute_targets(targets: pd.DataFrame, rng: np.random.Generator) -> pd.DataF
     """标签置换安慰剂：每个 rebalance 日，保持「多头数/空头数」不变，但随机重选品种。
     破坏信号的选择性，同时保留暴露数量结构 —— 与 §8.8 的「随机同结构子集」逻辑一致。"""
     out = targets.copy()
+    cols = list(targets.columns)
+    ncol = len(cols)
     for d in targets.index:
-        row = targets.loc[d].values.astype(float)
+        row = targets.loc[d].to_numpy(dtype=float)
         longs = [j for j, v in enumerate(row) if v > 0]
         shorts = [j for j, v in enumerate(row) if v < 0]
         nL, nS = len(longs), len(shorts)
         if nL == 0 and nS == 0:
             continue
-        ncol = len(row)
-        # 随机不放回选 nL 个多头、nS 个空头（从全部列中）
         perm = rng.permutation(ncol)
         new = np.zeros(ncol, dtype=float)
         if nL:
             new[perm[:nL]] = 1.0
         if nS:
             new[perm[nL:nL + nS]] = -1.0
-        out.loc[d] = new
+        out.loc[d, cols] = new
     return out
 
 
+def simulate_windows(targets, opens, closes, atr, wfp, start, end,
+                     rebalance_n, sl_mult, contract_map=None,
+                     coef_cache=None) -> list[dict]:
+    """与 actual 一致的窗口模拟：逐 WF 窗切片（含 warmup 历史），只收 entry>=te_s 成交。"""
+    all_trades: list[dict] = []
+    for tr_s, tr_e, te_s, te_e in _windows(start, end, wfp):
+        mask = ((targets.index >= (te_s - timedelta(days=wfp.warmup_days))) &
+                (targets.index <= te_e))
+        if not mask.any():
+            continue
+        tr = simulate(targets[mask], opens[mask], closes[mask], atr[mask],
+                     rebalance_n, sl_mult, contract_map=contract_map,
+                     coef_cache=coef_cache)
+        for t in tr:
+            if _dt(t["entry_dt"]) is not None and _dt(t["entry_dt"]).date() >= te_s:
+                all_trades.append(t)
+    return all_trades
+
+
 def placebo_agg(targets, opens, closes, atr, wfp, start, end, rebalance_n,
-                sl_mult, actual_agg, n_perm=300, seed=20261101):
+                sl_mult, actual_agg, n_perm=300, seed=20261101,
+                contract_map=None, coef_cache=None):
     """标签置换安慰剂：与 actual 用**完全相同的窗口模拟逻辑**（simulate_windows），
     仅把每 rebalance 日的多/空品种随机重选（保持暴露数量），破坏信号选择性。
     pl_ge% = 置换后 agg_net >= 实际 agg_net 的比例（越低越真）。"""
@@ -240,7 +323,8 @@ def placebo_agg(targets, opens, closes, atr, wfp, start, end, rebalance_n,
     for _ in range(n_perm):
         pt = permute_targets(targets, rng)
         tr = simulate_windows(pt, opens, closes, atr, wfp, start, end,
-                              rebalance_n, sl_mult)
+                              rebalance_n, sl_mult, contract_map=contract_map,
+                              coef_cache=coef_cache)
         s = seg_stats(tr)
         if s.get("n", 0) == 0:
             continue
@@ -250,28 +334,12 @@ def placebo_agg(targets, opens, closes, atr, wfp, start, end, rebalance_n,
     return round(ge / counted * 100, 1) if counted else float("nan")
 
 
-def simulate_windows(targets, opens, closes, atr, wfp, start, end,
-                     rebalance_n, sl_mult) -> list[dict]:
-    """与 actual 一致的窗口模拟：逐 WF 窗切片（含 warmup 历史），只收 entry>=te_s 成交。"""
-    all_trades: list[dict] = []
-    for tr_s, tr_e, te_s, te_e in _windows(start, end, wfp):
-        mask = ((targets.index >= (te_s - timedelta(days=wfp.warmup_days))) &
-                (targets.index <= te_e))
-        if not mask.any():
-            continue
-        tr = simulate(targets[mask], opens[mask], closes[mask], atr[mask],
-                     rebalance_n, sl_mult)
-        for t in tr:
-            if _dt(t["entry_dt"]) is not None and _dt(t["entry_dt"]).date() >= te_s:
-                all_trades.append(t)
-    return all_trades
-
-
 # ------------------------------------------------------------------- 编排
 def run_signal_wf(signal_fn, signal_name: str, symbols: list[str],
                   start: date, end: date, rebalance_n: int = REBALANCE_N,
                   sl_mult: float = SL_MULT, out: str | None = None,
-                  do_placebo: bool = True, **sig_kwargs) -> dict:
+                  do_placebo: bool = True, n_perm: int = 300,
+                  **sig_kwargs) -> dict:
     """端到端：加载行情 → 计算 targets（全历史一次）→ 逐 WF 窗模拟 → 聚合 + 安慰剂。"""
     settings = get_settings()
     engine = create_engine(settings.db_url, pool_size=4, max_overflow=8)
@@ -280,16 +348,19 @@ def run_signal_wf(signal_fn, signal_name: str, symbols: list[str],
     data_start = start - timedelta(days=400)
     opens, closes, highs, lows = load_market(session, symbols, data_start, end)
     atr = daily_atr(highs, lows, closes)
+    # 预建主力合约面（每品种一条 roll SQL），使 simulate 内循环零 DB 调用
+    contract_map = main_contract_surface(session, symbols, list(opens.index))
+    coef_cache: dict = {}
     session.close(); engine.dispose()
 
-    # 信号（全历史，内部自管前视 shift）
     targets = signal_fn(closes, opens=opens, **sig_kwargs)
     targets = targets.reindex(index=opens.index, columns=symbols).fillna(0.0)
 
     wfp = WalkForwardParams(train_days=720, test_days=60, step_days=60,
                             warmup_days=150, reestimate=False)
     all_trades = simulate_windows(targets, opens, closes, atr, wfp, start, end,
-                                  rebalance_n, sl_mult)
+                                  rebalance_n, sl_mult, contract_map=contract_map,
+                                  coef_cache=coef_cache)
     n_windows = len(list(_windows(start, end, wfp)))
 
     rows = all_trades
@@ -299,7 +370,6 @@ def run_signal_wf(signal_fn, signal_name: str, symbols: list[str],
         by_year[_dt(r["entry_dt"]).year].append(r)
     by_year_stats = {str(y): seg_stats(v) for y, v in sorted(by_year.items())}
 
-    # 暴露（平均同时在场手数 / 占总可能）
     exposure = round(len(rows) / max(1, n_windows) / max(1, len(symbols)), 3)
 
     report = {
@@ -313,13 +383,14 @@ def run_signal_wf(signal_fn, signal_name: str, symbols: list[str],
         "exposure_avg_open_per_window_per_symbol": exposure,
         "n_trades": len(rows),
     }
-    # 安慰剂（与 actual 同窗口逻辑，300 次置换）
     if rows and do_placebo:
         actual_agg = overall["sum_net_R"]
         report["placebo"] = {
             "rand_same_structure_ge_actual_pct": placebo_agg(
                 targets, opens, closes, atr, wfp, start, end, rebalance_n,
-                sl_mult, actual_agg),
+                sl_mult, actual_agg, n_perm=n_perm,
+                contract_map=contract_map, coef_cache=coef_cache),
+            "n_perm": n_perm,
         }
     if out:
         Path(out).write_text(json.dumps(report, ensure_ascii=False, indent=1, default=str),
@@ -338,9 +409,10 @@ def print_report(report: dict):
         print(f"  {y}: n={st.get('n')} 净R={st.get('mean_net_R')} PF={st.get('profit_factor')} "
               f"胜率={st.get('win_rate')}%")
     if "placebo" in report:
-        print(f"  安慰剂 rand_ge_actual% = {report['placebo']['rand_same_structure_ge_actual_pct']}")
+        p = report["placebo"]
+        print(f"  安慰剂 rand_ge_actual% = {p['rand_same_structure_ge_actual_pct']} "
+              f"(n_perm={p.get('n_perm')})")
 
 
 if __name__ == "__main__":
-    # 独立运行示例：需由调用方传入 signal_fn；此处仅打印用法
     print("此模块为底座库，由 signal_b1_momentum.py / signal_b3_pairs.py 调用。")

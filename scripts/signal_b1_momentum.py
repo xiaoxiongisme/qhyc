@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--q", type=float, default=0.2)
     ap.add_argument("--rebalance-n", type=int, default=21)
     ap.add_argument("--no-placebo", dest="do_placebo", action="store_false")
+    ap.add_argument("--n-perm", type=int, default=300)
     ap.add_argument("--out", default="/tmp/b1_momentum.json")
     args = ap.parse_args()
 
@@ -65,7 +66,7 @@ def main():
                            date.fromisoformat(args.start),
                            date.fromisoformat(args.end),
                            rebalance_n=args.rebalance_n, out=args.out,
-                           do_placebo=args.do_placebo,
+                           do_placebo=args.do_placebo, n_perm=args.n_perm,
                            lookback=args.lookback, q=args.q)
     print_report(report)
 

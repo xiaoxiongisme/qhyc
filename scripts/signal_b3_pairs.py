@@ -77,6 +77,7 @@ def main():
     ap.add_argument("--exit-z", type=float, default=0.5)
     ap.add_argument("--rebalance-n", type=int, default=1)
     ap.add_argument("--no-placebo", dest="do_placebo", action="store_false")
+    ap.add_argument("--n-perm", type=int, default=300)
     ap.add_argument("--out", default="/tmp/b3_pairs.json")
     args = ap.parse_args()
 
@@ -92,7 +93,7 @@ def main():
                            date.fromisoformat(args.start),
                            date.fromisoformat(args.end),
                            rebalance_n=args.rebalance_n, out=args.out,
-                           do_placebo=args.do_placebo,
+                           do_placebo=args.do_placebo, n_perm=args.n_perm,
                            window=args.window, entry_z=args.entry_z,
                            exit_z=args.exit_z)
     print_report(report)

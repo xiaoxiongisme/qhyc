@@ -1,0 +1,74 @@
+{
+ "signal": "B1_cross_sectional_momentum",
+ "meta": {
+  "symbols": 50,
+  "n_windows": 23,
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "rebalance_n": 21,
+  "sl_mult": 3.0,
+  "bars_per_day": 6.7
+ },
+ "overall": {
+  "n": 214,
+  "win_rate": 35.05,
+  "mean_gross_R": -0.27739,
+  "mean_cost_R": 0.01371,
+  "mean_net_R": -0.2911,
+  "sum_net_R": -62.3,
+  "profit_factor": 0.482
+ },
+ "by_year": {
+  "2022": {
+   "n": 15,
+   "win_rate": 73.33,
+   "mean_gross_R": 0.17705,
+   "mean_cost_R": 0.01021,
+   "mean_net_R": 0.16684,
+   "sum_net_R": 2.5,
+   "profit_factor": 1.565
+  },
+  "2023": {
+   "n": 41,
+   "win_rate": 46.34,
+   "mean_gross_R": -0.19286,
+   "mean_cost_R": 0.01216,
+   "mean_net_R": -0.20502,
+   "sum_net_R": -8.4,
+   "profit_factor": 0.551
+  },
+  "2024": {
+   "n": 77,
+   "win_rate": 29.87,
+   "mean_gross_R": -0.33444,
+   "mean_cost_R": 0.01309,
+   "mean_net_R": -0.34753,
+   "sum_net_R": -26.8,
+   "profit_factor": 0.431
+  },
+  "2025": {
+   "n": 63,
+   "win_rate": 28.57,
+   "mean_gross_R": -0.29571,
+   "mean_cost_R": 0.01538,
+   "mean_net_R": -0.31109,
+   "sum_net_R": -19.6,
+   "profit_factor": 0.482
+  },
+  "2026": {
+   "n": 18,
+   "win_rate": 22.22,
+   "mean_gross_R": -0.54048,
+   "mean_cost_R": 0.01692,
+   "mean_net_R": -0.5574,
+   "sum_net_R": -10.0,
+   "profit_factor": 0.182
+  }
+ },
+ "exposure_avg_open_per_window_per_symbol": 0.186,
+ "n_trades": 214,
+ "placebo": {
+  "rand_same_structure_ge_actual_pct": 99.0,
+  "n_perm": 100
+ }
+}
