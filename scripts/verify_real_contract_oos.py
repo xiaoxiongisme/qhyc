@@ -60,13 +60,19 @@ EX_MAP = {
 
 
 def _to_ts(d):
-    if isinstance(d, pd.Timestamp):
-        return d
+    # 返回 tz-naive python datetime（日线以 15:00 代表收盘）。
+    # 必须用 python datetime 而非 pd.Timestamp/datetime64：
+    # _simulate_trades 内部把 dt 喂给成本查库 SQL，numpy datetime64 无法被 psycopg 适配。
     if isinstance(d, datetime):
-        return pd.Timestamp(d)
+        return d.replace(tzinfo=None)
+    if isinstance(d, pd.Timestamp):
+        return (d.tz_localize(None).to_pydatetime() if d.tzinfo
+                else d.to_pydatetime())
     if isinstance(d, date):
-        return pd.Timestamp(d)
-    return pd.Timestamp(str(d))
+        return datetime(d.year, d.month, d.day, 15, 0, 0)
+    if isinstance(d, np.datetime64):
+        return pd.Timestamp(d).tz_localize(None).to_pydatetime()
+    return pd.Timestamp(str(d)).tz_localize(None).to_pydatetime()
 
 
 # --------------------------------------------------------------------------
