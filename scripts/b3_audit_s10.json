@@ -1,0 +1,277 @@
+{
+ "meta": {
+  "purpose": "十期前置：对 §21–§29 及九期答复的全链路复核审计（结论级纠错）",
+  "generated_at": "2026-11-02T19:21:06",
+  "method": "原始证据 JSON 逐位复算 + 数据库只读探针；不改任何生产表",
+  "verdict_levels": [
+   "verified",
+   "fixed",
+   "withdrawn"
+  ]
+ },
+ "verified": {
+  "V0_anchor": {
+   "expected": [
+    1.4968,
+    0.32031,
+    0,
+    1.1846,
+    0.34234
+   ],
+   "got": [
+    1.4968,
+    0.32031,
+    0,
+    1.1846,
+    0.34234
+   ]
+  },
+  "V1_equivalence": {
+   "lots_n_mismatch": 0,
+   "n_compared": 190,
+   "nav_rel_err": 0.0
+  },
+  "V3_prereg_recalibrated": {
+   "0.04": [
+    1.0221,
+    0.38621
+   ],
+   "0.10": [
+    2.1192,
+    0.16063
+   ],
+   "0.06": [
+    1.3501,
+    0.28803
+   ],
+   "note": "与 b3_prereg_frac.json 八期 OOS 逐位相同"
+  },
+  "total_net_amount_notional": 1899328.69,
+  "prereg_no_hit_005": [
+   0.04,
+   0.1,
+   0.1,
+   0.06
+  ],
+  "power": {
+   "n_required": 177,
+   "n_shortfall": 39,
+   "years_more": 1.2
+  },
+  "night_cost": {
+   "sum_delta_R": -3.72084,
+   "total_net_R": 38.5968,
+   "pct": -9.64,
+   "threshold_R": -9.5
+  },
+  "margin_cells_frac002": {
+   "C0_close_static": [
+    1.8156,
+    0.25384,
+    0
+   ],
+   "C1_settle_static": [
+    1.8008,
+    0.20852,
+    0
+   ],
+   "C2_settle_dynamic": [
+    1.8008,
+    0.20852,
+    12
+   ],
+   "C3_combo06": [
+    1.8008,
+    0.20852,
+    0
+   ],
+   "C4_enforce": [
+    1.7767,
+    0.24507,
+    7
+   ],
+   "C5_combo06_enforce": [
+    1.8008,
+    0.20852,
+    0
+   ]
+  },
+  "futures_rule": {
+   "rows": 121708,
+   "distinct_code": 162,
+   "distinct_variety": 163,
+   "span": [
+    "2023-01-03",
+    "2026-11-02"
+   ],
+   "margin_ratio_max": 100.0,
+   "margin_ratio_min": 0.8,
+   "has_effective_date": false,
+   "unit": "percent"
+  }
+ },
+ "fixed": {
+  "M1_code_count": {
+   "said": 163,
+   "actual_code": 162,
+   "actual_variety": 163
+  },
+  "M2_missing_days": {
+   "said": [
+    331,
+    330
+   ],
+   "reproducible": {
+    "window": [
+     "2021-01-01",
+     "2026-11-02"
+    ],
+    "n_missing": 252,
+    "n_saturday": 251,
+    "n_nonweekend": 1,
+    "nonweekend": [
+     "2026-11-02"
+    ]
+   },
+   "conclusion_unchanged": true
+  },
+  "M3_coverage": {
+   "said_pct": 99.95,
+   "actual_gap_days": 58,
+   "gap_span": [
+    "2026-06-15",
+    "2026-09-03"
+   ],
+   "gap_share_of_2026": 0.293,
+   "bar_5m_15m_30m_coverage_of_gap": 0
+  },
+  "R2_exposure": {
+   "entry_days_pct": 5.74,
+   "holding_days_pct": 45.57,
+   "mean_margin_utilization_pct": {
+    "risk": 11.28,
+    "notional": 16.2,
+    "futures_rule": 13.62,
+    "broker": 15.81
+   },
+   "note": "把时间占比误当资金占用；真实占用 11–16%"
+  }
+ },
+ "withdrawn": {
+  "R1_complete_trading_day": {
+   "claim": "2026-11-02 缺 15:00 收盘 bar → 完整交易日不成立；收盘 bar 落盘时滞 ≥4h",
+   "status": "撤回",
+   "evidence": {
+    "label_switch_date": "2026-11-02",
+    "old_labels": [
+     "10:00",
+     "11:15",
+     "14:15",
+     "15:00",
+     "22:00",
+     "23:00"
+    ],
+    "new_labels": [
+     "09:00",
+     "10:00",
+     "11:00",
+     "13:00",
+     "14:00"
+    ],
+    "hour9_hour13_rows_total": 100,
+    "bar5m_last_bucket_11_02": "14:55",
+    "rb_volume_11_02": [
+     79574,
+     49187,
+     19190,
+     87145,
+     120752
+    ],
+    "rb_volume_2026_10_30": [
+     88232,
+     56572,
+     57166,
+     136232
+    ]
+   },
+   "side_risk": "实时链路若沿用旧口径会把 09:00 bucket 当决策时点 → 1 小时前视"
+  },
+  "R3_control_variable": {
+   "claim": "控制变量证明 MDD 改善非日历变短效应",
+   "status": "撤回（控制变量对 MDD 恒等，证明力 0）",
+   "reason": "equity_curve 仅平仓日记盈亏，插入零收益日不改变 cumsum，mdd 必然相同",
+   "real_driver": "成交集变化：raw 195 腿 → weekend_drop 190 腿；2026 年 28 → 32 笔"
+  },
+  "R4_2026_year_effect": {
+   "claim": "2026 全 frac 档全亏 = 年份效应、与参数无关",
+   "status": "撤回（主因 1 手地板）",
+   "frac": 0.01667,
+   "sum_net_R_2026": 3.5253,
+   "continuous_model_2026": 1.0576,
+   "discrete_reset_2026": 0.8397,
+   "discrete_slice_2026": 0.9838,
+   "one_lot_risk_pct_of_equity": {
+    "SC_2026_04_08": 20.35,
+    "SC_2026_03_10": 13.19,
+    "SC_2026_04_30": 10.14,
+    "SC_2026_09_07": 9.78,
+    "target": 1.667
+   },
+   "n_2026_over_2x": 6,
+   "n_2026_over_5x": 4,
+   "n_total_over_2x": 13
+  },
+  "R5_mdd_definitions": {
+   "A_realized_cumreturn_points": {
+    "impl": "signal_b3_equity.equity_curve",
+    "mdd_2026": 0.10284
+   },
+   "B_mtm_over_e0": {
+    "impl": "simulate_fx / slice_stats",
+    "mdd_2026_frac002": 0.3534
+   },
+   "C_mtm_relative_peak": {
+    "impl": "frac_power:B_bootstrap"
+   },
+   "rule": "对外只报 B；A 仅用于信号质量"
+  }
+ },
+ "granularity_counterfactual": {
+  "label": "反事实机制举证，非可执行规则（按腿过滤会破坏配对）",
+  "rows": [
+   {
+    "k": null,
+    "n_kept": 190,
+    "full_nav": 1.4968,
+    "full_mdd": 0.32031,
+    "y2026_nav": 0.9838,
+    "y2026_mdd": 0.32031
+   },
+   {
+    "k": 5,
+    "n_kept": 186,
+    "full_nav": 1.7373,
+    "full_mdd": 0.06116,
+    "y2026_nav": 1.1419,
+    "y2026_mdd": 0.02691
+   },
+   {
+    "k": 3,
+    "n_kept": 183,
+    "full_nav": 1.8626,
+    "full_mdd": 0.05955,
+    "y2026_nav": 1.165,
+    "y2026_mdd": 0.02691
+   },
+   {
+    "k": 2,
+    "n_kept": 177,
+    "full_nav": 1.992,
+    "full_mdd": 0.04536,
+    "y2026_nav": 1.1218,
+    "y2026_mdd": 0.03058
+   }
+  ],
+  "finding": "4 笔 SC 成交贡献全期 MDD 的 81%（0.3203→0.0612）"
+ }
+}
