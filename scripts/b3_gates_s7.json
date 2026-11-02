@@ -1,0 +1,335 @@
+{
+  "meta": {
+    "start": "2021-01-01",
+    "end": "2026-10-30",
+    "pair_set": "base+ext",
+    "n_pairs": 13,
+    "window": 60,
+    "entry_z": 2.0,
+    "exit_z": 0.5,
+    "rebalance_n": 1,
+    "sl_mult": 3.0,
+    "modes": [
+      "raw",
+      "weekend_drop",
+      "session_map"
+    ],
+    "n_perm": 100,
+    "seed": 20261101,
+    "v2_json": "/tmp/alpha_regime_oos.json",
+    "purpose": "七期 P0：修后口径完整重跑 §6 五门槛（补 §26.2 诚实边界）",
+    "caveats": [
+      "安慰剂与 §9/§10 用同一 placebo_agg 函数、同 n_perm/seed，逐位可比",
+      "相关性 V2 净R字段用 'R'（V2 60m sl_atr=1.0 口径），B3 用 'net'；量纲不同不影响 Pearson",
+      "相关性多基准并排(union/b3_calendar/overlap)，稀疏样本下结论为方向性，置信度中等",
+      "门槛⑤阈值沿用项目惯例 |Pearson|<0.30（admit_factors.py --corr-max 默认）；门槛④ >10% 即不显著",
+      "session_map 改变了 open 语义(夜盘21:00)，其漂亮数字不作生产预期"
+    ]
+  },
+  "data_boundary": {
+    "max_bucket": "2026-11-02 10:00:00+08:00",
+    "after_2026_10_30": {
+      "n_bars": 141,
+      "n_distinct_days": 2,
+      "n_symbols": 50,
+      "min_bucket": "2026-10-31 00:00:00+08:00",
+      "max_bucket": "2026-11-02 10:00:00+08:00"
+    }
+  },
+  "modes": {
+    "raw": {
+      "n_trades": 195,
+      "n_calendar_days": 1602,
+      "overall": {
+        "n": 195,
+        "win_rate": 59.49,
+        "mean_gross_R": 0.20464,
+        "mean_cost_R": 0.01457,
+        "mean_net_R": 0.19007,
+        "sum_net_R": 37.1,
+        "profit_factor": 1.734
+      },
+      "by_year": {
+        "2022": {
+          "n": 4,
+          "win_rate": 50.0,
+          "mean_gross_R": 0.09274,
+          "mean_cost_R": 0.0123,
+          "mean_net_R": 0.08043,
+          "sum_net_R": 0.3,
+          "profit_factor": 1.322
+        },
+        "2023": {
+          "n": 50,
+          "win_rate": 62.0,
+          "mean_gross_R": 0.21767,
+          "mean_cost_R": 0.01321,
+          "mean_net_R": 0.20446,
+          "sum_net_R": 10.2,
+          "profit_factor": 1.725
+        },
+        "2024": {
+          "n": 54,
+          "win_rate": 55.56,
+          "mean_gross_R": 0.17335,
+          "mean_cost_R": 0.01556,
+          "mean_net_R": 0.15779,
+          "sum_net_R": 8.5,
+          "profit_factor": 1.679
+        },
+        "2025": {
+          "n": 59,
+          "win_rate": 64.41,
+          "mean_gross_R": 0.24258,
+          "mean_cost_R": 0.01654,
+          "mean_net_R": 0.22603,
+          "sum_net_R": 13.3,
+          "profit_factor": 2.001
+        },
+        "2026": {
+          "n": 28,
+          "win_rate": 53.57,
+          "mean_gross_R": 0.17779,
+          "mean_cost_R": 0.01124,
+          "mean_net_R": 0.16655,
+          "sum_net_R": 4.7,
+          "profit_factor": 1.488
+        }
+      },
+      "placebo": {
+        "rand_ge_actual_pct": 0.0,
+        "n_perm": 100,
+        "seed": 20261101
+      },
+      "corr_v2": {
+        "basis_union": {
+          "n_days": 897,
+          "pearson": -0.0158,
+          "spearman": -0.0015,
+          "n_b3_active": 92,
+          "n_v2_active": 886,
+          "n_overlap_active": 84
+        },
+        "basis_b3_calendar": {
+          "n_days": 1602,
+          "pearson": -0.021,
+          "spearman": -0.0268,
+          "n_b3_active": 92,
+          "n_v2_active": 886,
+          "n_overlap_active": 84
+        },
+        "basis_overlap_only": {
+          "n_days": 84,
+          "pearson": -0.095,
+          "spearman": -0.013
+        }
+      },
+      "gates": {
+        "1_net_R_positive": true,
+        "2_PF_ge_1_1": true,
+        "3_no_year_crash_2024_2026": true,
+        "4_placebo_lt_10pct": true,
+        "5_low_corr_with_V2": true
+      },
+      "gates_all_pass": true
+    },
+    "weekend_drop": {
+      "n_trades": 190,
+      "n_calendar_days": 1352,
+      "overall": {
+        "n": 190,
+        "win_rate": 58.42,
+        "mean_gross_R": 0.21724,
+        "mean_cost_R": 0.0141,
+        "mean_net_R": 0.20314,
+        "sum_net_R": 38.6,
+        "profit_factor": 1.857
+      },
+      "by_year": {
+        "2022": {
+          "n": 4,
+          "win_rate": 50.0,
+          "mean_gross_R": 0.16367,
+          "mean_cost_R": 0.01195,
+          "mean_net_R": 0.15172,
+          "sum_net_R": 0.6,
+          "profit_factor": 1.749
+        },
+        "2023": {
+          "n": 48,
+          "win_rate": 62.5,
+          "mean_gross_R": 0.27667,
+          "mean_cost_R": 0.0122,
+          "mean_net_R": 0.26447,
+          "sum_net_R": 12.7,
+          "profit_factor": 2.235
+        },
+        "2024": {
+          "n": 58,
+          "win_rate": 60.34,
+          "mean_gross_R": 0.22363,
+          "mean_cost_R": 0.01551,
+          "mean_net_R": 0.20812,
+          "sum_net_R": 12.1,
+          "profit_factor": 1.936
+        },
+        "2025": {
+          "n": 48,
+          "win_rate": 58.33,
+          "mean_gross_R": 0.21853,
+          "mean_cost_R": 0.01646,
+          "mean_net_R": 0.20207,
+          "sum_net_R": 9.7,
+          "profit_factor": 1.797
+        },
+        "2026": {
+          "n": 32,
+          "win_rate": 50.0,
+          "mean_gross_R": 0.12127,
+          "mean_cost_R": 0.01111,
+          "mean_net_R": 0.11017,
+          "sum_net_R": 3.5,
+          "profit_factor": 1.396
+        }
+      },
+      "placebo": {
+        "rand_ge_actual_pct": 0.0,
+        "n_perm": 100,
+        "seed": 20261101
+      },
+      "corr_v2": {
+        "basis_union": {
+          "n_days": 893,
+          "pearson": 0.0037,
+          "spearman": 0.0379,
+          "n_b3_active": 80,
+          "n_v2_active": 886,
+          "n_overlap_active": 76
+        },
+        "basis_b3_calendar": {
+          "n_days": 1352,
+          "pearson": -0.0004,
+          "spearman": 0.0097,
+          "n_b3_active": 80,
+          "n_v2_active": 836,
+          "n_overlap_active": 76
+        },
+        "basis_overlap_only": {
+          "n_days": 76,
+          "pearson": -0.0521,
+          "spearman": 0.072
+        }
+      },
+      "gates": {
+        "1_net_R_positive": true,
+        "2_PF_ge_1_1": true,
+        "3_no_year_crash_2024_2026": true,
+        "4_placebo_lt_10pct": true,
+        "5_low_corr_with_V2": true
+      },
+      "gates_all_pass": true
+    },
+    "session_map": {
+      "n_trades": 192,
+      "n_calendar_days": 1353,
+      "overall": {
+        "n": 192,
+        "win_rate": 63.02,
+        "mean_gross_R": 0.23495,
+        "mean_cost_R": 0.01459,
+        "mean_net_R": 0.22035,
+        "sum_net_R": 42.3,
+        "profit_factor": 1.819
+      },
+      "by_year": {
+        "2022": {
+          "n": 4,
+          "win_rate": 50.0,
+          "mean_gross_R": 0.17528,
+          "mean_cost_R": 0.01209,
+          "mean_net_R": 0.16318,
+          "sum_net_R": 0.7,
+          "profit_factor": 1.811
+        },
+        "2023": {
+          "n": 50,
+          "win_rate": 68.0,
+          "mean_gross_R": 0.25738,
+          "mean_cost_R": 0.01302,
+          "mean_net_R": 0.24436,
+          "sum_net_R": 12.2,
+          "profit_factor": 2.065
+        },
+        "2024": {
+          "n": 60,
+          "win_rate": 63.33,
+          "mean_gross_R": 0.20038,
+          "mean_cost_R": 0.01567,
+          "mean_net_R": 0.18471,
+          "sum_net_R": 11.1,
+          "profit_factor": 1.669
+        },
+        "2025": {
+          "n": 48,
+          "win_rate": 62.5,
+          "mean_gross_R": 0.26897,
+          "mean_cost_R": 0.01744,
+          "mean_net_R": 0.25153,
+          "sum_net_R": 12.1,
+          "profit_factor": 2.17
+        },
+        "2026": {
+          "n": 30,
+          "win_rate": 56.67,
+          "mean_gross_R": 0.2202,
+          "mean_cost_R": 0.01083,
+          "mean_net_R": 0.20937,
+          "sum_net_R": 6.3,
+          "profit_factor": 1.501
+        }
+      },
+      "placebo": {
+        "rand_ge_actual_pct": 0.0,
+        "n_perm": 100,
+        "seed": 20261101
+      },
+      "corr_v2": {
+        "basis_union": {
+          "n_days": 892,
+          "pearson": 0.0031,
+          "spearman": 0.0204,
+          "n_b3_active": 83,
+          "n_v2_active": 886,
+          "n_overlap_active": 80
+        },
+        "basis_b3_calendar": {
+          "n_days": 1353,
+          "pearson": -0.0011,
+          "spearman": 0.0006,
+          "n_b3_active": 83,
+          "n_v2_active": 836,
+          "n_overlap_active": 80
+        },
+        "basis_overlap_only": {
+          "n_days": 80,
+          "pearson": -0.0604,
+          "spearman": 0.0264
+        }
+      },
+      "gates": {
+        "1_net_R_positive": true,
+        "2_PF_ge_1_1": true,
+        "3_no_year_crash_2024_2026": true,
+        "4_placebo_lt_10pct": true,
+        "5_low_corr_with_V2": true
+      },
+      "gates_all_pass": true
+    }
+  },
+  "selfcheck": {
+    "raw_baseline_reproduced": true,
+    "raw_n_expected": 195,
+    "raw_mean_net_R_expected": 0.19007,
+    "raw_placebo_expected": 0.0
+  }
+}

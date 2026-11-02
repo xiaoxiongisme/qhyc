@@ -1,0 +1,823 @@
+{
+  "meta": {
+    "purpose": "七期 P1 session_map 夜盘成交语义可执行性（只读实证）",
+    "b3_varieties": 26,
+    "n_pairs": 13,
+    "night_hours": [
+      0,
+      1,
+      2,
+      22,
+      23
+    ],
+    "day_hours": [
+      9,
+      10,
+      11,
+      13,
+      14,
+      15
+    ],
+    "caveats": [
+      "bucket 标 bar 结束时刻，夜盘首bar落在22:00(对应21:00-22:00时段)；六期『21:00开盘』表述按数据修正为『夜盘22:00首bar』",
+      "groupby.first 自检仅抽样 3 品种×2026-03-01~10，非全量",
+      "session_date 只按星期推、不处理法定节假日（与 load_market 一致）"
+    ]
+  },
+  "A_hour_distribution": {
+    "0": 27105,
+    "1": 27061,
+    "2": 15780,
+    "9": 50,
+    "10": 130284,
+    "11": 130278,
+    "14": 130229,
+    "15": 130230,
+    "22": 99370,
+    "23": 114788
+  },
+  "B_coverage": {
+    "night_days": {
+      "AG888": 2674,
+      "AU888": 2674,
+      "C888": 1671,
+      "CS888": 1656,
+      "CU888": 2674,
+      "FG888": 2571,
+      "FU888": 1838,
+      "HC888": 2689,
+      "J888": 2674,
+      "JM888": 2674,
+      "L888": 1671,
+      "M888": 2674,
+      "MA888": 2674,
+      "NI888": 2622,
+      "P888": 2674,
+      "PP888": 1671,
+      "RB888": 2689,
+      "RM888": 2674,
+      "SA888": 1507,
+      "SC888": 1910,
+      "SS888": 1553,
+      "TA888": 2674,
+      "Y888": 2674,
+      "ZN888": 2674
+    },
+    "day_days": {
+      "AG888": 2815,
+      "AU888": 2815,
+      "C888": 2815,
+      "CS888": 2799,
+      "CU888": 2815,
+      "FG888": 2815,
+      "FU888": 2815,
+      "HC888": 2815,
+      "J888": 2815,
+      "JM888": 2815,
+      "L888": 2815,
+      "M888": 2815,
+      "MA888": 2815,
+      "NI888": 2761,
+      "P888": 2815,
+      "PP888": 2815,
+      "RB888": 2815,
+      "RM888": 2815,
+      "SA888": 1614,
+      "SC888": 2028,
+      "SF888": 2815,
+      "SM888": 2815,
+      "SS888": 1661,
+      "TA888": 2815,
+      "Y888": 2815,
+      "ZN888": 2815
+    },
+    "both_days": {
+      "AG888": 2673,
+      "AU888": 2673,
+      "C888": 1670,
+      "CS888": 1655,
+      "CU888": 2673,
+      "FG888": 2570,
+      "FU888": 1837,
+      "HC888": 2673,
+      "J888": 2673,
+      "JM888": 2673,
+      "L888": 1670,
+      "M888": 2673,
+      "MA888": 2673,
+      "NI888": 2621,
+      "P888": 2673,
+      "PP888": 1670,
+      "RB888": 2673,
+      "RM888": 2673,
+      "SA888": 1506,
+      "SC888": 1909,
+      "SF888": 0,
+      "SM888": 0,
+      "SS888": 1552,
+      "TA888": 2673,
+      "Y888": 2673,
+      "ZN888": 2673
+    },
+    "has_night": [
+      "AG888",
+      "AU888",
+      "C888",
+      "CS888",
+      "CU888",
+      "FG888",
+      "FU888",
+      "HC888",
+      "J888",
+      "JM888",
+      "L888",
+      "M888",
+      "MA888",
+      "NI888",
+      "P888",
+      "PP888",
+      "RB888",
+      "RM888",
+      "SA888",
+      "SC888",
+      "SS888",
+      "TA888",
+      "Y888",
+      "ZN888"
+    ],
+    "pure_day": [
+      "SF888",
+      "SM888"
+    ],
+    "pair_coverage": {
+      "RB-HC": {
+        "legs_with_night": 2,
+        "night_days_legA": 2689,
+        "night_days_legB": 2689,
+        "coverage_ratio": 1.0
+      },
+      "M-RM": {
+        "legs_with_night": 2,
+        "night_days_legA": 2674,
+        "night_days_legB": 2674,
+        "coverage_ratio": 1.0
+      },
+      "Y-P": {
+        "legs_with_night": 2,
+        "night_days_legA": 2674,
+        "night_days_legB": 2674,
+        "coverage_ratio": 1.0
+      },
+      "TA-MA": {
+        "legs_with_night": 2,
+        "night_days_legA": 2674,
+        "night_days_legB": 2674,
+        "coverage_ratio": 1.0
+      },
+      "FG-SA": {
+        "legs_with_night": 2,
+        "night_days_legA": 2571,
+        "night_days_legB": 1507,
+        "coverage_ratio": 0.5862
+      },
+      "J-JM": {
+        "legs_with_night": 2,
+        "night_days_legA": 2674,
+        "night_days_legB": 2674,
+        "coverage_ratio": 1.0
+      },
+      "PP-L": {
+        "legs_with_night": 2,
+        "night_days_legA": 1671,
+        "night_days_legB": 1671,
+        "coverage_ratio": 1.0
+      },
+      "AU-AG": {
+        "legs_with_night": 2,
+        "night_days_legA": 2674,
+        "night_days_legB": 2674,
+        "coverage_ratio": 1.0
+      },
+      "FU-SC": {
+        "legs_with_night": 2,
+        "night_days_legA": 1838,
+        "night_days_legB": 1910,
+        "coverage_ratio": 0.9623
+      },
+      "SF-SM": {
+        "legs_with_night": 0,
+        "night_days_legA": 0,
+        "night_days_legB": 0,
+        "coverage_ratio": 0
+      },
+      "C-CS": {
+        "legs_with_night": 2,
+        "night_days_legA": 1671,
+        "night_days_legB": 1656,
+        "coverage_ratio": 0.991
+      },
+      "CU-ZN": {
+        "legs_with_night": 2,
+        "night_days_legA": 2674,
+        "night_days_legB": 2674,
+        "coverage_ratio": 1.0
+      },
+      "NI-SS": {
+        "legs_with_night": 2,
+        "night_days_legA": 2622,
+        "night_days_legB": 1553,
+        "coverage_ratio": 0.5923
+      }
+    }
+  },
+  "C_first_order_check": {
+    "n": 21,
+    "n_match": 21,
+    "first_bar_hours": {
+      "10": 3,
+      "22": 18
+    },
+    "detail": [
+      {
+        "symbol": "SC888",
+        "session_date": "2026-03-02",
+        "n_bars": 4,
+        "first_raw_bucket": "2026-03-02 10:00:00+08:00",
+        "first_by_time_bucket": "2026-03-02 10:00:00+08:00",
+        "first_raw_open": 527.8,
+        "first_by_time_open": 527.8,
+        "match": true
+      },
+      {
+        "symbol": "SC888",
+        "session_date": "2026-03-03",
+        "n_bars": 10,
+        "first_raw_bucket": "2026-03-02 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-02 22:00:00+08:00",
+        "first_raw_open": 545.4,
+        "first_by_time_open": 545.4,
+        "match": true
+      },
+      {
+        "symbol": "SC888",
+        "session_date": "2026-03-04",
+        "n_bars": 10,
+        "first_raw_bucket": "2026-03-03 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-03 22:00:00+08:00",
+        "first_raw_open": 624.3,
+        "first_by_time_open": 624.3,
+        "match": true
+      },
+      {
+        "symbol": "SC888",
+        "session_date": "2026-03-05",
+        "n_bars": 10,
+        "first_raw_bucket": "2026-03-04 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-04 22:00:00+08:00",
+        "first_raw_open": 625.8,
+        "first_by_time_open": 625.8,
+        "match": true
+      },
+      {
+        "symbol": "SC888",
+        "session_date": "2026-03-06",
+        "n_bars": 10,
+        "first_raw_bucket": "2026-03-05 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-05 22:00:00+08:00",
+        "first_raw_open": 687.9,
+        "first_by_time_open": 687.9,
+        "match": true
+      },
+      {
+        "symbol": "SC888",
+        "session_date": "2026-03-09",
+        "n_bars": 10,
+        "first_raw_bucket": "2026-03-06 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-06 22:00:00+08:00",
+        "first_raw_open": 730.0,
+        "first_by_time_open": 730.0,
+        "match": true
+      },
+      {
+        "symbol": "SC888",
+        "session_date": "2026-03-10",
+        "n_bars": 3,
+        "first_raw_bucket": "2026-03-09 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-09 22:00:00+08:00",
+        "first_raw_open": 808.8,
+        "first_by_time_open": 808.8,
+        "match": true
+      },
+      {
+        "symbol": "FU888",
+        "session_date": "2026-03-02",
+        "n_bars": 4,
+        "first_raw_bucket": "2026-03-02 10:00:00+08:00",
+        "first_by_time_bucket": "2026-03-02 10:00:00+08:00",
+        "first_raw_open": 3186.0,
+        "first_by_time_open": 3186.0,
+        "match": true
+      },
+      {
+        "symbol": "FU888",
+        "session_date": "2026-03-03",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-02 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-02 22:00:00+08:00",
+        "first_raw_open": 3365.0,
+        "first_by_time_open": 3365.0,
+        "match": true
+      },
+      {
+        "symbol": "FU888",
+        "session_date": "2026-03-04",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-03 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-03 22:00:00+08:00",
+        "first_raw_open": 3760.0,
+        "first_by_time_open": 3760.0,
+        "match": true
+      },
+      {
+        "symbol": "FU888",
+        "session_date": "2026-03-05",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-04 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-04 22:00:00+08:00",
+        "first_raw_open": 3766.0,
+        "first_by_time_open": 3766.0,
+        "match": true
+      },
+      {
+        "symbol": "FU888",
+        "session_date": "2026-03-06",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-05 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-05 22:00:00+08:00",
+        "first_raw_open": 3960.0,
+        "first_by_time_open": 3960.0,
+        "match": true
+      },
+      {
+        "symbol": "FU888",
+        "session_date": "2026-03-09",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-06 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-06 22:00:00+08:00",
+        "first_raw_open": 4548.0,
+        "first_by_time_open": 4548.0,
+        "match": true
+      },
+      {
+        "symbol": "FU888",
+        "session_date": "2026-03-10",
+        "n_bars": 2,
+        "first_raw_bucket": "2026-03-09 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-09 22:00:00+08:00",
+        "first_raw_open": 4815.0,
+        "first_by_time_open": 4815.0,
+        "match": true
+      },
+      {
+        "symbol": "RB888",
+        "session_date": "2026-03-02",
+        "n_bars": 4,
+        "first_raw_bucket": "2026-03-02 10:00:00+08:00",
+        "first_by_time_bucket": "2026-03-02 10:00:00+08:00",
+        "first_raw_open": 3078.0,
+        "first_by_time_open": 3078.0,
+        "match": true
+      },
+      {
+        "symbol": "RB888",
+        "session_date": "2026-03-03",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-02 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-02 22:00:00+08:00",
+        "first_raw_open": 3069.0,
+        "first_by_time_open": 3069.0,
+        "match": true
+      },
+      {
+        "symbol": "RB888",
+        "session_date": "2026-03-04",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-03 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-03 22:00:00+08:00",
+        "first_raw_open": 3073.0,
+        "first_by_time_open": 3073.0,
+        "match": true
+      },
+      {
+        "symbol": "RB888",
+        "session_date": "2026-03-05",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-04 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-04 22:00:00+08:00",
+        "first_raw_open": 3072.0,
+        "first_by_time_open": 3072.0,
+        "match": true
+      },
+      {
+        "symbol": "RB888",
+        "session_date": "2026-03-06",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-05 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-05 22:00:00+08:00",
+        "first_raw_open": 3076.0,
+        "first_by_time_open": 3076.0,
+        "match": true
+      },
+      {
+        "symbol": "RB888",
+        "session_date": "2026-03-09",
+        "n_bars": 6,
+        "first_raw_bucket": "2026-03-06 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-06 22:00:00+08:00",
+        "first_raw_open": 3093.0,
+        "first_by_time_open": 3093.0,
+        "match": true
+      },
+      {
+        "symbol": "RB888",
+        "session_date": "2026-03-10",
+        "n_bars": 2,
+        "first_raw_bucket": "2026-03-09 22:00:00+08:00",
+        "first_by_time_bucket": "2026-03-09 22:00:00+08:00",
+        "first_raw_open": 3120.0,
+        "first_by_time_open": 3120.0,
+        "match": true
+      }
+    ]
+  },
+  "D_overnight_gap": {
+    "by_symbol": {
+      "AG888": {
+        "n": 2673,
+        "mean_pct": 0.0588,
+        "abs_mean_pct": 0.7474,
+        "median_pct": 0.0176,
+        "p10_pct": -1.0874,
+        "p90_pct": 1.2085,
+        "pct_positive": 50.2
+      },
+      "AU888": {
+        "n": 2673,
+        "mean_pct": 0.0138,
+        "abs_mean_pct": 0.434,
+        "median_pct": 0.0,
+        "p10_pct": -0.6403,
+        "p90_pct": 0.6959,
+        "pct_positive": 49.6
+      },
+      "C888": {
+        "n": 1670,
+        "mean_pct": 0.0032,
+        "abs_mean_pct": 0.2858,
+        "median_pct": 0.0,
+        "p10_pct": -0.4394,
+        "p90_pct": 0.4703,
+        "pct_positive": 47.2
+      },
+      "CS888": {
+        "n": 1655,
+        "mean_pct": -0.0121,
+        "abs_mean_pct": 0.3387,
+        "median_pct": 0.0,
+        "p10_pct": -0.5323,
+        "p90_pct": 0.4926,
+        "pct_positive": 46.8
+      },
+      "CU888": {
+        "n": 2673,
+        "mean_pct": 0.0418,
+        "abs_mean_pct": 0.4809,
+        "median_pct": 0.0214,
+        "p10_pct": -0.7094,
+        "p90_pct": 0.7956,
+        "pct_positive": 51.1
+      },
+      "FG888": {
+        "n": 2570,
+        "mean_pct": 0.0181,
+        "abs_mean_pct": 0.7061,
+        "median_pct": 0.0,
+        "p10_pct": -1.037,
+        "p90_pct": 1.0989,
+        "pct_positive": 49.2
+      },
+      "FU888": {
+        "n": 1837,
+        "mean_pct": -0.0149,
+        "abs_mean_pct": 1.1503,
+        "median_pct": 0.0289,
+        "p10_pct": -1.7843,
+        "p90_pct": 1.7638,
+        "pct_positive": 50.1
+      },
+      "HC888": {
+        "n": 2673,
+        "mean_pct": 0.0694,
+        "abs_mean_pct": 0.5733,
+        "median_pct": 0.029,
+        "p10_pct": -0.7501,
+        "p90_pct": 1.0153,
+        "pct_positive": 51.1
+      },
+      "J888": {
+        "n": 2673,
+        "mean_pct": 0.0821,
+        "abs_mean_pct": 0.8444,
+        "median_pct": 0.0598,
+        "p10_pct": -1.2069,
+        "p90_pct": 1.4298,
+        "pct_positive": 52.3
+      },
+      "JM888": {
+        "n": 2673,
+        "mean_pct": 0.0745,
+        "abs_mean_pct": 0.897,
+        "median_pct": 0.0,
+        "p10_pct": -1.3324,
+        "p90_pct": 1.4873,
+        "pct_positive": 50.0
+      },
+      "L888": {
+        "n": 1670,
+        "mean_pct": 0.0138,
+        "abs_mean_pct": 0.467,
+        "median_pct": 0.0,
+        "p10_pct": -0.6846,
+        "p90_pct": 0.7383,
+        "pct_positive": 49.9
+      },
+      "M888": {
+        "n": 2673,
+        "mean_pct": 0.0013,
+        "abs_mean_pct": 0.5596,
+        "median_pct": -0.0331,
+        "p10_pct": -0.8557,
+        "p90_pct": 0.883,
+        "pct_positive": 46.8
+      },
+      "MA888": {
+        "n": 2673,
+        "mean_pct": 0.0346,
+        "abs_mean_pct": 0.7022,
+        "median_pct": 0.0,
+        "p10_pct": -0.9842,
+        "p90_pct": 1.0878,
+        "pct_positive": 49.3
+      },
+      "NI888": {
+        "n": 2620,
+        "mean_pct": 0.046,
+        "abs_mean_pct": 0.8076,
+        "median_pct": 0.0318,
+        "p10_pct": -1.255,
+        "p90_pct": 1.2843,
+        "pct_positive": 51.1
+      },
+      "P888": {
+        "n": 2673,
+        "mean_pct": 0.0458,
+        "abs_mean_pct": 0.5982,
+        "median_pct": 0.0353,
+        "p10_pct": -0.8766,
+        "p90_pct": 0.9854,
+        "pct_positive": 50.8
+      },
+      "PP888": {
+        "n": 1670,
+        "mean_pct": 0.0128,
+        "abs_mean_pct": 0.4627,
+        "median_pct": 0.0,
+        "p10_pct": -0.6641,
+        "p90_pct": 0.7313,
+        "pct_positive": 49.4
+      },
+      "RB888": {
+        "n": 2673,
+        "mean_pct": 0.0612,
+        "abs_mean_pct": 0.5755,
+        "median_pct": 0.0311,
+        "p10_pct": -0.7685,
+        "p90_pct": 0.9679,
+        "pct_positive": 51.5
+      },
+      "RM888": {
+        "n": 2673,
+        "mean_pct": 0.0065,
+        "abs_mean_pct": 0.6497,
+        "median_pct": 0.0,
+        "p10_pct": -1.0134,
+        "p90_pct": 1.0016,
+        "pct_positive": 48.3
+      },
+      "SA888": {
+        "n": 1506,
+        "mean_pct": 0.0105,
+        "abs_mean_pct": 0.8556,
+        "median_pct": 0.0,
+        "p10_pct": -1.3432,
+        "p90_pct": 1.3792,
+        "pct_positive": 47.6
+      },
+      "SC888": {
+        "n": 1909,
+        "mean_pct": 0.0289,
+        "abs_mean_pct": 1.2016,
+        "median_pct": 0.0794,
+        "p10_pct": -1.8343,
+        "p90_pct": 1.7499,
+        "pct_positive": 52.5
+      },
+      "SS888": {
+        "n": 1552,
+        "mean_pct": 0.0438,
+        "abs_mean_pct": 0.5522,
+        "median_pct": 0.0,
+        "p10_pct": -0.8247,
+        "p90_pct": 0.8437,
+        "pct_positive": 49.4
+      },
+      "TA888": {
+        "n": 2673,
+        "mean_pct": 0.0022,
+        "abs_mean_pct": 0.6556,
+        "median_pct": 0.0,
+        "p10_pct": -0.9802,
+        "p90_pct": 0.9966,
+        "pct_positive": 49.8
+      },
+      "Y888": {
+        "n": 2673,
+        "mean_pct": 0.0203,
+        "abs_mean_pct": 0.5254,
+        "median_pct": 0.0,
+        "p10_pct": -0.7728,
+        "p90_pct": 0.8595,
+        "pct_positive": 49.7
+      },
+      "ZN888": {
+        "n": 2673,
+        "mean_pct": 0.0322,
+        "abs_mean_pct": 0.5694,
+        "median_pct": 0.0,
+        "p10_pct": -0.8192,
+        "p90_pct": 0.9512,
+        "pct_positive": 49.5
+      }
+    },
+    "by_pair": {
+      "RB-HC": {
+        "n": 5346,
+        "mean_pct": 0.0653,
+        "abs_mean_pct": 0.5744,
+        "median_pct": 0.0299,
+        "p10_pct": -0.7599,
+        "p90_pct": 0.98,
+        "pct_positive": 51.3
+      },
+      "M-RM": {
+        "n": 5346,
+        "mean_pct": 0.0039,
+        "abs_mean_pct": 0.6047,
+        "median_pct": 0.0,
+        "p10_pct": -0.9412,
+        "p90_pct": 0.9381,
+        "pct_positive": 47.5
+      },
+      "Y-P": {
+        "n": 5346,
+        "mean_pct": 0.033,
+        "abs_mean_pct": 0.5618,
+        "median_pct": 0.0235,
+        "p10_pct": -0.8292,
+        "p90_pct": 0.9178,
+        "pct_positive": 50.2
+      },
+      "TA-MA": {
+        "n": 5346,
+        "mean_pct": 0.0184,
+        "abs_mean_pct": 0.6789,
+        "median_pct": 0.0,
+        "p10_pct": -0.9836,
+        "p90_pct": 1.0328,
+        "pct_positive": 49.5
+      },
+      "FG-SA": {
+        "n": 4076,
+        "mean_pct": 0.0153,
+        "abs_mean_pct": 0.7613,
+        "median_pct": 0.0,
+        "p10_pct": -1.1456,
+        "p90_pct": 1.1717,
+        "pct_positive": 48.6
+      },
+      "J-JM": {
+        "n": 5346,
+        "mean_pct": 0.0783,
+        "abs_mean_pct": 0.8707,
+        "median_pct": 0.0404,
+        "p10_pct": -1.2634,
+        "p90_pct": 1.4551,
+        "pct_positive": 51.1
+      },
+      "PP-L": {
+        "n": 3340,
+        "mean_pct": 0.0133,
+        "abs_mean_pct": 0.4649,
+        "median_pct": 0.0,
+        "p10_pct": -0.6767,
+        "p90_pct": 0.733,
+        "pct_positive": 49.7
+      },
+      "AU-AG": {
+        "n": 5346,
+        "mean_pct": 0.0363,
+        "abs_mean_pct": 0.5907,
+        "median_pct": 0.0,
+        "p10_pct": -0.8416,
+        "p90_pct": 0.9124,
+        "pct_positive": 49.9
+      },
+      "FU-SC": {
+        "n": 3746,
+        "mean_pct": 0.0074,
+        "abs_mean_pct": 1.1765,
+        "median_pct": 0.0598,
+        "p10_pct": -1.8176,
+        "p90_pct": 1.7555,
+        "pct_positive": 51.4
+      },
+      "SF-SM": {
+        "n": 0
+      },
+      "C-CS": {
+        "n": 3325,
+        "mean_pct": -0.0044,
+        "abs_mean_pct": 0.3121,
+        "median_pct": 0.0,
+        "p10_pct": -0.4963,
+        "p90_pct": 0.488,
+        "pct_positive": 47.0
+      },
+      "CU-ZN": {
+        "n": 5346,
+        "mean_pct": 0.037,
+        "abs_mean_pct": 0.5251,
+        "median_pct": 0.0192,
+        "p10_pct": -0.7605,
+        "p90_pct": 0.8816,
+        "pct_positive": 50.3
+      },
+      "NI-SS": {
+        "n": 4172,
+        "mean_pct": 0.0452,
+        "abs_mean_pct": 0.7126,
+        "median_pct": 0.0255,
+        "p10_pct": -1.1037,
+        "p90_pct": 1.1465,
+        "pct_positive": 50.5
+      }
+    },
+    "all": {
+      "n": 56081,
+      "mean_pct": 0.0314,
+      "abs_mean_pct": 0.6532,
+      "median_pct": 0.0,
+      "p10_pct": -0.9488,
+      "p90_pct": 1.0377,
+      "pct_positive": 49.8
+    }
+  },
+  "verdict": {
+    "night_bar_exists": true,
+    "bucket_is_bar_end": true,
+    "n_b3_with_night": 24,
+    "n_b3_pure_day": 2,
+    "pure_day_symbols": [
+      "SF888",
+      "SM888"
+    ],
+    "pairs_both_legs_have_night": 12,
+    "n_pairs": 13,
+    "groupby_first_matches_time_order": true,
+    "n_order_check": 21,
+    "n_order_match": 21,
+    "session_map_first_bar_hours": {
+      "10": 3,
+      "22": 18
+    },
+    "overnight_gap_all": {
+      "n": 56081,
+      "mean_pct": 0.0314,
+      "abs_mean_pct": 0.6532,
+      "median_pct": 0.0,
+      "p10_pct": -0.9488,
+      "p90_pct": 1.0377,
+      "pct_positive": 49.8
+    }
+  }
+}
