@@ -1,0 +1,859 @@
+{
+  "meta": {
+    "start": "2021-01-01",
+    "end": "2026-10-30",
+    "window": 60,
+    "entry_z": 2.0,
+    "exit_z": 0.5,
+    "pair_set": "base+ext",
+    "n_pairs": 13,
+    "rebalance_n": 1,
+    "sl_mult": 3.0,
+    "max_gap_days": 7,
+    "purpose": "六期 P1 日历口径修正后 B3 重跑（§26）",
+    "caveats": [
+      "calendar_mode 默认 raw，既有研究逐位不变；本脚本为并排对照，不改已有结论",
+      "weekend_drop 丢弃周六凌晨夜盘行情，属保守简化；session_map 归位到下一交易日但仅按星期推、不处理法定节假日",
+      "l3_ref.trade_calendar 仅记开市日且覆盖不全(1553行)，未用作交易日全集",
+      "资金曲线沿用 §19 固定名义本金/简单加总/无复利口径，各 mode 用自己的窗口日历，Sharpe/暴露分母随之变化"
+    ]
+  },
+  "modes": {
+    "raw": {
+      "n_trades": 195,
+      "n_calendar_days": 1602,
+      "seg_stats": {
+        "n": 195,
+        "win_rate": 59.49,
+        "mean_gross_R": 0.20464,
+        "mean_cost_R": 0.01457,
+        "mean_net_R": 0.19007,
+        "sum_net_R": 37.1,
+        "profit_factor": 1.734
+      },
+      "equity": {
+        "n_trades": 195,
+        "n_calendar_days": 1602,
+        "n_active_days": 92,
+        "exposure_pct": 5.74,
+        "total_return": 1.89933,
+        "cagr": 0.20077,
+        "sharpe_daily": 1.779,
+        "mdd": 0.21941,
+        "calmar": 8.656,
+        "win_day_pct": 84.78,
+        "span_years": 5.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "curve_tail": [
+          1.89933,
+          1.89933,
+          1.89933,
+          1.89933,
+          1.89933
+        ]
+      },
+      "equity_2026": {
+        "n_trades": 28,
+        "n_calendar_days": 165,
+        "n_active_days": 13,
+        "exposure_pct": 7.88,
+        "total_return": 0.28909,
+        "cagr": 0.36512,
+        "sharpe_daily": 1.182,
+        "mdd": 0.21941,
+        "calmar": 1.318,
+        "win_day_pct": 76.92,
+        "span_years": 0.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.01334,
+          0.01334,
+          0.05242
+        ],
+        "curve_tail": [
+          0.28909,
+          0.28909,
+          0.28909,
+          0.28909,
+          0.28909
+        ]
+      },
+      "by_year": {
+        "2022": {
+          "n": 4,
+          "mean_net_R": 0.08043,
+          "PF": 1.322,
+          "total_return": 0.03731,
+          "mdd": 0.0,
+          "sharpe_daily": 1.034,
+          "exposure_pct": 0.7
+        },
+        "2023": {
+          "n": 50,
+          "mean_net_R": 0.20446,
+          "PF": 1.725,
+          "total_return": 0.48245,
+          "mdd": 0.02715,
+          "sharpe_daily": 2.738,
+          "exposure_pct": 8.36
+        },
+        "2024": {
+          "n": 54,
+          "mean_net_R": 0.15779,
+          "PF": 1.679,
+          "total_return": 0.4221,
+          "mdd": 0.03887,
+          "sharpe_daily": 3.506,
+          "exposure_pct": 8.71
+        },
+        "2025": {
+          "n": 59,
+          "mean_net_R": 0.22603,
+          "PF": 2.001,
+          "total_return": 0.66839,
+          "mdd": 0.04453,
+          "sharpe_daily": 2.897,
+          "exposure_pct": 9.66
+        },
+        "2026": {
+          "n": 28,
+          "mean_net_R": 0.16655,
+          "PF": 1.488,
+          "total_return": 0.28909,
+          "mdd": 0.21941,
+          "sharpe_daily": 1.182,
+          "exposure_pct": 7.88
+        }
+      },
+      "per_pair": {
+        "TA-MA": {
+          "n": 14,
+          "sum_return_px": 0.26257
+        },
+        "SF-SM": {
+          "n": 20,
+          "sum_return_px": 0.14021
+        },
+        "C-CS": {
+          "n": 18,
+          "sum_return_px": 0.10519
+        },
+        "Y-P": {
+          "n": 14,
+          "sum_return_px": 0.13998
+        },
+        "FU-SC": {
+          "n": 15,
+          "sum_return_px": 0.06213
+        },
+        "NI-SS": {
+          "n": 24,
+          "sum_return_px": 0.30349
+        },
+        "RB-HC": {
+          "n": 14,
+          "sum_return_px": -0.02499
+        },
+        "M-RM": {
+          "n": 18,
+          "sum_return_px": 0.24413
+        },
+        "AU-AG": {
+          "n": 12,
+          "sum_return_px": 0.19511
+        },
+        "CU-ZN": {
+          "n": 18,
+          "sum_return_px": 0.13853
+        },
+        "FG-SA": {
+          "n": 14,
+          "sum_return_px": 0.03768
+        },
+        "J-JM": {
+          "n": 12,
+          "sum_return_px": 0.29597
+        },
+        "PP-L": {
+          "n": 2,
+          "sum_return_px": -0.00068
+        }
+      },
+      "naked": {
+        "A_naked_groups": 9,
+        "A_naked_by_pair": {
+          "FU-SC": 9
+        },
+        "A_naked_detail": [
+          {
+            "entry": "2023-02-20",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "FU888",
+                "side": "SHORT",
+                "pnl": 250.0
+              }
+            ]
+          },
+          {
+            "entry": "2023-07-15",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "SC888",
+                "side": "SHORT",
+                "pnl": -25.6
+              }
+            ]
+          },
+          {
+            "entry": "2025-01-08",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "SC888",
+                "side": "SHORT",
+                "pnl": -25.8
+              }
+            ]
+          },
+          {
+            "entry": "2025-01-16",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "SC888",
+                "side": "SHORT",
+                "pnl": 6.2
+              }
+            ]
+          },
+          {
+            "entry": "2025-02-10",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "FU888",
+                "side": "SHORT",
+                "pnl": 595.0
+              }
+            ]
+          },
+          {
+            "entry": "2026-04-08",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "SC888",
+                "side": "LONG",
+                "pnl": -111.1
+              }
+            ]
+          },
+          {
+            "entry": "2026-05-07",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "SC888",
+                "side": "LONG",
+                "pnl": 32.8
+              }
+            ]
+          },
+          {
+            "entry": "2026-09-05",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "SC888",
+                "side": "SHORT",
+                "pnl": -35.7
+              }
+            ]
+          },
+          {
+            "entry": "2026-09-07",
+            "pair": "FU-SC",
+            "legs": [
+              {
+                "symbol": "FU888",
+                "side": "LONG",
+                "pnl": 550.0
+              }
+            ]
+          }
+        ],
+        "B_n_paired": 94,
+        "B_true_naked": 7,
+        "B_true_naked_detail": [
+          {
+            "entry": "2023-02-20",
+            "symbol": "FU888",
+            "side": "SHORT",
+            "pair": "FU-SC"
+          },
+          {
+            "entry": "2023-07-15",
+            "symbol": "SC888",
+            "side": "SHORT",
+            "pair": "FU-SC"
+          },
+          {
+            "entry": "2025-01-08",
+            "symbol": "SC888",
+            "side": "SHORT",
+            "pair": "FU-SC"
+          },
+          {
+            "entry": "2025-01-16",
+            "symbol": "SC888",
+            "side": "SHORT",
+            "pair": "FU-SC"
+          },
+          {
+            "entry": "2025-02-10",
+            "symbol": "FU888",
+            "side": "SHORT",
+            "pair": "FU-SC"
+          },
+          {
+            "entry": "2026-04-08",
+            "symbol": "SC888",
+            "side": "LONG",
+            "pair": "FU-SC"
+          },
+          {
+            "entry": "2026-05-07",
+            "symbol": "SC888",
+            "side": "LONG",
+            "pair": "FU-SC"
+          }
+        ]
+      },
+      "gates": {
+        "net_R_positive": true,
+        "PF_ge_1_1": true,
+        "no_year_crash_2024_2026": true
+      },
+      "gates_all_pass": true,
+      "fu_open_missing": 291,
+      "sc_open_missing": 0
+    },
+    "weekend_drop": {
+      "n_trades": 190,
+      "n_calendar_days": 1352,
+      "seg_stats": {
+        "n": 190,
+        "win_rate": 58.42,
+        "mean_gross_R": 0.21724,
+        "mean_cost_R": 0.0141,
+        "mean_net_R": 0.20314,
+        "sum_net_R": 38.6,
+        "profit_factor": 1.857
+      },
+      "equity": {
+        "n_trades": 190,
+        "n_calendar_days": 1352,
+        "n_active_days": 86,
+        "exposure_pct": 6.36,
+        "total_return": 2.31252,
+        "cagr": 0.22859,
+        "sharpe_daily": 2.664,
+        "mdd": 0.10284,
+        "calmar": 22.487,
+        "win_day_pct": 91.86,
+        "span_years": 5.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "curve_tail": [
+          2.31252,
+          2.31252,
+          2.31252,
+          2.31252,
+          2.31252
+        ]
+      },
+      "equity_2026": {
+        "n_trades": 32,
+        "n_calendar_days": 140,
+        "n_active_days": 11,
+        "exposure_pct": 7.86,
+        "total_return": 0.35118,
+        "cagr": 0.44614,
+        "sharpe_daily": 2.022,
+        "mdd": 0.10284,
+        "calmar": 3.415,
+        "win_day_pct": 81.82,
+        "span_years": 0.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.03339
+        ],
+        "curve_tail": [
+          0.35118,
+          0.35118,
+          0.35118,
+          0.35118,
+          0.35118
+        ]
+      },
+      "by_year": {
+        "2022": {
+          "n": 4,
+          "mean_net_R": 0.15172,
+          "PF": 1.749,
+          "total_return": 0.06076,
+          "mdd": 0.0,
+          "sharpe_daily": 1.437,
+          "exposure_pct": 0.83
+        },
+        "2023": {
+          "n": 48,
+          "mean_net_R": 0.26447,
+          "PF": 2.235,
+          "total_return": 0.6903,
+          "mdd": 0.00707,
+          "sharpe_daily": 3.559,
+          "exposure_pct": 9.5
+        },
+        "2024": {
+          "n": 58,
+          "mean_net_R": 0.20812,
+          "PF": 1.936,
+          "total_return": 0.67327,
+          "mdd": 0.02185,
+          "sharpe_daily": 4.436,
+          "exposure_pct": 11.57
+        },
+        "2025": {
+          "n": 48,
+          "mean_net_R": 0.20207,
+          "PF": 1.797,
+          "total_return": 0.537,
+          "mdd": 0.01053,
+          "sharpe_daily": 3.881,
+          "exposure_pct": 9.05
+        },
+        "2026": {
+          "n": 32,
+          "mean_net_R": 0.11017,
+          "PF": 1.396,
+          "total_return": 0.35118,
+          "mdd": 0.10284,
+          "sharpe_daily": 2.022,
+          "exposure_pct": 7.86
+        }
+      },
+      "per_pair": {
+        "TA-MA": {
+          "n": 10,
+          "sum_return_px": 0.1852
+        },
+        "SF-SM": {
+          "n": 28,
+          "sum_return_px": 0.27338
+        },
+        "FU-SC": {
+          "n": 22,
+          "sum_return_px": 0.14993
+        },
+        "NI-SS": {
+          "n": 22,
+          "sum_return_px": 0.35803
+        },
+        "RB-HC": {
+          "n": 18,
+          "sum_return_px": 0.07023
+        },
+        "M-RM": {
+          "n": 6,
+          "sum_return_px": 0.06737
+        },
+        "Y-P": {
+          "n": 12,
+          "sum_return_px": 0.11263
+        },
+        "J-JM": {
+          "n": 18,
+          "sum_return_px": 0.34353
+        },
+        "C-CS": {
+          "n": 12,
+          "sum_return_px": 0.11658
+        },
+        "FG-SA": {
+          "n": 20,
+          "sum_return_px": 0.33636
+        },
+        "AU-AG": {
+          "n": 6,
+          "sum_return_px": 0.14738
+        },
+        "CU-ZN": {
+          "n": 12,
+          "sum_return_px": 0.14395
+        },
+        "PP-L": {
+          "n": 4,
+          "sum_return_px": 0.00795
+        }
+      },
+      "naked": {
+        "A_naked_groups": 0,
+        "A_naked_by_pair": {},
+        "A_naked_detail": [],
+        "B_n_paired": 95,
+        "B_true_naked": 0,
+        "B_true_naked_detail": []
+      },
+      "gates": {
+        "net_R_positive": true,
+        "PF_ge_1_1": true,
+        "no_year_crash_2024_2026": true
+      },
+      "gates_all_pass": true,
+      "equity_on_raw_calendar": {
+        "n_trades": 190,
+        "n_calendar_days": 1602,
+        "n_active_days": 86,
+        "exposure_pct": 5.37,
+        "total_return": 2.31252,
+        "cagr": 0.22859,
+        "sharpe_daily": 2.442,
+        "mdd": 0.10284,
+        "calmar": 22.487,
+        "win_day_pct": 91.86,
+        "span_years": 5.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "curve_tail": [
+          2.31252,
+          2.31252,
+          2.31252,
+          2.31252,
+          2.31252
+        ]
+      },
+      "equity_2026_on_raw_calendar": {
+        "n_trades": 32,
+        "n_calendar_days": 165,
+        "n_active_days": 11,
+        "exposure_pct": 6.67,
+        "total_return": 0.35118,
+        "cagr": 0.44614,
+        "sharpe_daily": 1.861,
+        "mdd": 0.10284,
+        "calmar": 3.415,
+        "win_day_pct": 81.82,
+        "span_years": 0.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.03339
+        ],
+        "curve_tail": [
+          0.35118,
+          0.35118,
+          0.35118,
+          0.35118,
+          0.35118
+        ]
+      },
+      "fu_open_missing": 1,
+      "sc_open_missing": 0
+    },
+    "session_map": {
+      "n_trades": 192,
+      "n_calendar_days": 1353,
+      "seg_stats": {
+        "n": 192,
+        "win_rate": 63.02,
+        "mean_gross_R": 0.23495,
+        "mean_cost_R": 0.01459,
+        "mean_net_R": 0.22035,
+        "sum_net_R": 42.3,
+        "profit_factor": 1.819
+      },
+      "equity": {
+        "n_trades": 192,
+        "n_calendar_days": 1353,
+        "n_active_days": 89,
+        "exposure_pct": 6.58,
+        "total_return": 2.6875,
+        "cagr": 0.25144,
+        "sharpe_daily": 3.087,
+        "mdd": 0.01457,
+        "calmar": 184.428,
+        "win_day_pct": 94.38,
+        "span_years": 5.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "curve_tail": [
+          2.6875,
+          2.6875,
+          2.6875,
+          2.6875,
+          2.6875
+        ]
+      },
+      "equity_2026": {
+        "n_trades": 30,
+        "n_calendar_days": 141,
+        "n_active_days": 13,
+        "exposure_pct": 9.22,
+        "total_return": 0.72131,
+        "cagr": 0.94575,
+        "sharpe_daily": 4.119,
+        "mdd": 0.0,
+        "calmar": null,
+        "win_day_pct": 100.0,
+        "span_years": 0.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.04126
+        ],
+        "curve_tail": [
+          0.72131,
+          0.72131,
+          0.72131,
+          0.72131,
+          0.72131
+        ]
+      },
+      "by_year": {
+        "2022": {
+          "n": 4,
+          "mean_net_R": 0.16318,
+          "PF": 1.811,
+          "total_return": 0.06382,
+          "mdd": 0.0,
+          "sharpe_daily": 1.429,
+          "exposure_pct": 0.83
+        },
+        "2023": {
+          "n": 50,
+          "mean_net_R": 0.24436,
+          "PF": 2.065,
+          "total_return": 0.65002,
+          "mdd": 0.01346,
+          "sharpe_daily": 3.953,
+          "exposure_pct": 10.33
+        },
+        "2024": {
+          "n": 60,
+          "mean_net_R": 0.18471,
+          "PF": 1.669,
+          "total_return": 0.61499,
+          "mdd": 0.01457,
+          "sharpe_daily": 4.406,
+          "exposure_pct": 10.74
+        },
+        "2025": {
+          "n": 48,
+          "mean_net_R": 0.25153,
+          "PF": 2.17,
+          "total_return": 0.63736,
+          "mdd": 0.01053,
+          "sharpe_daily": 3.566,
+          "exposure_pct": 9.47
+        },
+        "2026": {
+          "n": 30,
+          "mean_net_R": 0.20937,
+          "PF": 1.501,
+          "total_return": 0.72131,
+          "mdd": 0.0,
+          "sharpe_daily": 4.119,
+          "exposure_pct": 9.22
+        }
+      },
+      "per_pair": {
+        "TA-MA": {
+          "n": 16,
+          "sum_return_px": 0.32199
+        },
+        "SF-SM": {
+          "n": 28,
+          "sum_return_px": 0.27338
+        },
+        "C-CS": {
+          "n": 12,
+          "sum_return_px": 0.08934
+        },
+        "Y-P": {
+          "n": 12,
+          "sum_return_px": 0.11232
+        },
+        "NI-SS": {
+          "n": 24,
+          "sum_return_px": 0.32979
+        },
+        "AU-AG": {
+          "n": 8,
+          "sum_return_px": 0.19466
+        },
+        "RB-HC": {
+          "n": 12,
+          "sum_return_px": 0.03148
+        },
+        "M-RM": {
+          "n": 8,
+          "sum_return_px": 0.07401
+        },
+        "J-JM": {
+          "n": 14,
+          "sum_return_px": 0.18851
+        },
+        "FU-SC": {
+          "n": 16,
+          "sum_return_px": 0.33697
+        },
+        "FG-SA": {
+          "n": 22,
+          "sum_return_px": 0.51012
+        },
+        "CU-ZN": {
+          "n": 16,
+          "sum_return_px": 0.2175
+        },
+        "PP-L": {
+          "n": 4,
+          "sum_return_px": 0.00743
+        }
+      },
+      "naked": {
+        "A_naked_groups": 0,
+        "A_naked_by_pair": {},
+        "A_naked_detail": [],
+        "B_n_paired": 96,
+        "B_true_naked": 0,
+        "B_true_naked_detail": []
+      },
+      "gates": {
+        "net_R_positive": true,
+        "PF_ge_1_1": true,
+        "no_year_crash_2024_2026": true
+      },
+      "gates_all_pass": true,
+      "equity_on_raw_calendar": {
+        "n_trades": 192,
+        "n_calendar_days": 1602,
+        "n_active_days": 89,
+        "exposure_pct": 5.56,
+        "total_return": 2.6875,
+        "cagr": 0.25144,
+        "sharpe_daily": 2.829,
+        "mdd": 0.01457,
+        "calmar": 184.428,
+        "win_day_pct": 94.38,
+        "span_years": 5.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "curve_tail": [
+          2.6875,
+          2.6875,
+          2.6875,
+          2.6875,
+          2.6875
+        ]
+      },
+      "equity_2026_on_raw_calendar": {
+        "n_trades": 30,
+        "n_calendar_days": 165,
+        "n_active_days": 13,
+        "exposure_pct": 7.88,
+        "total_return": 0.72131,
+        "cagr": 0.94575,
+        "sharpe_daily": 3.791,
+        "mdd": 0.0,
+        "calmar": null,
+        "win_day_pct": 100.0,
+        "span_years": 0.82,
+        "curve_head": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.04126
+        ],
+        "curve_tail": [
+          0.72131,
+          0.72131,
+          0.72131,
+          0.72131,
+          0.72131
+        ]
+      },
+      "fu_open_missing": 0,
+      "sc_open_missing": 0
+    }
+  },
+  "verdict": {
+    "baseline_reproduced": true,
+    "weekend_drop": {
+      "A_naked_groups": 0,
+      "B_true_naked": 0,
+      "single_leg_disappeared_A": true,
+      "single_leg_disappeared_B": true,
+      "five_gates_all_pass": true,
+      "mean_net_R": 0.20314,
+      "PF": 1.857,
+      "total_return": 2.31252,
+      "mdd": 0.10284,
+      "mdd_2026": 0.10284,
+      "mdd_on_raw_calendar": 0.10284,
+      "mdd_2026_on_raw_calendar": 0.10284
+    },
+    "session_map": {
+      "A_naked_groups": 0,
+      "B_true_naked": 0,
+      "single_leg_disappeared_A": true,
+      "single_leg_disappeared_B": true,
+      "five_gates_all_pass": true,
+      "mean_net_R": 0.22035,
+      "PF": 1.819,
+      "total_return": 2.6875,
+      "mdd": 0.01457,
+      "mdd_2026": 0.0,
+      "mdd_on_raw_calendar": 0.01457,
+      "mdd_2026_on_raw_calendar": 0.0
+    }
+  }
+}

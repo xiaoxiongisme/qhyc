@@ -64,11 +64,22 @@ REBALANCE_N = 5         # 默认每 5 个交易日调仓（周频）
 
 
 # ------------------------------------------------------------------- 数据
-def load_market(session, symbols: list[str], start: date, end: date):
+def load_market(session, symbols: list[str], start: date, end: date,
+                calendar_mode: str = "raw"):
     """一次性取全部品种 60m，重采样为日线 open/close/high/low（date×symbol）。
 
     返回 (opens, closes, highs, lows) 四个 DataFrame，index=date，columns=symbol。
     缺失 (symbol,date) 为 NaN（不同品种交易历不同，由信号/模拟跳过）。
+
+    calendar_mode（六期新增，默认 'raw' 保持既有研究逐位一致）：
+      'raw'          —— 原口径：raw["date"] = bucket.floor("D")，日历取品种并集。
+      'weekend_drop' —— 剔除本地周六/周日 bar（保守简化）。
+      'session_map'  —— 夜盘归属下一交易日：hour>=21 归次日；周六/周日往后推到周一。
+    原因（六期 §26 实证）：SC/AG/AU 等夜盘跨到周六凌晨的 bar 经 floor("D")
+    被记成「周六」，日历取品种并集后这些伪交易日进入 index；FU 夜盘不跨日、
+    周六无 bar → open=NaN，曾被误读为「FU888 缺 15.2%」。剔除/归位后 FU888
+    真实交易日覆盖率 99.95%。l3_ref.trade_calendar 仅记开市日且覆盖不全，
+    故 session_map 只按星期推、不处理法定节假日（诚实标注为简化）。
     """
     rows = session.execute(text(
         "SELECT symbol, bucket, open, high, low, close FROM l1_mkt.bar_60m "
@@ -77,7 +88,23 @@ def load_market(session, symbols: list[str], start: date, end: date):
     raw = pd.DataFrame(rows, columns=["symbol", "dt", "open", "high", "low", "close"])
     for c in ("open", "high", "low", "close"):
         raw[c] = raw[c].astype(float)
-    raw["date"] = raw["dt"].dt.floor("D")
+    if calendar_mode == "raw":
+        raw["date"] = raw["dt"].dt.floor("D")
+    elif calendar_mode == "weekend_drop":
+        raw["date"] = raw["dt"].dt.floor("D")
+        # dt.dayofweek: 0=Mon..6=Sun，与 floor("D") 同为本地时区口径
+        raw = raw[raw["dt"].dt.dayofweek < 5]
+    elif calendar_mode == "session_map":
+        def _session_date(ts):
+            d = ts.date()
+            if ts.hour >= 21:
+                d += timedelta(days=1)
+            while d.weekday() >= 5:            # 5=Sat, 6=Sun → 推到下周一
+                d += timedelta(days=1)
+            return pd.Timestamp(d)
+        raw["date"] = raw["dt"].map(_session_date)
+    else:
+        raise ValueError(f"unknown calendar_mode={calendar_mode!r}")
 
     all_dates = set()
     per_sym: dict[str, pd.DataFrame] = {}

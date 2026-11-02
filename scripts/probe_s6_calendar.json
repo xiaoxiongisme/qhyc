@@ -1,0 +1,153 @@
+{
+  "meta": {
+    "start": "2019-01-01",
+    "end": "2026-10-30",
+    "purpose": "P0 回溯验证：周六夜盘伪交易日假说"
+  },
+  "hour_distribution": {
+    "saturday": [
+      {
+        "dow": 6,
+        "hour": 0,
+        "n_bars": 3409,
+        "n_symbols": 11
+      },
+      {
+        "dow": 6,
+        "hour": 1,
+        "n_bars": 3409,
+        "n_symbols": 11
+      },
+      {
+        "dow": 6,
+        "hour": 2,
+        "n_bars": 1980,
+        "n_symbols": 3
+      },
+      {
+        "dow": 6,
+        "hour": 10,
+        "n_bars": 4,
+        "n_symbols": 4
+      }
+    ],
+    "sunday": [],
+    "weekday_hours": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      14,
+      15,
+      22,
+      23
+    ],
+    "n_saturday_bars": 8802,
+    "n_sunday_bars": 0
+  },
+  "per_symbol_saturday": {
+    "FU888": {
+      "n_bars_total": 10803,
+      "n_saturday_bars": 0
+    },
+    "SC888": {
+      "n_bars_total": 17708,
+      "n_saturday_bars": 1321
+    }
+  },
+  "saturday_symbols": {
+    "n_symbols": 11,
+    "list": [
+      {
+        "symbol": "SC888",
+        "n_bars": 1321
+      },
+      {
+        "symbol": "AG888",
+        "n_bars": 1321
+      },
+      {
+        "symbol": "AU888",
+        "n_bars": 1320
+      },
+      {
+        "symbol": "ZN888",
+        "n_bars": 661
+      },
+      {
+        "symbol": "CU888",
+        "n_bars": 661
+      },
+      {
+        "symbol": "SN888",
+        "n_bars": 660
+      },
+      {
+        "symbol": "NI888",
+        "n_bars": 660
+      },
+      {
+        "symbol": "AL888",
+        "n_bars": 660
+      },
+      {
+        "symbol": "PB888",
+        "n_bars": 660
+      },
+      {
+        "symbol": "SS888",
+        "n_bars": 596
+      },
+      {
+        "symbol": "AO888",
+        "n_bars": 282
+      }
+    ]
+  },
+  "trade_calendar_columns": [
+    "exchange",
+    "trade_date",
+    "is_open",
+    "sessions",
+    "note",
+    "created_at"
+  ],
+  "trade_calendar": [
+    {
+      "dow": 1,
+      "is_open": true,
+      "n": 302
+    },
+    {
+      "dow": 2,
+      "is_open": true,
+      "n": 314
+    },
+    {
+      "dow": 3,
+      "is_open": true,
+      "n": 317
+    },
+    {
+      "dow": 4,
+      "is_open": true,
+      "n": 316
+    },
+    {
+      "dow": 5,
+      "is_open": true,
+      "n": 304
+    }
+  ],
+  "weekend_vs_weekday": {
+    "n_missing_total": 331,
+    "n_missing_weekend": 330,
+    "n_missing_weekday": 1,
+    "missing_weekday_dates": [
+      "2026-10-30"
+    ],
+    "n_weekday_calendar": 1839,
+    "fu_coverage_after_dropping_weekend": 0.999456
+  }
+}

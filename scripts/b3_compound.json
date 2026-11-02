@@ -1,0 +1,690 @@
+{
+  "meta": {
+    "start": "2021-01-01",
+    "end": "2026-10-30",
+    "E0": 1000000.0,
+    "fracs": [
+      0.01,
+      0.02,
+      0.05,
+      0.1
+    ],
+    "size_bases": [
+      "notional",
+      "risk"
+    ],
+    "calendar_modes": [
+      "weekend_drop",
+      "raw"
+    ],
+    "max_margin_pct": 0.5,
+    "purpose": "六期 P2 真实动态复利（权益缩放+整数手数+逐日盯市）",
+    "caveats": [
+      "已实现盈亏用 trade 的 open-to-open pnl 扣成本，与 §19/§21 逐位一致；逐日盯市用日线 close 近似结算价，仅供权益/保证金判定",
+      "lots<1 强制 1 手以保持成交集不变（便于与 §21 比较），会使小额账户实际风险高于目标 frac，已计数",
+      "主口径不跳过保证金超限开仓（保全成交集），另给 enforce_margin 档体现真实容量约束",
+      "不含资金成本/利息、组合保证金优惠、滑点随规模变化、法定节假日；session_map 未纳入（其 open 语义改变见 §26 P1）",
+      "复利结果对初始资金 E0、frac、整数手数截断敏感，属情景分析而非收益承诺"
+    ]
+  },
+  "modes": {
+    "weekend_drop": {
+      "n_trades": 190,
+      "n_calendar_days": 1352,
+      "simple_sum_return_px": 2.31252,
+      "cells": [
+        {
+          "frac": 0.01,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 739048.77,
+          "nav_multiple": 0.739,
+          "total_return": -0.26095,
+          "cagr": -0.05065,
+          "sharpe_daily": -0.288,
+          "mdd_over_E0": 0.48826,
+          "n_forced_one_lot": 190,
+          "n_margin_breach": 2,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.0,
+          "max_lots": 1,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            739048.77,
+            739048.77,
+            739048.77,
+            739048.77,
+            739048.77
+          ]
+        },
+        {
+          "frac": 0.02,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 739048.77,
+          "nav_multiple": 0.739,
+          "total_return": -0.26095,
+          "cagr": -0.05065,
+          "sharpe_daily": -0.288,
+          "mdd_over_E0": 0.48826,
+          "n_forced_one_lot": 190,
+          "n_margin_breach": 2,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.0,
+          "max_lots": 1,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            739048.77,
+            739048.77,
+            739048.77,
+            739048.77,
+            739048.77
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 741983.19,
+          "nav_multiple": 0.742,
+          "total_return": -0.25802,
+          "cagr": -0.05,
+          "sharpe_daily": -0.285,
+          "mdd_over_E0": 0.48749,
+          "n_forced_one_lot": 83,
+          "n_margin_breach": 2,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.05,
+          "max_lots": 2,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            741983.19,
+            741983.19,
+            741983.19,
+            741983.19,
+            741983.19
+          ]
+        },
+        {
+          "frac": 0.1,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 825326.36,
+          "nav_multiple": 0.8253,
+          "total_return": -0.17467,
+          "cagr": -0.03246,
+          "sharpe_daily": -0.189,
+          "mdd_over_E0": 0.44066,
+          "n_forced_one_lot": 47,
+          "n_margin_breach": 2,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 2.06,
+          "max_lots": 4,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            825326.36,
+            825326.36,
+            825326.36,
+            825326.36,
+            825326.36
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "notional",
+          "enforce_margin": true,
+          "max_margin_pct": 0.5,
+          "final_nav": 774343.21,
+          "nav_multiple": 0.7743,
+          "total_return": -0.22566,
+          "cagr": -0.04301,
+          "sharpe_daily": -0.232,
+          "mdd_over_E0": 0.45513,
+          "n_forced_one_lot": 82,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 1,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.05,
+          "max_lots": 2,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            774343.21,
+            774343.21,
+            774343.21,
+            774343.21,
+            774343.21
+          ],
+          "note": "enforce_margin=True：跳过保证金超限的新开仓（成交集改变）"
+        },
+        {
+          "frac": 0.01,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 757369.43,
+          "nav_multiple": 0.7574,
+          "total_return": -0.24263,
+          "cagr": -0.04664,
+          "sharpe_daily": -0.268,
+          "mdd_over_E0": 0.48296,
+          "n_forced_one_lot": 83,
+          "n_margin_breach": 2,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.37,
+          "max_lots": 5,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            757369.43,
+            757369.43,
+            757369.43,
+            757369.43,
+            757369.43
+          ]
+        },
+        {
+          "frac": 0.02,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 884112.66,
+          "nav_multiple": 0.8841,
+          "total_return": -0.11589,
+          "cagr": -0.02095,
+          "sharpe_daily": -0.112,
+          "mdd_over_E0": 0.42371,
+          "n_forced_one_lot": 50,
+          "n_margin_breach": 2,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 2.81,
+          "max_lots": 11,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            884112.66,
+            884112.66,
+            884112.66,
+            884112.66,
+            884112.66
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 1496771.29,
+          "nav_multiple": 1.4968,
+          "total_return": 0.49677,
+          "cagr": 0.07178,
+          "sharpe_daily": 0.885,
+          "mdd_over_E0": 0.32031,
+          "n_forced_one_lot": 19,
+          "n_margin_breach": 0,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 9.03,
+          "max_lots": 34,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            1496771.29,
+            1496771.29,
+            1496771.29,
+            1496771.29,
+            1496771.29
+          ]
+        },
+        {
+          "frac": 0.1,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 3412986.3,
+          "nav_multiple": 3.413,
+          "total_return": 2.41299,
+          "cagr": 0.23491,
+          "sharpe_daily": 2.081,
+          "mdd_over_E0": 0.18865,
+          "n_forced_one_lot": 4,
+          "n_margin_breach": 25,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 28.31,
+          "max_lots": 117,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            3412986.3,
+            3412986.3,
+            3412986.3,
+            3412986.3,
+            3412986.3
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "risk",
+          "enforce_margin": true,
+          "max_margin_pct": 0.5,
+          "final_nav": 1496771.29,
+          "nav_multiple": 1.4968,
+          "total_return": 0.49677,
+          "cagr": 0.07178,
+          "sharpe_daily": 0.885,
+          "mdd_over_E0": 0.32031,
+          "n_forced_one_lot": 19,
+          "n_margin_breach": 0,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 9.03,
+          "max_lots": 34,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            1496771.29,
+            1496771.29,
+            1496771.29,
+            1496771.29,
+            1496771.29
+          ],
+          "note": "enforce_margin=True：跳过保证金超限的新开仓（成交集改变）"
+        }
+      ]
+    },
+    "raw": {
+      "n_trades": 195,
+      "n_calendar_days": 1602,
+      "simple_sum_return_px": 1.89933,
+      "cells": [
+        {
+          "frac": 0.01,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 906993.39,
+          "nav_multiple": 0.907,
+          "total_return": -0.09301,
+          "cagr": -0.01664,
+          "sharpe_daily": -0.082,
+          "mdd_over_E0": 0.35402,
+          "n_forced_one_lot": 195,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.0,
+          "max_lots": 1,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            906993.39,
+            906993.39,
+            906993.39,
+            906993.39,
+            906993.39
+          ]
+        },
+        {
+          "frac": 0.02,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 906993.39,
+          "nav_multiple": 0.907,
+          "total_return": -0.09301,
+          "cagr": -0.01664,
+          "sharpe_daily": -0.082,
+          "mdd_over_E0": 0.35402,
+          "n_forced_one_lot": 194,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.0,
+          "max_lots": 1,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            906993.39,
+            906993.39,
+            906993.39,
+            906993.39,
+            906993.39
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 914148.82,
+          "nav_multiple": 0.9141,
+          "total_return": -0.08585,
+          "cagr": -0.01531,
+          "sharpe_daily": -0.072,
+          "mdd_over_E0": 0.35361,
+          "n_forced_one_lot": 89,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.12,
+          "max_lots": 2,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            914148.82,
+            914148.82,
+            914148.82,
+            914148.82,
+            914148.82
+          ]
+        },
+        {
+          "frac": 0.1,
+          "size_basis": "notional",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 963945.55,
+          "nav_multiple": 0.9639,
+          "total_return": -0.03605,
+          "cagr": -0.00629,
+          "sharpe_daily": -0.002,
+          "mdd_over_E0": 0.34734,
+          "n_forced_one_lot": 52,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 2.12,
+          "max_lots": 5,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            963945.55,
+            963945.55,
+            963945.55,
+            963945.55,
+            963945.55
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "notional",
+          "enforce_margin": true,
+          "max_margin_pct": 0.5,
+          "final_nav": 884785.09,
+          "nav_multiple": 0.8848,
+          "total_return": -0.11521,
+          "cagr": -0.02082,
+          "sharpe_daily": -0.12,
+          "mdd_over_E0": 0.38297,
+          "n_forced_one_lot": 89,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 1,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.12,
+          "max_lots": 2,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            884785.09,
+            884785.09,
+            884785.09,
+            884785.09,
+            884785.09
+          ],
+          "note": "enforce_margin=True：跳过保证金超限的新开仓（成交集改变）"
+        },
+        {
+          "frac": 0.01,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 919442.26,
+          "nav_multiple": 0.9194,
+          "total_return": -0.08056,
+          "cagr": -0.01433,
+          "sharpe_daily": -0.065,
+          "mdd_over_E0": 0.35577,
+          "n_forced_one_lot": 77,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 1.5,
+          "max_lots": 5,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            919442.26,
+            919442.26,
+            919442.26,
+            919442.26,
+            919442.26
+          ]
+        },
+        {
+          "frac": 0.02,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 1037335.64,
+          "nav_multiple": 1.0373,
+          "total_return": 0.03734,
+          "cagr": 0.00632,
+          "sharpe_daily": 0.108,
+          "mdd_over_E0": 0.33341,
+          "n_forced_one_lot": 42,
+          "n_margin_breach": 0,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 3.01,
+          "max_lots": 11,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            1037335.64,
+            1037335.64,
+            1037335.64,
+            1037335.64,
+            1037335.64
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 1697242.03,
+          "nav_multiple": 1.6972,
+          "total_return": 0.69724,
+          "cagr": 0.09519,
+          "sharpe_daily": 1.047,
+          "mdd_over_E0": 0.2222,
+          "n_forced_one_lot": 11,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 9.45,
+          "max_lots": 32,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            1697242.03,
+            1697242.03,
+            1697242.03,
+            1697242.03,
+            1697242.03
+          ]
+        },
+        {
+          "frac": 0.1,
+          "size_basis": "risk",
+          "enforce_margin": false,
+          "max_margin_pct": 0.5,
+          "final_nav": 3247709.54,
+          "nav_multiple": 3.2477,
+          "total_return": 2.24771,
+          "cagr": 0.22442,
+          "sharpe_daily": 1.319,
+          "mdd_over_E0": 0.23377,
+          "n_forced_one_lot": 2,
+          "n_margin_breach": 36,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mean_lots": 26.83,
+          "max_lots": 102,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            3247709.54,
+            3247709.54,
+            3247709.54,
+            3247709.54,
+            3247709.54
+          ]
+        },
+        {
+          "frac": 0.05,
+          "size_basis": "risk",
+          "enforce_margin": true,
+          "max_margin_pct": 0.5,
+          "final_nav": 1624338.08,
+          "nav_multiple": 1.6243,
+          "total_return": 0.62434,
+          "cagr": 0.08695,
+          "sharpe_daily": 0.945,
+          "mdd_over_E0": 0.23715,
+          "n_forced_one_lot": 12,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 1,
+          "n_missing_margin_data": 0,
+          "mean_lots": 9.29,
+          "max_lots": 31,
+          "curve_head": [
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0,
+            1000000.0
+          ],
+          "curve_tail": [
+            1624338.08,
+            1624338.08,
+            1624338.08,
+            1624338.08,
+            1624338.08
+          ],
+          "note": "enforce_margin=True：跳过保证金超限的新开仓（成交集改变）"
+        }
+      ]
+    }
+  }
+}
