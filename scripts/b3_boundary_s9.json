@@ -1,0 +1,369 @@
+{
+  "meta": {
+    "purpose": "九期 P3：数据边界复查 + 新增完整交易日 MDD 跟踪",
+    "probe_day": "2026-11-02",
+    "base_end": "2026-10-30",
+    "calendar_mode": "weekend_drop",
+    "criteria": {
+      "D1": "15:00 bar 覆盖品种数 ≥ 45",
+      "D2": "22:00 bar 存在",
+      "D3": "daily_bar 11-02 有 888 行"
+    },
+    "caveats": [
+      "bar_60m 的 bucket 为 bar 结束时刻",
+      "l3_ref.trade_calendar 覆盖不全，不以该表判完整性"
+    ]
+  },
+  "boundary": {
+    "max_bucket": "2026-11-02 14:00:00+08",
+    "n_bars_after_base_end": 603,
+    "n_distinct_days_after_base_end": 3,
+    "probe_day": "2026-11-02",
+    "probe_day_hour_counts": {
+      "0": 11,
+      "9": 50,
+      "10": 50,
+      "11": 50,
+      "13": 50,
+      "14": 50
+    },
+    "probe_day_symbols_with_15h_bar": 0,
+    "base_end_symbols_with_15h_bar": 50,
+    "min_symbols_required": 45,
+    "D1_dayclose_complete": false,
+    "D2_night_complete": false,
+    "D3_settle_available": false,
+    "is_complete_trading_day": false,
+    "daily_bar_max_trade_date": "2026-10-30",
+    "daily_bar_rows_probe_day": 0,
+    "eight_phase_max_bucket": "2026-11-02 13:00"
+  },
+  "runs": {
+    "base": {
+      "end": "2026-10-30",
+      "n_trades": 190,
+      "n_calendar_days": 1352,
+      "max_entry_date": "2026-09-07",
+      "max_exit_date": "2026-09-29",
+      "dd": {
+        "n_2026_trades": 32,
+        "n_2026_calendar_days": 140,
+        "total_return_2026": 0.35118,
+        "mdd_2026": 0.10284,
+        "dd_peak_date": "2026-02-27",
+        "dd_trough_date": "2026-04-08",
+        "dd_window_days": 28,
+        "sum_return_in_window": -0.08254,
+        "n_trades_in_window": 14,
+        "per_pair_in_window": {
+          "FU-SC": -0.21898,
+          "RB-HC": 0.00254,
+          "Y-P": 0.01535,
+          "SF-SM": 0.02029,
+          "J-JM": 0.03063,
+          "TA-MA": 0.06764
+        },
+        "per_pair_all_2026": {
+          "FU-SC": -0.06588,
+          "RB-HC": 0.00254,
+          "Y-P": 0.01535,
+          "SF-SM": 0.02029,
+          "NI-SS": 0.03365,
+          "FG-SA": 0.0404,
+          "CU-ZN": 0.05543,
+          "TA-MA": 0.06764,
+          "AU-AG": 0.08049,
+          "J-JM": 0.10128
+        },
+        "by_month_2026": {
+          "2026-01": 0.03339,
+          "2026-02": 0.02029,
+          "2026-03": -0.00587,
+          "2026-04": 0.08677,
+          "2026-05": 0.08049,
+          "2026-09": 0.1361
+        },
+        "trades_in_window": [
+          {
+            "date": "2026-02-27",
+            "pair": "SF-SM",
+            "symbol": "SF888",
+            "side": "LONG",
+            "net_return_px": 0.054091,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-02-27",
+            "pair": "SF-SM",
+            "symbol": "SM888",
+            "side": "SHORT",
+            "net_return_px": -0.033798,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "TA-MA",
+            "symbol": "TA888",
+            "side": "SHORT",
+            "net_return_px": -0.085796,
+            "holding_days": 8
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "TA-MA",
+            "symbol": "MA888",
+            "side": "LONG",
+            "net_return_px": 0.153434,
+            "holding_days": 8
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "FU-SC",
+            "symbol": "FU888",
+            "side": "SHORT",
+            "net_return_px": -0.041748,
+            "holding_days": 16
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "FU-SC",
+            "symbol": "SC888",
+            "side": "LONG",
+            "net_return_px": -0.080264,
+            "holding_days": 16
+          },
+          {
+            "date": "2026-03-16",
+            "pair": "Y-P",
+            "symbol": "Y888",
+            "side": "LONG",
+            "net_return_px": -0.007433,
+            "holding_days": 10
+          },
+          {
+            "date": "2026-03-16",
+            "pair": "Y-P",
+            "symbol": "P888",
+            "side": "SHORT",
+            "net_return_px": 0.022778,
+            "holding_days": 10
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "RB-HC",
+            "symbol": "RB888",
+            "side": "LONG",
+            "net_return_px": -0.001472,
+            "holding_days": 6
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "RB-HC",
+            "symbol": "HC888",
+            "side": "SHORT",
+            "net_return_px": 0.004009,
+            "holding_days": 6
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "J-JM",
+            "symbol": "J888",
+            "side": "LONG",
+            "net_return_px": -0.040019,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "J-JM",
+            "symbol": "JM888",
+            "side": "SHORT",
+            "net_return_px": 0.070647,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-04-08",
+            "pair": "FU-SC",
+            "symbol": "FU888",
+            "side": "SHORT",
+            "net_return_px": 0.031741,
+            "holding_days": 12
+          },
+          {
+            "date": "2026-04-08",
+            "pair": "FU-SC",
+            "symbol": "SC888",
+            "side": "LONG",
+            "net_return_px": -0.128713,
+            "holding_days": 12
+          }
+        ]
+      }
+    },
+    "advanced": {
+      "end": "2026-11-02",
+      "n_trades": 190,
+      "n_calendar_days": 1353,
+      "max_entry_date": "2026-09-07",
+      "max_exit_date": "2026-09-29",
+      "dd": {
+        "n_2026_trades": 32,
+        "n_2026_calendar_days": 141,
+        "total_return_2026": 0.35118,
+        "mdd_2026": 0.10284,
+        "dd_peak_date": "2026-02-27",
+        "dd_trough_date": "2026-04-08",
+        "dd_window_days": 28,
+        "sum_return_in_window": -0.08254,
+        "n_trades_in_window": 14,
+        "per_pair_in_window": {
+          "FU-SC": -0.21898,
+          "RB-HC": 0.00254,
+          "Y-P": 0.01535,
+          "SF-SM": 0.02029,
+          "J-JM": 0.03063,
+          "TA-MA": 0.06764
+        },
+        "per_pair_all_2026": {
+          "FU-SC": -0.06588,
+          "RB-HC": 0.00254,
+          "Y-P": 0.01535,
+          "SF-SM": 0.02029,
+          "NI-SS": 0.03365,
+          "FG-SA": 0.0404,
+          "CU-ZN": 0.05543,
+          "TA-MA": 0.06764,
+          "AU-AG": 0.08049,
+          "J-JM": 0.10128
+        },
+        "by_month_2026": {
+          "2026-01": 0.03339,
+          "2026-02": 0.02029,
+          "2026-03": -0.00587,
+          "2026-04": 0.08677,
+          "2026-05": 0.08049,
+          "2026-09": 0.1361
+        },
+        "trades_in_window": [
+          {
+            "date": "2026-02-27",
+            "pair": "SF-SM",
+            "symbol": "SF888",
+            "side": "LONG",
+            "net_return_px": 0.054091,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-02-27",
+            "pair": "SF-SM",
+            "symbol": "SM888",
+            "side": "SHORT",
+            "net_return_px": -0.033798,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "TA-MA",
+            "symbol": "TA888",
+            "side": "SHORT",
+            "net_return_px": -0.085796,
+            "holding_days": 8
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "TA-MA",
+            "symbol": "MA888",
+            "side": "LONG",
+            "net_return_px": 0.153434,
+            "holding_days": 8
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "FU-SC",
+            "symbol": "FU888",
+            "side": "SHORT",
+            "net_return_px": -0.041748,
+            "holding_days": 16
+          },
+          {
+            "date": "2026-03-10",
+            "pair": "FU-SC",
+            "symbol": "SC888",
+            "side": "LONG",
+            "net_return_px": -0.080264,
+            "holding_days": 16
+          },
+          {
+            "date": "2026-03-16",
+            "pair": "Y-P",
+            "symbol": "Y888",
+            "side": "LONG",
+            "net_return_px": -0.007433,
+            "holding_days": 10
+          },
+          {
+            "date": "2026-03-16",
+            "pair": "Y-P",
+            "symbol": "P888",
+            "side": "SHORT",
+            "net_return_px": 0.022778,
+            "holding_days": 10
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "RB-HC",
+            "symbol": "RB888",
+            "side": "LONG",
+            "net_return_px": -0.001472,
+            "holding_days": 6
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "RB-HC",
+            "symbol": "HC888",
+            "side": "SHORT",
+            "net_return_px": 0.004009,
+            "holding_days": 6
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "J-JM",
+            "symbol": "J888",
+            "side": "LONG",
+            "net_return_px": -0.040019,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-03-25",
+            "pair": "J-JM",
+            "symbol": "JM888",
+            "side": "SHORT",
+            "net_return_px": 0.070647,
+            "holding_days": 7
+          },
+          {
+            "date": "2026-04-08",
+            "pair": "FU-SC",
+            "symbol": "FU888",
+            "side": "SHORT",
+            "net_return_px": 0.031741,
+            "holding_days": 12
+          },
+          {
+            "date": "2026-04-08",
+            "pair": "FU-SC",
+            "symbol": "SC888",
+            "side": "LONG",
+            "net_return_px": -0.128713,
+            "holding_days": 12
+          }
+        ]
+      }
+    }
+  },
+  "delta": {
+    "n_trades_delta": 0,
+    "calendar_days_delta": 1,
+    "baseline_reproduced": true,
+    "note": "若 n_trades_delta=0 且 calendar_days_delta>0，说明推进 end 只是加长了空日历（结构性时间缺口仍在）；若 >0 则为真正新增成交"
+  }
+}

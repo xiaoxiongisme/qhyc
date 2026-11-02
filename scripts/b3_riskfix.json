@@ -1,0 +1,1002 @@
+{
+  "meta": {
+    "purpose": "九期 P0：修正 risk 分母重复乘 sl_mult 的历史口径偏差并重跑复利全链路",
+    "start": "2021-01-01",
+    "end": "2026-10-30",
+    "E0": 1000000.0,
+    "n_trades": 190,
+    "n_calendar_days": 1352,
+    "calendar_mode": "weekend_drop",
+    "basis": "risk",
+    "sl_mult": 3.0,
+    "risk_scale_legacy": 3.0,
+    "risk_scale_fixed": 1.0,
+    "anchor_legacy_frac": 0.05,
+    "equiv_frac": 0.016667,
+    "fixed_grid": [
+      0.004,
+      0.005,
+      0.0067,
+      0.008,
+      0.01,
+      0.0133,
+      0.0167,
+      0.02,
+      0.0267,
+      0.0333,
+      0.04,
+      0.05
+    ],
+    "prereg_grid_fixed": [
+      0.00667,
+      0.01,
+      0.01333,
+      0.01667,
+      0.02,
+      0.02667,
+      0.03333
+    ],
+    "train_years": [
+      "2021",
+      "2023"
+    ],
+    "oos_years": [
+      "2024",
+      "2026"
+    ],
+    "caveats": [
+      "成交集固定为同一批 trades，仅配仓手数随 frac/risk_scale 变化",
+      "lots<1 强制 1 手以保成交集不变，会使小额账户实际风险高于目标 frac，已计数",
+      "主口径不跳过保证金超限开仓（保全成交集）",
+      "逐日盯市默认用日线 close（与 §27 一致）；真实结算价见 §29.4"
+    ]
+  },
+  "V0_reproduce_anchor": {
+    "expected": {
+      "full_nav": 1.4968,
+      "full_mdd": 0.32031,
+      "full_breach": 0,
+      "oos_nav": 1.1846,
+      "oos_mdd": 0.34234
+    },
+    "got": {
+      "full_nav": 1.4968,
+      "full_mdd": 0.32031,
+      "full_breach": 0,
+      "oos_nav": 1.1846,
+      "oos_mdd": 0.34234
+    },
+    "pass": true,
+    "cell": {
+      "frac": 0.05,
+      "risk_scale": 3.0,
+      "effective_risk_per_trade": 0.01667,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1496771.29,
+        "nav_multiple_on_segment": 1.4968,
+        "segment_return": 0.49677,
+        "cagr": 0.07178,
+        "mdd_over_e0": 0.32031,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1184636.7,
+        "nav_multiple_on_segment": 1.1846,
+        "segment_return": 0.18464,
+        "cagr": 0.0618,
+        "mdd_over_e0": 0.34234,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.0177,
+        "risk_frac_p95": 0.02794,
+        "risk_frac_max": 0.13045,
+        "margin_util_max": 0.395,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.01918,
+        "risk_frac_p95": 0.03491,
+        "risk_frac_max": 0.1614,
+        "margin_util_max": 0.4612,
+        "n_entry": 138
+      }
+    }
+  },
+  "V1_equivalence": {
+    "legacy": {
+      "frac": 0.05,
+      "risk_scale": 3.0,
+      "full_nav": 1.4968,
+      "full_mdd": 0.32031
+    },
+    "fixed": {
+      "frac": 0.016667,
+      "risk_scale": 1.0,
+      "full_nav": 1.4968,
+      "full_mdd": 0.32031,
+      "oos_nav": 1.1846,
+      "oos_mdd": 0.34234
+    },
+    "lots_max_abs_diff": 0,
+    "lots_n_mismatch": 0,
+    "n_compared": 190,
+    "nav_relative_error": 0.0,
+    "verdict": "纯标定错误：等价重参数化，结论实质不变"
+  },
+  "V2_fixed_grid": [
+    {
+      "frac": 0.004,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.004,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 770120.03,
+        "nav_multiple_on_segment": 0.7701,
+        "segment_return": -0.22988,
+        "cagr": -0.0439,
+        "mdd_over_e0": 0.48187,
+        "n_forced_one_lot": 72,
+        "n_margin_breach": 2,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 744383.5,
+        "nav_multiple_on_segment": 0.7444,
+        "segment_return": -0.25562,
+        "cagr": -0.09921,
+        "mdd_over_e0": 0.48189,
+        "n_forced_one_lot": 53,
+        "n_margin_breach": 2,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.01083,
+        "risk_frac_p95": 0.04014,
+        "risk_frac_max": 0.22943,
+        "margin_util_max": 0.6664,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.01248,
+        "risk_frac_p95": 0.04184,
+        "risk_frac_max": 0.23629,
+        "margin_util_max": 0.6912,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.005,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.005,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 799216.23,
+        "nav_multiple_on_segment": 0.7992,
+        "segment_return": -0.20078,
+        "cagr": -0.03779,
+        "mdd_over_e0": 0.46096,
+        "n_forced_one_lot": 62,
+        "n_margin_breach": 2,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 772824.0,
+        "nav_multiple_on_segment": 0.7728,
+        "segment_return": -0.22718,
+        "cagr": -0.08717,
+        "mdd_over_e0": 0.46157,
+        "n_forced_one_lot": 48,
+        "n_margin_breach": 2,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.0112,
+        "risk_frac_p95": 0.03943,
+        "risk_frac_max": 0.2226,
+        "margin_util_max": 0.6422,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.0128,
+        "risk_frac_p95": 0.0411,
+        "risk_frac_max": 0.22922,
+        "margin_util_max": 0.6657,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.0067,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.0067,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 884711.72,
+        "nav_multiple_on_segment": 0.8847,
+        "segment_return": -0.11529,
+        "cagr": -0.02083,
+        "mdd_over_e0": 0.42301,
+        "n_forced_one_lot": 50,
+        "n_margin_breach": 2,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 795769.84,
+        "nav_multiple_on_segment": 0.7958,
+        "segment_return": -0.20423,
+        "cagr": -0.07767,
+        "mdd_over_e0": 0.44658,
+        "n_forced_one_lot": 42,
+        "n_margin_breach": 2,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.01179,
+        "risk_frac_p95": 0.03725,
+        "risk_frac_max": 0.20355,
+        "margin_util_max": 0.5761,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.01355,
+        "risk_frac_p95": 0.04043,
+        "risk_frac_max": 0.22343,
+        "margin_util_max": 0.6451,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.008,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.008,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 935140.06,
+        "nav_multiple_on_segment": 0.9351,
+        "segment_return": -0.06486,
+        "cagr": -0.01146,
+        "mdd_over_e0": 0.4043,
+        "n_forced_one_lot": 39,
+        "n_margin_breach": 1,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 845977.72,
+        "nav_multiple_on_segment": 0.846,
+        "segment_return": -0.15402,
+        "cagr": -0.05748,
+        "mdd_over_e0": 0.41339,
+        "n_forced_one_lot": 35,
+        "n_margin_breach": 2,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.01239,
+        "risk_frac_p95": 0.03613,
+        "risk_frac_max": 0.1929,
+        "margin_util_max": 0.542,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.01404,
+        "risk_frac_p95": 0.0392,
+        "risk_frac_max": 0.21114,
+        "margin_util_max": 0.6042,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.01,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.01,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1028355.99,
+        "nav_multiple_on_segment": 1.0284,
+        "segment_return": 0.02836,
+        "cagr": 0.00482,
+        "mdd_over_e0": 0.39398,
+        "n_forced_one_lot": 33,
+        "n_margin_breach": 1,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 897263.06,
+        "nav_multiple_on_segment": 0.8973,
+        "segment_return": -0.10274,
+        "cagr": -0.03764,
+        "mdd_over_e0": 0.40335,
+        "n_forced_one_lot": 26,
+        "n_margin_breach": 1,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.01343,
+        "risk_frac_p95": 0.03485,
+        "risk_frac_max": 0.17875,
+        "margin_util_max": 0.508,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.01498,
+        "risk_frac_p95": 0.03904,
+        "risk_frac_max": 0.20044,
+        "margin_util_max": 0.5674,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.0133,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.0133,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1273705.4,
+        "nav_multiple_on_segment": 1.2737,
+        "segment_return": 0.27371,
+        "cagr": 0.04246,
+        "mdd_over_e0": 0.35353,
+        "n_forced_one_lot": 24,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1013426.05,
+        "nav_multiple_on_segment": 1.0134,
+        "segment_return": 0.01343,
+        "cagr": 0.00473,
+        "mdd_over_e0": 0.38621,
+        "n_forced_one_lot": 21,
+        "n_margin_breach": 1,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.01539,
+        "risk_frac_p95": 0.0312,
+        "risk_frac_max": 0.14971,
+        "margin_util_max": 0.4272,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.01694,
+        "risk_frac_p95": 0.03869,
+        "risk_frac_max": 0.18118,
+        "margin_util_max": 0.5254,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.0167,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.0167,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1508945.65,
+        "nav_multiple_on_segment": 1.5089,
+        "segment_return": 0.50895,
+        "cagr": 0.07327,
+        "mdd_over_e0": 0.31344,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1190964.73,
+        "nav_multiple_on_segment": 1.191,
+        "segment_return": 0.19096,
+        "cagr": 0.06381,
+        "mdd_over_e0": 0.34234,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.01772,
+        "risk_frac_p95": 0.02782,
+        "risk_frac_max": 0.12989,
+        "margin_util_max": 0.395,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.01916,
+        "risk_frac_p95": 0.03481,
+        "risk_frac_max": 0.16059,
+        "margin_util_max": 0.4586,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.02,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.02,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1815624.22,
+        "nav_multiple_on_segment": 1.8156,
+        "segment_return": 0.81562,
+        "cagr": 0.10795,
+        "mdd_over_e0": 0.25384,
+        "n_forced_one_lot": 14,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1350133.34,
+        "nav_multiple_on_segment": 1.3501,
+        "segment_return": 0.35013,
+        "cagr": 0.1121,
+        "mdd_over_e0": 0.28803,
+        "n_forced_one_lot": 12,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.0204,
+        "risk_frac_p95": 0.02529,
+        "risk_frac_max": 0.11094,
+        "margin_util_max": 0.4783,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.02145,
+        "risk_frac_p95": 0.03344,
+        "risk_frac_max": 0.14641,
+        "margin_util_max": 0.4725,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.0267,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.0267,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 2496792.2,
+        "nav_multiple_on_segment": 2.4968,
+        "segment_return": 1.49679,
+        "cagr": 0.17032,
+        "mdd_over_e0": 0.15677,
+        "n_forced_one_lot": 7,
+        "n_margin_breach": 10,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1717623.14,
+        "nav_multiple_on_segment": 1.7176,
+        "segment_return": 0.71762,
+        "cagr": 0.21101,
+        "mdd_over_e0": 0.22589,
+        "n_forced_one_lot": 10,
+        "n_margin_breach": 10,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.02605,
+        "risk_frac_p95": 0.02668,
+        "risk_frac_max": 0.08449,
+        "margin_util_max": 0.6309,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.02686,
+        "risk_frac_p95": 0.02999,
+        "risk_frac_max": 0.11827,
+        "margin_util_max": 0.6136,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.0333,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.0333,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 3378854.66,
+        "nav_multiple_on_segment": 3.3789,
+        "segment_return": 2.37885,
+        "cagr": 0.23278,
+        "mdd_over_e0": 0.18311,
+        "n_forced_one_lot": 4,
+        "n_margin_breach": 25,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 2108697.05,
+        "nav_multiple_on_segment": 2.1087,
+        "segment_return": 1.1087,
+        "cagr": 0.3022,
+        "mdd_over_e0": 0.16063,
+        "n_forced_one_lot": 6,
+        "n_margin_breach": 20,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.03206,
+        "risk_frac_p95": 0.03327,
+        "risk_frac_max": 0.06512,
+        "margin_util_max": 0.7701,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.03278,
+        "risk_frac_p95": 0.03329,
+        "risk_frac_max": 0.1004,
+        "margin_util_max": 0.7578,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.04,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.04,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 4444958.48,
+        "nav_multiple_on_segment": 4.445,
+        "segment_return": 3.44496,
+        "cagr": 0.29228,
+        "mdd_over_e0": 0.224,
+        "n_forced_one_lot": 3,
+        "n_margin_breach": 36,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 2672098.56,
+        "nav_multiple_on_segment": 2.6721,
+        "segment_return": 1.6721,
+        "cagr": 0.41603,
+        "mdd_over_e0": 0.18303,
+        "n_forced_one_lot": 3,
+        "n_margin_breach": 26,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.03838,
+        "risk_frac_p95": 0.03997,
+        "risk_frac_max": 0.0516,
+        "margin_util_max": 0.9546,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.03845,
+        "risk_frac_p95": 0.03993,
+        "risk_frac_max": 0.08341,
+        "margin_util_max": 0.923,
+        "n_entry": 138
+      }
+    },
+    {
+      "frac": 0.05,
+      "risk_scale": 1.0,
+      "effective_risk_per_trade": 0.05,
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 6299599.48,
+        "nav_multiple_on_segment": 6.2996,
+        "segment_return": 5.2996,
+        "cagr": 0.37211,
+        "mdd_over_e0": 0.41649,
+        "n_forced_one_lot": 1,
+        "n_margin_breach": 51,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 3631493.87,
+        "nav_multiple_on_segment": 3.6315,
+        "segment_return": 2.63149,
+        "cagr": 0.57844,
+        "mdd_over_e0": 0.22394,
+        "n_forced_one_lot": 1,
+        "n_margin_breach": 37,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag_full": {
+        "risk_frac_mean": 0.04854,
+        "risk_frac_p95": 0.04998,
+        "risk_frac_max": 0.05031,
+        "margin_util_max": 1.2,
+        "n_entry": 190
+      },
+      "diag_oos": {
+        "risk_frac_mean": 0.04817,
+        "risk_frac_p95": 0.04995,
+        "risk_frac_max": 0.06498,
+        "margin_util_max": 1.1561,
+        "n_entry": 138
+      }
+    }
+  ],
+  "V3_prereg_fixed": {
+    "stage1_train_grid": {
+      "0.00667": {
+        "n_calendar_days": 727,
+        "nav_start": 1000000.0,
+        "nav_end": 1058054.6,
+        "nav_multiple_on_segment": 1.0581,
+        "segment_return": 0.05805,
+        "cagr": 0.01911,
+        "mdd_over_e0": 0.08142,
+        "n_forced_one_lot": 11,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0,
+        "mdd_over_E0": 0.08142
+      },
+      "0.01": {
+        "n_calendar_days": 727,
+        "nav_start": 1000000.0,
+        "nav_end": 1093220.13,
+        "nav_multiple_on_segment": 1.0932,
+        "segment_return": 0.09322,
+        "cagr": 0.03034,
+        "mdd_over_e0": 0.07042,
+        "n_forced_one_lot": 10,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0,
+        "mdd_over_E0": 0.07042
+      },
+      "0.01333": {
+        "n_calendar_days": 727,
+        "nav_start": 1000000.0,
+        "nav_end": 1152372.39,
+        "nav_multiple_on_segment": 1.1524,
+        "segment_return": 0.15237,
+        "cagr": 0.04872,
+        "mdd_over_e0": 0.06545,
+        "n_forced_one_lot": 7,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0,
+        "mdd_over_E0": 0.06545
+      },
+      "0.01667": {
+        "n_calendar_days": 727,
+        "nav_start": 1000000.0,
+        "nav_end": 1196122.46,
+        "nav_multiple_on_segment": 1.1961,
+        "segment_return": 0.19612,
+        "cagr": 0.06191,
+        "mdd_over_e0": 0.05942,
+        "n_forced_one_lot": 6,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0,
+        "mdd_over_E0": 0.05942
+      },
+      "0.02": {
+        "n_calendar_days": 727,
+        "nav_start": 1000000.0,
+        "nav_end": 1238304.19,
+        "nav_multiple_on_segment": 1.2383,
+        "segment_return": 0.2383,
+        "cagr": 0.07432,
+        "mdd_over_e0": 0.05563,
+        "n_forced_one_lot": 3,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0,
+        "mdd_over_E0": 0.05563
+      },
+      "0.02667": {
+        "n_calendar_days": 727,
+        "nav_start": 1000000.0,
+        "nav_end": 1354535.11,
+        "nav_multiple_on_segment": 1.3545,
+        "segment_return": 0.35454,
+        "cagr": 0.10714,
+        "mdd_over_e0": 0.07512,
+        "n_forced_one_lot": 2,
+        "n_margin_breach": 1,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0,
+        "mdd_over_E0": 0.07512
+      },
+      "0.03333": {
+        "n_calendar_days": 727,
+        "nav_start": 1000000.0,
+        "nav_end": 1480431.82,
+        "nav_multiple_on_segment": 1.4804,
+        "segment_return": 0.48043,
+        "cagr": 0.14064,
+        "mdd_over_e0": 0.09944,
+        "n_forced_one_lot": 2,
+        "n_margin_breach": 5,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0,
+        "mdd_over_E0": 0.09944
+      }
+    },
+    "stage1_picks": {
+      "R1_structural_mid": {
+        "frac": 0.01333,
+        "feasible_set": [
+          0.00667,
+          0.01,
+          0.01333,
+          0.01667,
+          0.02
+        ],
+        "pool_used": [
+          0.00667,
+          0.01,
+          0.01333,
+          0.01667,
+          0.02
+        ],
+        "fallback_to_full_grid": false,
+        "rule": "train 可行域(breach=0 且 NAV>1) 中位元素；偶数取靠小者；空则回退全网格"
+      },
+      "R2_train_nav_max": {
+        "frac": 0.03333,
+        "train_nav": 1.4804,
+        "rule": "argmax train NAV（仅训练期）"
+      },
+      "R3_train_calmar_max": {
+        "frac": 0.03333,
+        "calmar_values": {
+          "0.00667": 0.71297,
+          "0.01": 1.32377,
+          "0.01333": 2.32804,
+          "0.01667": 3.30057,
+          "0.02": 4.28366,
+          "0.02667": 4.71965,
+          "0.03333": 4.83136
+        },
+        "rule": "argmax train Calmar=segment_return/MDD_E0（仅 MDD>0 格，仅训练期）"
+      },
+      "R4_train_min_mdd": {
+        "frac": 0.02,
+        "pool_used": [
+          0.00667,
+          0.01,
+          0.01333,
+          0.01667,
+          0.02,
+          0.02667,
+          0.03333
+        ],
+        "fallback_to_full_grid": false,
+        "train_mdd": 0.05563,
+        "rule": "argmin train MDD_E0（限 train NAV>1；空则回退全网格，仅训练期）"
+      }
+    },
+    "stage2_oos": {
+      "R1_structural_mid": {
+        "frac": 0.01333,
+        "rule": "train 可行域(breach=0 且 NAV>1) 中位元素；偶数取靠小者；空则回退全网格",
+        "train": {
+          "n_calendar_days": 727,
+          "nav_start": 1000000.0,
+          "nav_end": 1152372.39,
+          "nav_multiple_on_segment": 1.1524,
+          "segment_return": 0.15237,
+          "cagr": 0.04872,
+          "mdd_over_e0": 0.06545,
+          "n_forced_one_lot": 7,
+          "n_margin_breach": 0,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mdd_over_E0": 0.06545
+        },
+        "oos": {
+          "n_calendar_days": 625,
+          "nav_start": 1000000.0,
+          "nav_end": 1022147.03,
+          "nav_multiple_on_segment": 1.0221,
+          "segment_return": 0.02215,
+          "cagr": 0.00778,
+          "mdd_over_e0": 0.38621,
+          "n_forced_one_lot": 21,
+          "n_margin_breach": 1,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0
+        }
+      },
+      "R2_train_nav_max": {
+        "frac": 0.03333,
+        "rule": "argmax train NAV（仅训练期）",
+        "train": {
+          "n_calendar_days": 727,
+          "nav_start": 1000000.0,
+          "nav_end": 1480431.82,
+          "nav_multiple_on_segment": 1.4804,
+          "segment_return": 0.48043,
+          "cagr": 0.14064,
+          "mdd_over_e0": 0.09944,
+          "n_forced_one_lot": 2,
+          "n_margin_breach": 5,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mdd_over_E0": 0.09944
+        },
+        "oos": {
+          "n_calendar_days": 625,
+          "nav_start": 1000000.0,
+          "nav_end": 2119241.06,
+          "nav_multiple_on_segment": 2.1192,
+          "segment_return": 1.11924,
+          "cagr": 0.3045,
+          "mdd_over_e0": 0.16063,
+          "n_forced_one_lot": 6,
+          "n_margin_breach": 19,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0
+        }
+      },
+      "R3_train_calmar_max": {
+        "frac": 0.03333,
+        "rule": "argmax train Calmar=segment_return/MDD_E0（仅 MDD>0 格，仅训练期）",
+        "train": {
+          "n_calendar_days": 727,
+          "nav_start": 1000000.0,
+          "nav_end": 1480431.82,
+          "nav_multiple_on_segment": 1.4804,
+          "segment_return": 0.48043,
+          "cagr": 0.14064,
+          "mdd_over_e0": 0.09944,
+          "n_forced_one_lot": 2,
+          "n_margin_breach": 5,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mdd_over_E0": 0.09944
+        },
+        "oos": {
+          "n_calendar_days": 625,
+          "nav_start": 1000000.0,
+          "nav_end": 2119241.06,
+          "nav_multiple_on_segment": 2.1192,
+          "segment_return": 1.11924,
+          "cagr": 0.3045,
+          "mdd_over_e0": 0.16063,
+          "n_forced_one_lot": 6,
+          "n_margin_breach": 19,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0
+        }
+      },
+      "R4_train_min_mdd": {
+        "frac": 0.02,
+        "rule": "argmin train MDD_E0（限 train NAV>1；空则回退全网格，仅训练期）",
+        "train": {
+          "n_calendar_days": 727,
+          "nav_start": 1000000.0,
+          "nav_end": 1238304.19,
+          "nav_multiple_on_segment": 1.2383,
+          "segment_return": 0.2383,
+          "cagr": 0.07432,
+          "mdd_over_e0": 0.05563,
+          "n_forced_one_lot": 3,
+          "n_margin_breach": 0,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0,
+          "mdd_over_E0": 0.05563
+        },
+        "oos": {
+          "n_calendar_days": 625,
+          "nav_start": 1000000.0,
+          "nav_end": 1350133.34,
+          "nav_multiple_on_segment": 1.3501,
+          "segment_return": 0.35013,
+          "cagr": 0.1121,
+          "mdd_over_e0": 0.28803,
+          "n_forced_one_lot": 12,
+          "n_margin_breach": 0,
+          "n_skipped_by_margin": 0,
+          "n_missing_margin_data": 0
+        }
+      }
+    }
+  },
+  "V4_label_mismatch": {
+    "legacy_label_frac": 0.05,
+    "legacy_true_risk_per_trade": 0.01667,
+    "same_label_under_fixed": {
+      "frac": 0.05,
+      "full": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 6299599.48,
+        "nav_multiple_on_segment": 6.2996,
+        "segment_return": 5.2996,
+        "cagr": 0.37211,
+        "mdd_over_e0": 0.41649,
+        "n_forced_one_lot": 1,
+        "n_margin_breach": 51,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 3631493.87,
+        "nav_multiple_on_segment": 3.6315,
+        "segment_return": 2.63149,
+        "cagr": 0.57844,
+        "mdd_over_e0": 0.22394,
+        "n_forced_one_lot": 1,
+        "n_margin_breach": 37,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "diag": {
+        "risk_frac_mean": 0.04854,
+        "risk_frac_p95": 0.04998,
+        "risk_frac_max": 0.05031,
+        "margin_util_max": 1.2,
+        "n_entry": 190
+      }
+    },
+    "note": "若生产方按旧文档字面取 5%/笔 风险，实际是旧口径 15%，会显著过杠杆"
+  }
+}
