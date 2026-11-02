@@ -1,0 +1,148 @@
+{
+ "meta": {
+  "generated_at": "2026-11-02T22:58:05",
+  "window": [
+   "2024-01-01",
+   "2026-10-30"
+  ],
+  "bar_modes": [
+   "native",
+   "reagg5"
+  ]
+ },
+ "A_convention": {
+  "n_left": 1,
+  "n_right": 776,
+  "switch_date": "2026-11-02",
+  "left_days_head": [
+   "2026-11-02"
+  ],
+  "left_days_tail": [
+   "2026-11-02"
+  ],
+  "assertion_rule": "日盘存在 09:00 bar → left（左端）；否则 right（右端）",
+  "realtime_risk": "right 口径下 bar 的 bucket 是结束时刻；若把 bucket 当决策时点，等于提前 1 小时拿到收盘价 → 前视"
+ },
+ "B_reagg": {
+  "tolerance": 0.002,
+  "by_calendar_mode": {
+   "weekend_drop": {
+    "n_days_native": 428,
+    "n_days_reagg": 428,
+    "common_days": 427,
+    "common_syms": 50,
+    "close": {
+     "n": 21318,
+     "median_dev": 0.0,
+     "p99_dev": 0.011762,
+     "max_dev": 0.053277,
+     "share_over_tol": 0.140773
+    },
+    "open": {
+     "n": 21318,
+     "median_dev": 0.0,
+     "p99_dev": 0.019867,
+     "max_dev": 0.08138,
+     "share_over_tol": 0.192842
+    },
+    "high": {
+     "n": 21318,
+     "median_dev": 0.0,
+     "p99_dev": 0.003254,
+     "max_dev": 0.042228,
+     "share_over_tol": 0.016184
+    },
+    "low": {
+     "n": 21318,
+     "median_dev": 0.0,
+     "p99_dev": 0.003398,
+     "max_dev": 0.036803,
+     "share_over_tol": 0.017544
+    }
+   },
+   "session_map": {
+    "n_days_native": 429,
+    "n_days_reagg": 429,
+    "common_days": 429,
+    "common_syms": 50,
+    "close": {
+     "n": 21402,
+     "median_dev": 0.0,
+     "p99_dev": 0.012429,
+     "max_dev": 0.074122,
+     "share_over_tol": 0.122512
+    },
+    "open": {
+     "n": 21402,
+     "median_dev": 0.0,
+     "p99_dev": 0.019091,
+     "max_dev": 0.08138,
+     "share_over_tol": 0.160219
+    },
+    "high": {
+     "n": 21402,
+     "median_dev": 0.0,
+     "p99_dev": 0.0,
+     "max_dev": 0.0,
+     "share_over_tol": 0.0
+    },
+    "low": {
+     "n": 21402,
+     "median_dev": 0.0,
+     "p99_dev": 0.0,
+     "max_dev": 0.002742,
+     "share_over_tol": 4.7e-05
+    }
+   }
+  },
+  "note": "close/open/high/low 均由 60m 派生；口径只影响'哪根 bar 是当日最后一根'，左端整点与右端会话锚定在收盘价上应等价（除零成交边界 bar）"
+ },
+ "C_backtest": {
+  "runs": {
+   "native": {
+    "n": 38,
+    "agg_net": 7.6212,
+    "mean": 0.20056,
+    "win": 0.5,
+    "by_year": {
+     "2025": {
+      "n": 4,
+      "net": 2.57539
+     },
+     "2026": {
+      "n": 34,
+      "net": 5.04582
+     }
+    },
+    "n_calendar": 625
+   },
+   "reagg5": {
+    "n": 38,
+    "agg_net": 7.29407,
+    "mean": 0.19195,
+    "win": 0.5263,
+    "by_year": {
+     "2025": {
+      "n": 4,
+      "net": 2.65686
+     },
+     "2026": {
+      "n": 34,
+      "net": 4.63721
+     }
+    },
+    "n_calendar": 624
+   }
+  },
+  "delta": {
+   "n_trades": 0,
+   "agg_net": -0.32713,
+   "by_year": {
+    "2025": 0.08147,
+    "2026": -0.40861
+   }
+  },
+  "verdict": "口径对回测有实质影响，需统一后重算",
+  "why": "B3 的信号与模拟均在日线上；60m 只派生日 OHLC，故标签口径只改'哪根是当日末根'，不改日线价格序列"
+ }
+}

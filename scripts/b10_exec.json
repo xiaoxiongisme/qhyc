@@ -1,0 +1,156 @@
+{
+ "meta": {
+  "generated_at": "2026-11-02T23:11:59",
+  "limit_buffer": 0.98,
+  "frac": 0.02,
+  "e0": 1000000.0
+ },
+ "A_limit": {
+  "n_trades": 190,
+  "n_blocked": 2,
+  "blocked_share": 0.0105,
+  "blocked_net_R": -0.4346,
+  "baseline": {
+   "n_trades": 190,
+   "n_skip_pairs": 0,
+   "nav": 1.815624,
+   "ret": 0.815624,
+   "mdd_peak": 0.135065,
+   "mdd_e0": 0.028101,
+   "net_R": 38.59682,
+   "pf": 1.8567,
+   "win": 0.5842,
+   "n_breach": 0
+  },
+  "after_drop": {
+   "n_trades": 188,
+   "n_skip_pairs": 0,
+   "nav": 1.827471,
+   "ret": 0.827471,
+   "mdd_peak": 0.144995,
+   "mdd_e0": 0.028101,
+   "net_R": 39.03141,
+   "pf": 1.8748,
+   "win": 0.5904,
+   "n_breach": 0
+  },
+  "blocked_detail": [
+   {
+    "symbol": "SM888",
+    "side": "LONG",
+    "entry": "2025-07-24",
+    "exit": "2025-07-28",
+    "e_move_pct": -0.236,
+    "x_move_pct": -8.544,
+    "limit_pct": 8.0,
+    "net_R": -0.2005,
+    "blocked": [
+     "LONG平仓遇跌停"
+    ]
+   },
+   {
+    "symbol": "FU888",
+    "side": "SHORT",
+    "entry": "2026-03-10",
+    "exit": "2026-03-26",
+    "e_move_pct": -15.32,
+    "x_move_pct": 1.669,
+    "limit_pct": 7.0,
+    "net_R": -0.2341,
+    "blocked": [
+     "SHORT开仓遇跌停"
+    ]
+   }
+  ],
+  "note": "整笔剔除是上界估计；真实应顺延到下一可成交日"
+ },
+ "B_capacity": {
+  "n": 190,
+  "median": 0.00020618607170833124,
+  "p95": 0.0023760793995378465,
+  "max": 0.011324153905546261,
+  "top5": [
+   {
+    "symbol": "J888",
+    "date": "2026-04-10",
+    "lots": 176.0,
+    "notional": 28679200.0,
+    "market_notional": 2532568900.0,
+    "participation": 0.011324153905546261
+   },
+   {
+    "symbol": "J888",
+    "date": "2024-12-24",
+    "lots": 110.0,
+    "notional": 19855000.0,
+    "market_notional": 2075569500.0,
+    "participation": 0.00956604922167145
+   },
+   {
+    "symbol": "J888",
+    "date": "2025-11-21",
+    "lots": 146.0,
+    "notional": 23885600.0,
+    "market_notional": 2621362800.0,
+    "participation": 0.009111901641390502
+   },
+   {
+    "symbol": "J888",
+    "date": "2025-12-22",
+    "lots": 154.0,
+    "notional": 26765200.0,
+    "market_notional": 3042716600.0,
+    "participation": 0.008796481407437025
+   },
+   {
+    "symbol": "J888",
+    "date": "2026-03-25",
+    "lots": 170.0,
+    "notional": 30098500.0,
+    "market_notional": 3993362750.0,
+    "participation": 0.007537131456439814
+   }
+  ],
+  "note": "分母用 daily_bar 888 的品种级成交量 → 参与率偏乐观（低估）"
+ },
+ "C_session_map": {
+  "weekend_drop": {
+   "n_trades": 190,
+   "n_skip_pairs": 0,
+   "nav": 1.815624,
+   "ret": 0.815624,
+   "mdd_peak": 0.135065,
+   "mdd_e0": 0.028101,
+   "net_R": 38.59682,
+   "pf": 1.8567,
+   "win": 0.5842,
+   "n_breach": 0
+  },
+  "session_map": {
+   "n_trades": 192,
+   "n_skip_pairs": 0,
+   "nav": 2.290588,
+   "ret": 1.290588,
+   "mdd_peak": 0.082627,
+   "mdd_e0": 0.00282,
+   "net_R": 42.30776,
+   "pf": 1.8185,
+   "win": 0.6302,
+   "n_breach": 0
+  },
+  "session_map_k5": {
+   "n_trades": 174,
+   "n_skip_pairs": 9,
+   "nav": 2.140929,
+   "ret": 1.140929,
+   "mdd_peak": 0.05822,
+   "mdd_e0": 0.00282,
+   "net_R": 38.77266,
+   "pf": 1.7943,
+   "win": 0.6322,
+   "n_breach": 0
+  },
+  "delta_nav": 0.474964,
+  "delta_mdd": -0.052438
+ }
+}

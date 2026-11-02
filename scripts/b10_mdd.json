@@ -1,0 +1,200 @@
+{
+ "meta": {
+  "generated_at": "2026-11-02T23:11:03",
+  "e0": 1000000.0,
+  "frac": 0.02,
+  "k_star": 5.0,
+  "primary_mdd": "MDD_peak = max(1 - NAV/peak)",
+  "secondary": "MDD_e0 = 1 - min(NAV/E0)",
+  "gate3": "MDD_peak < 0.25 且 年收益 > -0.1"
+ },
+ "full": {
+  "baseline": {
+   "n_trades": 190,
+   "n_skip_pairs": 0,
+   "nav": 1.815624,
+   "ret": 0.815624,
+   "mdd_peak": 0.135065,
+   "mdd_e0": 0.028101,
+   "net_R": 38.59682,
+   "pf": 1.8567,
+   "win": 0.5842,
+   "n_breach": 0
+  },
+  "filtered_k5": {
+   "n_trades": 166,
+   "n_skip_pairs": 12,
+   "nav": 1.973623,
+   "ret": 0.973623,
+   "mdd_peak": 0.048499,
+   "mdd_e0": 0.00486,
+   "net_R": 35.56718,
+   "pf": 1.9199,
+   "win": 0.5964,
+   "n_breach": 0
+  }
+ },
+ "by_year": {
+  "2022": {
+   "baseline": {
+    "n_trades": 4,
+    "n_skip_pairs": 0,
+    "nav": 1.00644,
+    "ret": 0.00644,
+    "mdd_peak": 0.00486,
+    "mdd_e0": 0.00486,
+    "net_R": 0.60689,
+    "pf": 1.7489,
+    "win": 0.5,
+    "n_breach": 0,
+    "gate3_pass": true
+   },
+   "filtered_k5": {
+    "n_trades": 4,
+    "n_skip_pairs": 0,
+    "nav": 1.00644,
+    "ret": 0.00644,
+    "mdd_peak": 0.00486,
+    "mdd_e0": 0.00486,
+    "net_R": 0.60689,
+    "pf": 1.7489,
+    "win": 0.5,
+    "n_breach": 0,
+    "gate3_pass": true
+   }
+  },
+  "2023": {
+   "baseline": {
+    "n_trades": 48,
+    "n_skip_pairs": 0,
+    "nav": 1.219148,
+    "ret": 0.219148,
+    "mdd_peak": 0.052824,
+    "mdd_e0": 0.04268,
+    "net_R": 12.69452,
+    "pf": 2.2351,
+    "win": 0.625,
+    "n_breach": 0,
+    "gate3_pass": true
+   },
+   "filtered_k5": {
+    "n_trades": 44,
+    "n_skip_pairs": 2,
+    "nav": 1.238871,
+    "ret": 0.238871,
+    "mdd_peak": 0.047498,
+    "mdd_e0": 0.00655,
+    "net_R": 12.01748,
+    "pf": 2.2775,
+    "win": 0.6364,
+    "n_breach": 0,
+    "gate3_pass": true
+   }
+  },
+  "2024": {
+   "baseline": {
+    "n_trades": 58,
+    "n_skip_pairs": 0,
+    "nav": 1.177082,
+    "ret": 0.177082,
+    "mdd_peak": 0.023135,
+    "mdd_e0": 0.00365,
+    "net_R": 12.07087,
+    "pf": 1.9356,
+    "win": 0.6034,
+    "n_breach": 0,
+    "gate3_pass": true
+   },
+   "filtered_k5": {
+    "n_trades": 52,
+    "n_skip_pairs": 3,
+    "nav": 1.168362,
+    "ret": 0.168362,
+    "mdd_peak": 0.016962,
+    "mdd_e0": 0.00365,
+    "net_R": 10.50721,
+    "pf": 1.8949,
+    "win": 0.5962,
+    "n_breach": 0,
+    "gate3_pass": true
+   }
+  },
+  "2025": {
+   "baseline": {
+    "n_trades": 48,
+    "n_skip_pairs": 0,
+    "nav": 1.090266,
+    "ret": 0.090266,
+    "mdd_peak": 0.062933,
+    "mdd_e0": 0.027936,
+    "net_R": 9.69926,
+    "pf": 1.7971,
+    "win": 0.5833,
+    "n_breach": 0,
+    "gate3_pass": true
+   },
+   "filtered_k5": {
+    "n_trades": 44,
+    "n_skip_pairs": 2,
+    "nav": 1.135568,
+    "ret": 0.135568,
+    "mdd_peak": 0.015047,
+    "mdd_e0": 0.0,
+    "net_R": 9.32172,
+    "pf": 1.9306,
+    "win": 0.5909,
+    "n_breach": 0,
+    "gate3_pass": true
+   }
+  },
+  "2026": {
+   "baseline": {
+    "n_trades": 32,
+    "n_skip_pairs": 0,
+    "nav": 0.87227,
+    "ret": -0.12773,
+    "mdd_peak": 0.344201,
+    "mdd_e0": 0.3266,
+    "net_R": 3.52528,
+    "pf": 1.3963,
+    "win": 0.5,
+    "n_breach": 0,
+    "gate3_pass": false
+   },
+   "filtered_k5": {
+    "n_trades": 22,
+    "n_skip_pairs": 5,
+    "nav": 1.058593,
+    "ret": 0.058593,
+    "mdd_peak": 0.028509,
+    "mdd_e0": 0.0,
+    "net_R": 3.11387,
+    "pf": 1.4656,
+    "win": 0.5455,
+    "n_breach": 0,
+    "gate3_pass": true
+   }
+  }
+ },
+ "gate3_flips": [],
+ "five_gates": {
+  "baseline": {
+   "G1_net_R_pos": true,
+   "G2_pf_ge_1.1": true,
+   "G3_years_ok": false,
+   "G3_failing_years": [
+    "2026"
+   ],
+   "G4_placebo": "复用 §27 结果：三口径安慰剂 0.0%（本轮未重跑）",
+   "G5_corr_v2": "复用 §27：Pearson −0.0158/+0.0037/+0.0031（|ρ|≪0.30）"
+  },
+  "filtered_k5": {
+   "G1_net_R_pos": true,
+   "G2_pf_ge_1.1": true,
+   "G3_years_ok": true,
+   "G3_failing_years": [],
+   "G4_placebo": "复用 §27 结果：三口径安慰剂 0.0%（本轮未重跑）",
+   "G5_corr_v2": "复用 §27：Pearson −0.0158/+0.0037/+0.0031（|ρ|≪0.30）"
+  }
+ }
+}

@@ -1,0 +1,162 @@
+{
+ "meta": {
+  "generated_at": "2026-11-02T23:10:15",
+  "e0": 1000000.0,
+  "frac": 0.02,
+  "k_grid": [
+   1.5,
+   2.0,
+   3.0,
+   5.0,
+   8.0,
+   null
+  ],
+  "train": [
+   "2021-01-01",
+   "2023-12-31"
+  ],
+  "max_mdd_train": 0.25,
+  "rule": "按 (entry_dt, pair) 分组，任一腿 1 手风险 > k×目标 → 整对跳过",
+  "prereg": "k* = 训练期 argmax NAV s.t. MDD<=0.25；并列取较小 k"
+ },
+ "n_trades": 190,
+ "n_pairs": 95,
+ "T_train_grid": {
+  "1.5": {
+   "n_trades": 34,
+   "n_skip_pairs": 9,
+   "nav": 1.158419,
+   "mdd": 0.076303,
+   "n_breach": 0
+  },
+  "2.0": {
+   "n_trades": 38,
+   "n_skip_pairs": 7,
+   "nav": 1.195203,
+   "mdd": 0.058743,
+   "n_breach": 0
+  },
+  "3.0": {
+   "n_trades": 46,
+   "n_skip_pairs": 3,
+   "nav": 1.243189,
+   "mdd": 0.047323,
+   "n_breach": 0
+  },
+  "5.0": {
+   "n_trades": 48,
+   "n_skip_pairs": 2,
+   "nav": 1.253092,
+   "mdd": 0.048499,
+   "n_breach": 0
+  },
+  "8.0": {
+   "n_trades": 50,
+   "n_skip_pairs": 1,
+   "nav": 1.227898,
+   "mdd": 0.047947,
+   "n_breach": 0
+  },
+  "inf": {
+   "n_trades": 52,
+   "n_skip_pairs": 0,
+   "nav": 1.238304,
+   "mdd": 0.047947,
+   "n_breach": 0
+  }
+ },
+ "k_star": "5.0",
+ "O_oos": {
+  "baseline": {
+   "n_trades": 138,
+   "n_skip_pairs": 0,
+   "nav": 1.350133,
+   "mdd": 0.199726,
+   "n_breach": 0
+  },
+  "filtered": {
+   "n_trades": 118,
+   "n_skip_pairs": 10,
+   "nav": 1.519438,
+   "mdd": 0.022231,
+   "n_breach": 0
+  },
+  "delta_nav": 0.169305,
+  "delta_mdd": -0.177495
+ },
+ "Y_by_year": {
+  "2024": {
+   "baseline": {
+    "n_trades": 58,
+    "n_skip_pairs": 0,
+    "nav": 1.177082,
+    "mdd": 0.023135,
+    "n_breach": 0
+   },
+   "filtered": {
+    "n_trades": 52,
+    "n_skip_pairs": 3,
+    "nav": 1.168362,
+    "mdd": 0.016962,
+    "n_breach": 0
+   }
+  },
+  "2025": {
+   "baseline": {
+    "n_trades": 48,
+    "n_skip_pairs": 0,
+    "nav": 1.090266,
+    "mdd": 0.062933,
+    "n_breach": 0
+   },
+   "filtered": {
+    "n_trades": 44,
+    "n_skip_pairs": 2,
+    "nav": 1.135568,
+    "mdd": 0.015047,
+    "n_breach": 0
+   }
+  },
+  "2026": {
+   "baseline": {
+    "n_trades": 32,
+    "n_skip_pairs": 0,
+    "nav": 0.87227,
+    "mdd": 0.344201,
+    "n_breach": 0
+   },
+   "filtered": {
+    "n_trades": 22,
+    "n_skip_pairs": 5,
+    "nav": 1.058593,
+    "mdd": 0.028509,
+    "n_breach": 0
+   }
+  }
+ },
+ "C1_high_e0": {
+  "e0": 100000000.0,
+  "baseline": {
+   "n_trades": 138,
+   "n_skip_pairs": 0,
+   "nav": 1.646883,
+   "mdd": 0.031134,
+   "n_breach": 0
+  },
+  "filtered": {
+   "n_trades": 138,
+   "n_skip_pairs": 0,
+   "nav": 1.646883,
+   "mdd": 0.031134,
+   "n_breach": 0
+  }
+ },
+ "C2_placebo": {
+  "n": 200,
+  "median": 1.245037,
+  "p95": 1.396377,
+  "max": 1.477368,
+  "share_ge_filtered": 0.0
+ },
+ "verdict": "OOS 同时改善收益与回撤；安慰剂分位<10%，改善非随机跳过所致；E0=1e8 时无需跳过 → 支持'规模错配'解释"
+}

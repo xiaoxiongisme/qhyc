@@ -64,8 +64,69 @@ REBALANCE_N = 5         # 默认每 5 个交易日调仓（周频）
 
 
 # ------------------------------------------------------------------- 数据
+def detect_bar_convention(session, start: date, end: date) -> dict:
+    """检测 5m/60m 的标签口径（十期②）。
+
+    判据：日盘首根 bar 是否为 09:00。
+      'left'  —— 存在 09:00 的 bar（左端=bar 开始时刻）
+      'right' —— 不存在 09:00（右端=bar 结束时刻，日盘首根为 09:05 / 10:00）
+    返回 {'left': [date...], 'right': [date...], 'switch_date': date|None}
+    """
+    # 用 60m 表（805k 行）代替 5m（9M 行）；左端口径下日盘首根为 09:00，
+    # 右端口径下不存在 hour=9 的 bar（首根为 10:00）→ 只用 extract，避免 to_char 全扫描。
+    rows = session.execute(text(
+        "SELECT DISTINCT bucket::date AS d FROM l1_mkt.bar_60m "
+        "WHERE bucket >= :s AND bucket <= :e AND extract(hour from bucket) = 9 "
+        "ORDER BY 1"), {"s": pd.Timestamp(start), "e": pd.Timestamp(end)}).all()
+    left = sorted(r[0] for r in rows)
+
+    rows2 = session.execute(text(
+        "SELECT DISTINCT bucket::date AS d FROM l1_mkt.bar_60m "
+        "WHERE bucket >= :s AND bucket <= :e ORDER BY 1"),
+        {"s": pd.Timestamp(start), "e": pd.Timestamp(end)}).all()
+    all_days = sorted(r[0] for r in rows2)
+    left_set = set(left)
+    right = [d for d in all_days if d not in left_set]
+    switch = left[0] if left else None
+    return {"left": left, "right": right, "switch_date": switch,
+            "n_left": len(left), "n_right": len(right)}
+
+
+def _reagg_60m_from_5m(session, start: date, end: date) -> pd.DataFrame:
+    """由 bar_5m 重聚合为「左端整点」60m（十期②）。
+
+    逐日先判标签口径：
+      'right' 的 5m bar 标签是结束时刻（09:05 覆盖 09:00-09:05）→ 减 5 分钟后取整点；
+      'left'  的标签已是开始时刻（09:00 覆盖 09:00-09:05）→ 直接取整点。
+    这样两种口径都归一到「该小时的第 1 分钟」，即 bar 的左端。
+    """
+    rows = session.execute(text(
+        "SELECT symbol, bucket, open, high, low, close, volume FROM l1_mkt.bar_5m "
+        "WHERE bucket >= :s AND bucket <= :e"), {"s": pd.Timestamp(start), "e": pd.Timestamp(end)}).all()
+    df = pd.DataFrame(rows, columns=["symbol", "bucket", "open", "high", "low", "close", "volume"])
+    if df.empty:
+        return df
+    for c in ("open", "high", "low", "close", "volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce").astype(float)
+    df["d"] = df["bucket"].dt.date
+    is_left = df["bucket"].dt.strftime("%H:%M") == "09:00"
+    left_days = set(df.loc[is_left, "d"].unique())
+    df["adj"] = df["bucket"] - df["d"].map(
+        lambda x: pd.Timedelta(0) if x in left_days else pd.Timedelta(minutes=5))
+    df["dt"] = df["adj"].dt.floor("h")
+    out = df.groupby(["symbol", "dt"], as_index=False).agg(
+        open=("open", "first"), high=("high", "max"),
+        low=("low", "min"), close=("close", "last"), volume=("volume", "sum"))
+    return out[["symbol", "dt", "open", "high", "low", "close", "volume"]]
+
+
 def load_market(session, symbols: list[str], start: date, end: date,
-                calendar_mode: str = "raw"):
+                calendar_mode: str = "raw", bar_mode: str = "native",
+                bar_frame: pd.DataFrame | None = None):
+    """bar_mode（十期②新增，默认 'native' 保持既有研究逐位一致）：
+      'native' —— 直读 l1_mkt.bar_60m（历史口径，标签在 2026-11-02 前为右端/会话锚定）
+      'reagg5' —— 由 bar_5m 重聚合为左端整点（单一口径，用于口径敏感性对照）
+    """
     """一次性取全部品种 60m，重采样为日线 open/close/high/low（date×symbol）。
 
     返回 (opens, closes, highs, lows) 四个 DataFrame，index=date，columns=symbol。
@@ -81,11 +142,21 @@ def load_market(session, symbols: list[str], start: date, end: date,
     真实交易日覆盖率 99.95%。l3_ref.trade_calendar 仅记开市日且覆盖不全，
     故 session_map 只按星期推、不处理法定节假日（诚实标注为简化）。
     """
-    rows = session.execute(text(
-        "SELECT symbol, bucket, open, high, low, close FROM l1_mkt.bar_60m "
-        "WHERE bucket >= :s AND bucket <= :e"
-    ), {"s": pd.Timestamp(start), "e": pd.Timestamp(end)}).all()
-    raw = pd.DataFrame(rows, columns=["symbol", "dt", "open", "high", "low", "close"])
+    if bar_frame is not None:
+        # 十期②：外部已构建好的 bar 帧（避免重复拉 9M 行 5m）
+        raw = bar_frame.copy()
+    elif bar_mode == "reagg5":
+        raw = _reagg_60m_from_5m(session, start, end)
+        if raw.empty:
+            raise RuntimeError("reagg5: bar_5m 在区间内无数据")
+    elif bar_mode == "native":
+        rows = session.execute(text(
+            "SELECT symbol, bucket, open, high, low, close FROM l1_mkt.bar_60m "
+            "WHERE bucket >= :s AND bucket <= :e"
+        ), {"s": pd.Timestamp(start), "e": pd.Timestamp(end)}).all()
+        raw = pd.DataFrame(rows, columns=["symbol", "dt", "open", "high", "low", "close"])
+    else:
+        raise ValueError(f"unknown bar_mode={bar_mode!r}")
     for c in ("open", "high", "low", "close"):
         raw[c] = raw[c].astype(float)
     if calendar_mode == "raw":
