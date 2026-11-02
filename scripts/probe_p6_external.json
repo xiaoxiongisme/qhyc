@@ -1,0 +1,119 @@
+{
+ "probed_at": "2026-11-02T12:57:08",
+ "scrapling_available": true,
+ "n_targets": 6,
+ "n_reachable": 2,
+ "honest_boundary": [
+  "可达性只证明『现在能连上交易所/统计局站点』，不证明『历史逐日发布时刻有存档可回溯』",
+  "能补的多为『发布规则/日程』（如盘后发布、每月发布日），属规则性先验，可为 lag 设定提供外部锚点",
+  "逐日精确 available_at 的历史重建，需要对每个交易日单独过反爬 + 站点保留历史存档，成本高、成功率未验证",
+  "本次只探可达性，未写库、未改生产、未 push"
+ ],
+ "results": {
+  "stats_release": {
+   "url": "http://www.stats.gov.cn/sj/zxfb/",
+   "gap": "§16 macro 发布日程",
+   "note": "国家统计局最新发布页；看是否可达、是否列发布日程/时间",
+   "keywords": [
+    "发布",
+    "统计"
+   ],
+   "status": 200,
+   "title": "\n\t\t\t数据发布 - 国家统计局\n\t\t",
+   "n_bytes": 65488,
+   "keyword_hits": [
+    "发布",
+    "统计"
+   ],
+   "reachable": true,
+   "looks_challenge": false,
+   "sample": "<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title> \t\t\t数据发布 - 国家统计局 \t\t</title><meta name=\"ColumnName\" content=\"数据发布\"><meta name=\"ColumnType\" content=\"数据发布\"><meta name=\"ColumnDes",
+   "elapsed_s": 5.4
+  },
+  "stats_calendar": {
+   "url": "http://www.stats.gov.cn/sj/zxfb/fbrc/",
+   "gap": "§16 macro 发布日程",
+   "note": "统计数据发布日程表（若存在，可提供每月发布日规则）",
+   "keywords": [
+    "日程",
+    "发布",
+    "时间"
+   ],
+   "status": 404,
+   "title": "404 Not Found",
+   "n_bytes": 150,
+   "keyword_hits": [],
+   "reachable": false,
+   "looks_challenge": true,
+   "sample": "<html><head><title>404 Not Found</title></head><body> <center><h1>404 Not Found</h1></center> <hr><center>nginx/1.24.0</center>         </body></html>",
+   "elapsed_s": 8.2
+  },
+  "dce_report_root": {
+   "url": "http://www.dce.com.cn/",
+   "gap": "§14/§15/§18 发布时点 / §12 持仓排名",
+   "note": "DCE 首页；复用 dce-case 已知 http + 瑞数路径",
+   "keywords": [
+    "大商所",
+    "仓单",
+    "日报"
+   ],
+   "status": 200,
+   "title": "大连商品交易所",
+   "n_bytes": 200000,
+   "keyword_hits": [
+    "大商所",
+    "仓单",
+    "日报"
+   ],
+   "reachable": true,
+   "looks_challenge": false,
+   "sample": "<html style=\"font-size: 192px; --nav-level-spacing: 44px;\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"initial-scale=1.0,maximum-scale=1.0,minimum-scale=1.0,user-scalable=0,width=device-width\"><meta name=\"description\" content=\"大商所\">",
+   "elapsed_s": 22.9
+  },
+  "dce_warehouse_page": {
+   "url": "http://www.dce.com.cn/dcereport/publicweb/dailystat/index.html",
+   "gap": "§18 仓单历史覆盖",
+   "note": "DCE 日报入口页；看仓单日报是否可定位",
+   "keywords": [
+    "仓单",
+    "日报",
+    "持仓"
+   ],
+   "status": 404,
+   "title": "404 Not Found",
+   "n_bytes": 923,
+   "keyword_hits": [],
+   "reachable": false,
+   "looks_challenge": false,
+   "sample": "<html lang=\"zh\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title>404 Not Found</title><style>         body {             margin: 0;             padding: 0;             display: flex;             justify-content: center;             align-items:",
+   "elapsed_s": 6.0
+  },
+  "shfe_root": {
+   "url": "https://www.shfe.com.cn/",
+   "gap": "§18 仓单 / §21 保证金率",
+   "note": "上期所首页；https 可能被本机代理挡（改 http 再试）",
+   "keywords": [
+    "上期所",
+    "仓单",
+    "日报"
+   ],
+   "status": "EXC",
+   "error": "TimeoutError: Page.goto: Timeout 25000ms exceeded.\nCall log:\n  - navigating to \"https://www.shfe.com.cn/\", waiting until \"load\"\n",
+   "reachable": false,
+   "elapsed_s": 26.0
+  },
+  "shfe_root_http": {
+   "url": "http://www.shfe.com.cn/",
+   "gap": "§18 仓单 / §21 保证金率",
+   "note": "https 被挡后的 http 兜底",
+   "keywords": [
+    "上期所",
+    "仓单"
+   ],
+   "status": "EXC",
+   "error": "TimeoutError: Page.goto: Timeout 25000ms exceeded.\nCall log:\n  - navigating to \"http://www.shfe.com.cn/\", waiting until \"load\"\n",
+   "reachable": false,
+   "elapsed_s": 26.0
+  }
+ }
+}

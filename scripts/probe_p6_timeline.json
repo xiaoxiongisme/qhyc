@@ -1,0 +1,243 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "max_gap_days": 7,
+  "n_trades": 195,
+  "n_windows": 23
+ },
+ "grouping_A": {
+  "n_naked_groups": 9,
+  "by_pair": {
+   "FU-SC": 9
+  }
+ },
+ "grouping_B_greedy": {
+  "n_paired": 94,
+  "n_true_naked": 7,
+  "by_pair_true_naked": {
+   "FU-SC": 7
+  }
+ },
+ "nakedA_groups_with_offsetting_leg_nearby": 2,
+ "cross_check": [
+  {
+   "entry": "2023-02-20",
+   "pair": "FU-SC",
+   "traded": [
+    "FU888"
+   ],
+   "other_leg_nearby": [],
+   "has_offsetting_nearby": false
+  },
+  {
+   "entry": "2023-07-15",
+   "pair": "FU-SC",
+   "traded": [
+    "SC888"
+   ],
+   "other_leg_nearby": [],
+   "has_offsetting_nearby": false
+  },
+  {
+   "entry": "2025-01-08",
+   "pair": "FU-SC",
+   "traded": [
+    "SC888"
+   ],
+   "other_leg_nearby": [],
+   "has_offsetting_nearby": false
+  },
+  {
+   "entry": "2025-01-16",
+   "pair": "FU-SC",
+   "traded": [
+    "SC888"
+   ],
+   "other_leg_nearby": [],
+   "has_offsetting_nearby": false
+  },
+  {
+   "entry": "2025-02-10",
+   "pair": "FU-SC",
+   "traded": [
+    "FU888"
+   ],
+   "other_leg_nearby": [],
+   "has_offsetting_nearby": false
+  },
+  {
+   "entry": "2026-04-08",
+   "pair": "FU-SC",
+   "traded": [
+    "SC888"
+   ],
+   "other_leg_nearby": [],
+   "has_offsetting_nearby": false
+  },
+  {
+   "entry": "2026-05-07",
+   "pair": "FU-SC",
+   "traded": [
+    "SC888"
+   ],
+   "other_leg_nearby": [],
+   "has_offsetting_nearby": false
+  },
+  {
+   "entry": "2026-09-05",
+   "pair": "FU-SC",
+   "traded": [
+    "SC888"
+   ],
+   "other_leg_nearby": [
+    {
+     "sym": "FU888",
+     "entry": "2026-09-07",
+     "side": "LONG",
+     "gap_days": 2
+    }
+   ],
+   "has_offsetting_nearby": true
+  },
+  {
+   "entry": "2026-09-07",
+   "pair": "FU-SC",
+   "traded": [
+    "FU888"
+   ],
+   "other_leg_nearby": [
+    {
+     "sym": "SC888",
+     "entry": "2026-09-05",
+     "side": "SHORT",
+     "gap_days": -2
+    }
+   ],
+   "has_offsetting_nearby": true
+  }
+ ],
+ "fu_sc_timeline": [
+  {
+   "entry": "2023-02-20",
+   "exit": "2023-03-23",
+   "symbol": "FU888",
+   "side": "SHORT",
+   "pnl": 250.0,
+   "hold": 31
+  },
+  {
+   "entry": "2023-07-15",
+   "exit": "2023-07-29",
+   "symbol": "SC888",
+   "side": "SHORT",
+   "pnl": -25.6,
+   "hold": 14
+  },
+  {
+   "entry": "2024-01-23",
+   "exit": "2024-02-01",
+   "symbol": "FU888",
+   "side": "LONG",
+   "pnl": 148.0,
+   "hold": 9
+  },
+  {
+   "entry": "2024-01-23",
+   "exit": "2024-02-01",
+   "symbol": "SC888",
+   "side": "SHORT",
+   "pnl": -12.6,
+   "hold": 9
+  },
+  {
+   "entry": "2025-01-08",
+   "exit": "2025-01-11",
+   "symbol": "SC888",
+   "side": "SHORT",
+   "pnl": -25.8,
+   "hold": 3
+  },
+  {
+   "entry": "2025-01-16",
+   "exit": "2025-01-18",
+   "symbol": "SC888",
+   "side": "SHORT",
+   "pnl": 6.2,
+   "hold": 2
+  },
+  {
+   "entry": "2025-02-10",
+   "exit": "2025-03-04",
+   "symbol": "FU888",
+   "side": "SHORT",
+   "pnl": 595.0,
+   "hold": 22
+  },
+  {
+   "entry": "2025-05-09",
+   "exit": "2025-06-04",
+   "symbol": "FU888",
+   "side": "SHORT",
+   "pnl": -0.0,
+   "hold": 26
+  },
+  {
+   "entry": "2025-05-09",
+   "exit": "2025-06-04",
+   "symbol": "SC888",
+   "side": "LONG",
+   "pnl": 1.4,
+   "hold": 26
+  },
+  {
+   "entry": "2026-03-10",
+   "exit": "2026-03-20",
+   "symbol": "FU888",
+   "side": "SHORT",
+   "pnl": -488.0,
+   "hold": 10
+  },
+  {
+   "entry": "2026-03-10",
+   "exit": "2026-03-20",
+   "symbol": "SC888",
+   "side": "LONG",
+   "pnl": 1.4,
+   "hold": 10
+  },
+  {
+   "entry": "2026-04-08",
+   "exit": "2026-04-18",
+   "symbol": "SC888",
+   "side": "LONG",
+   "pnl": -111.1,
+   "hold": 10
+  },
+  {
+   "entry": "2026-05-07",
+   "exit": "2026-05-16",
+   "symbol": "SC888",
+   "side": "LONG",
+   "pnl": 32.8,
+   "hold": 9
+  },
+  {
+   "entry": "2026-09-05",
+   "exit": "2026-09-29",
+   "symbol": "SC888",
+   "side": "SHORT",
+   "pnl": -35.7,
+   "hold": 24
+  },
+  {
+   "entry": "2026-09-07",
+   "exit": "2026-09-29",
+   "symbol": "FU888",
+   "side": "LONG",
+   "pnl": 550.0,
+   "hold": 22
+  }
+ ],
+ "verdict_rule": "若口径B真裸露<<口径A 且多数A组在±gap有另一腿成交 → 原『9组单腿裸露/缺腿未对冲』主要系 (entry_dt,pair) 分组误拆错日配对，§21/§22 的缺腿归因与『剔除后MDD减半』须重估"
+}

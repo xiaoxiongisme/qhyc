@@ -1,0 +1,369 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "window": 60,
+  "entry_z": 2.0,
+  "bar_60m_max_bucket": "2026-11-02 10:00:00+08:00",
+  "n_trades": 195,
+  "n_naked_groups": 9
+ },
+ "naked_diagnosis": [
+  {
+   "entry": "2023-02-20",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "FU888",
+     "SHORT",
+     250.0
+    ]
+   ],
+   "open": {
+    "FU888": 2863.0,
+    "SC888": 552.5
+   },
+   "atr": {
+    "FU888": 73.47058823529412,
+    "SC888": 15.470000000000004
+   },
+   "target": {
+    "FU888": -1.0,
+    "SC888": 1.0
+   },
+   "not_traded_legs": [
+    "SC888"
+   ],
+   "invalid_at_entry": [],
+   "cause": "other_investigate"
+  },
+  {
+   "entry": "2023-07-15",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "SC888",
+     "SHORT",
+     -25.6
+    ]
+   ],
+   "open": {
+    "FU888": null,
+    "SC888": 581.2
+   },
+   "atr": {
+    "FU888": 63.94117647058823,
+    "SC888": 10.45999999999999
+   },
+   "target": {
+    "FU888": 1.0,
+    "SC888": -1.0
+   },
+   "not_traded_legs": [
+    "FU888"
+   ],
+   "invalid_at_entry": [
+    [
+     "FU888",
+     "open"
+    ]
+   ],
+   "cause": "data_gap_open_or_atr"
+  },
+  {
+   "entry": "2025-01-08",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "SC888",
+     "SHORT",
+     -25.8
+    ]
+   ],
+   "open": {
+    "FU888": 3318.0,
+    "SC888": 585.7
+   },
+   "atr": {
+    "FU888": 54.23529411764706,
+    "SC888": 7.9650000000000265
+   },
+   "target": {
+    "FU888": 1.0,
+    "SC888": -1.0
+   },
+   "not_traded_legs": [
+    "FU888"
+   ],
+   "invalid_at_entry": [],
+   "cause": "other_investigate"
+  },
+  {
+   "entry": "2025-01-16",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "SC888",
+     "SHORT",
+     6.2
+    ]
+   ],
+   "open": {
+    "FU888": 3645.0,
+    "SC888": 633.0
+   },
+   "atr": {
+    "FU888": 68.82352941176471,
+    "SC888": 11.080000000000013
+   },
+   "target": {
+    "FU888": 1.0,
+    "SC888": -1.0
+   },
+   "not_traded_legs": [
+    "FU888"
+   ],
+   "invalid_at_entry": [],
+   "cause": "other_investigate"
+  },
+  {
+   "entry": "2025-02-10",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "FU888",
+     "SHORT",
+     595.0
+    ]
+   ],
+   "open": {
+    "FU888": 3736.0,
+    "SC888": 609.3
+   },
+   "atr": {
+    "FU888": 93.875,
+    "SC888": 12.815000000000003
+   },
+   "target": {
+    "FU888": -1.0,
+    "SC888": 1.0
+   },
+   "not_traded_legs": [
+    "SC888"
+   ],
+   "invalid_at_entry": [],
+   "cause": "other_investigate"
+  },
+  {
+   "entry": "2026-04-08",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "SC888",
+     "LONG",
+     -111.1
+    ]
+   ],
+   "open": {
+    "FU888": 3976.0,
+    "SC888": 708.4
+   },
+   "atr": {
+    "FU888": 362.4117647058824,
+    "SC888": 59.39999999999998
+   },
+   "target": {
+    "FU888": -1.0,
+    "SC888": 1.0
+   },
+   "not_traded_legs": [
+    "FU888"
+   ],
+   "invalid_at_entry": [],
+   "cause": "other_investigate"
+  },
+  {
+   "entry": "2026-05-07",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "SC888",
+     "LONG",
+     32.8
+    ]
+   ],
+   "open": {
+    "FU888": 4359.0,
+    "SC888": 632.6
+   },
+   "atr": {
+    "FU888": 167.52941176470588,
+    "SC888": 24.114999999999988
+   },
+   "target": {
+    "FU888": -1.0,
+    "SC888": 1.0
+   },
+   "not_traded_legs": [
+    "FU888"
+   ],
+   "invalid_at_entry": [],
+   "cause": "other_investigate"
+  },
+  {
+   "entry": "2026-09-05",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "SC888",
+     "SHORT",
+     -35.7
+    ]
+   ],
+   "open": {
+    "FU888": null,
+    "SC888": 690.7
+   },
+   "atr": {
+    "FU888": 153.375,
+    "SC888": 28.74000000000001
+   },
+   "target": {
+    "FU888": 1.0,
+    "SC888": -1.0
+   },
+   "not_traded_legs": [
+    "FU888"
+   ],
+   "invalid_at_entry": [
+    [
+     "FU888",
+     "open"
+    ]
+   ],
+   "cause": "data_gap_open_or_atr"
+  },
+  {
+   "entry": "2026-09-07",
+   "pair": "FU-SC",
+   "n_legs": 1,
+   "traded": [
+    [
+     "FU888",
+     "LONG",
+     550.0
+    ]
+   ],
+   "open": {
+    "FU888": 3849.0,
+    "SC888": 695.4
+   },
+   "atr": {
+    "FU888": 148.625,
+    "SC888": 27.755000000000006
+   },
+   "target": {
+    "FU888": 1.0,
+    "SC888": -1.0
+   },
+   "not_traded_legs": [
+    "SC888"
+   ],
+   "invalid_at_entry": [],
+   "cause": "other_investigate"
+  }
+ ],
+ "cause_summary": {
+  "other_investigate": 7,
+  "data_gap_open_or_atr": 2
+ },
+ "fu_sc_coverage": {
+  "FU888": {
+   "n_calendar": 1909,
+   "n_open_present": 1618,
+   "n_open_missing": 291,
+   "n_atr_positive": 1898,
+   "first_open": "2019-11-28",
+   "last_open": "2026-10-29"
+  },
+  "SC888": {
+   "n_calendar": 1909,
+   "n_open_present": 1909,
+   "n_open_missing": 0,
+   "n_atr_positive": 1900,
+   "first_open": "2019-11-28",
+   "last_open": "2026-10-30"
+  }
+ },
+ "recent_bars_top12": [
+  [
+   "PP888",
+   "2026-11-02 10:00:00+08",
+   10369.0
+  ],
+  [
+   "CF888",
+   "2026-11-02 10:00:00+08",
+   15180.0
+  ],
+  [
+   "HC888",
+   "2026-11-02 10:00:00+08",
+   3164.0
+  ],
+  [
+   "C888",
+   "2026-11-02 10:00:00+08",
+   2229.0
+  ],
+  [
+   "EG888",
+   "2026-11-02 10:00:00+08",
+   5335.0
+  ],
+  [
+   "AO888",
+   "2026-11-02 10:00:00+08",
+   2639.0
+  ],
+  [
+   "CS888",
+   "2026-11-02 10:00:00+08",
+   2499.0
+  ],
+  [
+   "SI888",
+   "2026-11-02 10:00:00+08",
+   8615.0
+  ],
+  [
+   "SN888",
+   "2026-11-02 10:00:00+08",
+   364800.0
+  ],
+  [
+   "MA888",
+   "2026-11-02 10:00:00+08",
+   3522.0
+  ],
+  [
+   "UR888",
+   "2026-11-02 10:00:00+08",
+   1732.0
+  ],
+  [
+   "SR888",
+   "2026-11-02 10:00:00+08",
+   5245.0
+  ]
+ ],
+ "verdict_rule": "单腿成因由建仓日两腿 open/ATR 缺失实测判定；targets 对称性是先验，实测若出现非数据缺口组须单列调查"
+}

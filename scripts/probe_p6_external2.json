@@ -1,0 +1,245 @@
+{
+ "probed_at": "2026-11-02T13:00:34",
+ "n_reachable": 3,
+ "results": {
+  "dce_home_links": {
+   "url": "http://www.dce.com.cn/",
+   "status": 200,
+   "n_bytes": 210844,
+   "reachable": true,
+   "matched_links": [
+    {
+     "label": "数据中心",
+     "href": "# "
+    },
+    {
+     "label": "行情数据",
+     "href": "#"
+    },
+    {
+     "label": "延时行情",
+     "href": "http://www.dce.com.cn/dce/channel/list/162.html"
+    },
+    {
+     "label": "历史数据",
+     "href": "http://www.dce.com.cn/dce/channel/list/164.html"
+    },
+    {
+     "label": "行情统计",
+     "href": "http://www.dce.com.cn/dce/channel/list/165.html"
+    },
+    {
+     "label": "会员成交持仓统计",
+     "href": "http://www.dce.com.cn/dce/channel/list/166.html"
+    },
+    {
+     "label": "场外行情",
+     "href": "http://www.dce.com.cn/dce/channel/list/344.html"
+    },
+    {
+     "label": "交割统计",
+     "href": "http://www.dce.com.cn/dce/channel/list/179.html"
+    },
+    {
+     "label": "数据申请",
+     "href": "javascript:void(0);"
+    },
+    {
+     "label": "标准仓单质押",
+     "href": "http://www.dce.com.cn/dce/channel/list/7000058.html"
+    },
+    {
+     "label": "新闻发布",
+     "href": "http://www.dce.com.cn/dce/channel/list/242.html"
+    },
+    {
+     "label": "夜盘行情",
+     "href": "http://www.dce.com.cn/dce/channel/list/167.html"
+    },
+    {
+     "label": "日行情",
+     "href": "http://www.dce.com.cn/dce/channel/list/168.html"
+    },
+    {
+     "label": "周行情",
+     "href": "http://www.dce.com.cn/dce/channel/list/169.html"
+    },
+    {
+     "label": "月行情",
+     "href": "http://www.dce.com.cn/dce/channel/list/170.html"
+    },
+    {
+     "label": "合约最值统计",
+     "href": "http://www.dce.com.cn/dce/channel/list/171.html"
+    },
+    {
+     "label": "品种月度统计",
+     "href": "http://www.dce.com.cn/dce/channel/list/172.html"
+    },
+    {
+     "label": "日成交持仓排名",
+     "href": "http://www.dce.com.cn/dce/channel/list/176.html"
+    },
+    {
+     "label": "实物交割数据",
+     "href": "http://www.dce.com.cn/dce/channel/list/183.html"
+    },
+    {
+     "label": "月均价期货交割数据",
+     "href": "http://www.dce.com.cn/dce/channel/list/7000183.html"
+    },
+    {
+     "label": "仓单日报",
+     "href": "http://www.dce.com.cn/dce/channel/list/187.html"
+    },
+    {
+     "label": "一次性交割卖方仓单查询",
+     "href": "http://www.dce.com.cn/dce/channel/list/188.html"
+    },
+    {
+     "label": "延时行情",
+     "href": "/dce/channel/list/162.html"
+    },
+    {
+     "label": "历史数据",
+     "href": "/dce/channel/list/164.html"
+    },
+    {
+     "label": "统计数据",
+     "href": "/dce/channel/list/167.html"
+    }
+   ],
+   "n_matched_links": 35,
+   "time_rule_keyword_hits": [
+    "calendar"
+   ],
+   "sample": "<html style=\"font-size: 192px; --nav-level-spacing: 44px;\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"initial-scale=1.0,maximum-sca",
+   "elapsed_s": 8.5
+  },
+  "stats_release_links": {
+   "url": "http://www.stats.gov.cn/sj/zxfb/",
+   "status": 200,
+   "n_bytes": 65488,
+   "reachable": true,
+   "matched_links": [
+    {
+     "label": "统计新闻",
+     "href": "https://www.stats.gov.cn/xw/tjxw/"
+    },
+    {
+     "label": "数据",
+     "href": "https://www.stats.gov.cn/sj/"
+    },
+    {
+     "label": "数据",
+     "href": "../"
+    },
+    {
+     "label": "数据发布",
+     "href": "./"
+    },
+    {
+     "label": "2026年10月中国采购经理指数运行情况",
+     "href": "./202610/t20261031_1965718.html"
+    },
+    {
+     "label": "社会事业全面发展　民生福祉取得新进步——2025年社会民生统计报告",
+     "href": "./202610/t20261030_1965711.html"
+    },
+    {
+     "label": "国家统计局",
+     "href": "http://www.stats.gov.cn/"
+    },
+    {
+     "label": "中国统计学会",
+     "href": "http://www.nssc.stats.gov.cn"
+    },
+    {
+     "label": "联合国统计司",
+     "href": "https://unstats.un.org/UNSDWebsite/"
+    }
+   ],
+   "n_matched_links": 9,
+   "time_rule_keyword_hits": [],
+   "sample": "<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title> \t\t\t数据发布 - 国家统计局 \t\t</title",
+   "elapsed_s": 3.5
+  },
+  "stats_sjzx": {
+   "url": "http://www.stats.gov.cn/sj/",
+   "status": 200,
+   "n_bytes": 90496,
+   "reachable": true,
+   "matched_links": [
+    {
+     "label": "统计新闻",
+     "href": "https://www.stats.gov.cn/xw/tjxw/"
+    },
+    {
+     "label": "数据",
+     "href": "https://www.stats.gov.cn/sj/"
+    },
+    {
+     "label": "数据发布",
+     "href": "./zxfb/"
+    },
+    {
+     "label": "数据解读",
+     "href": "./sjjd/"
+    },
+    {
+     "label": "新闻发布会",
+     "href": "./xwfbh/"
+    },
+    {
+     "label": "发布日程",
+     "href": "./fbrc/bnxxfb/"
+    },
+    {
+     "label": "普查数据",
+     "href": "./pcsj/"
+    },
+    {
+     "label": "统计制度",
+     "href": "./tjzd/"
+    },
+    {
+     "label": "统计标准",
+     "href": "./tjbz/gjtjbz/"
+    },
+    {
+     "label": "数据查询",
+     "href": "https://data.stats.gov.cn/"
+    },
+    {
+     "label": "统计公报",
+     "href": "./tjgb/"
+    },
+    {
+     "label": "国家统计局",
+     "href": "http://www.stats.gov.cn/"
+    },
+    {
+     "label": "中国统计学会",
+     "href": "http://www.nssc.stats.gov.cn"
+    },
+    {
+     "label": "联合国统计司",
+     "href": "https://unstats.un.org/UNSDWebsite/"
+    }
+   ],
+   "n_matched_links": 14,
+   "time_rule_keyword_hits": [
+    "发布日程"
+   ],
+   "sample": "<html translate=\"no\" lang=\"zh-CN\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"><title> \t\t\t数据 -",
+   "elapsed_s": 3.7
+  }
+ },
+ "honest_boundary": [
+  "入口可达 ≠ 历史逐日「发布时刻」可回溯；交易所/统计局多只保留当期或按日查询，逐笔时刻存档罕见",
+  "能补的多为：①发布规则/日程（规则性先验，为 shift(lag) 的 lag 选择提供外部锚点）②历史数值（需逐日过瑞数，dce-case 已证 DCE 持仓排名可回溯 173 天）",
+  "§16 macro 的「不启动」另有「无被过滤对象」独立逻辑理由，补数据不翻案",
+  "§14/§15/§18 发布时点补强的是依据强度，非既有『无准入/退役』主结论",
+  "本轮只读探测，未写 l0_raw/生产库、未 push、仍在研究分支"
+ ]
+}

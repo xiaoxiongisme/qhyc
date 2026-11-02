@@ -1,0 +1,197 @@
+{
+ "probed_at": "2026-11-02T13:02:45",
+ "n_reachable": 3,
+ "results": {
+  "stats_schedule": {
+   "url": "https://www.stats.gov.cn/sj/fbrc/bnxxfb/",
+   "gap": "§16 macro 发布日程：能否拿到每月发布日期/时刻规则",
+   "kws": [
+    "发布",
+    "日程",
+    "月",
+    "日",
+    "时间",
+    "指标"
+   ],
+   "status": 200,
+   "n_bytes": 216618,
+   "reachable": true,
+   "keyword_hits": [
+    "发布",
+    "日程",
+    "月",
+    "日",
+    "时间",
+    "指标"
+   ],
+   "snippets": [
+    "th, initial-scale=1.0\"> \t\t\t最新统计信息发布日程 - 国家统计局 \t\t<meta name=\"ColumnName\" content=\"最新统计",
+    "tyle=\"font-family:楷体\">7.2025年农民工调查监测报告预计发布时间为4月。8.2025年城镇单位就",
+    ", initial-scale=1.0\"> \t\t\t最新统计信息发布日程 - 国家统计局 \t\t<meta name=\"ColumnName\" content=\"最新统计信息"
+   ],
+   "matched_links": [
+    {
+     "label": "最新统计信息发布日程",
+     "href": "./"
+    },
+    {
+     "label": "往年统计信息发布日程",
+     "href": "../ljxxfb/"
+    },
+    {
+     "label": "发布日程",
+     "href": "../"
+    },
+    {
+     "label": "最新统计信息发布日程",
+     "href": "./"
+    }
+   ],
+   "sample": "<html lang=\"en\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"width=device-width, initial-scal",
+   "elapsed_s": 3.5
+  },
+  "dce_history": {
+   "url": "http://www.dce.com.cn/dce/channel/list/164.html",
+   "gap": "§18 仓单/§12 历史数据：DCE 历史数据入口是否可下载",
+   "kws": [
+    "历史",
+    "数据",
+    "下载",
+    "年度",
+    "日期"
+   ],
+   "status": 200,
+   "n_bytes": 182995,
+   "reachable": true,
+   "keyword_hits": [
+    "历史",
+    "数据",
+    "下载",
+    "日期"
+   ],
+   "snippets": [
+    "item-link\" tabindex=\"0\" role=\"menuitem\">历史数据<div class=\"nav-item",
+    "97162e71250019734fc835a260d.png\">扫码下载大商所APP                                      </"
+   ],
+   "matched_links": [
+    {
+     "label": "历史数据",
+     "href": "http://www.dce.com.cn/dce/channel/list/164.html"
+    },
+    {
+     "label": "标准仓单质押",
+     "href": "http://www.dce.com.cn/dce/channel/list/7000058.html"
+    },
+    {
+     "label": "交易所历史规则查询",
+     "href": "#"
+    },
+    {
+     "label": "历史数据",
+     "href": "http://www.dce.com.cn/dce/channel/list/164.html"
+    },
+    {
+     "label": "品种月度统计",
+     "href": "http://www.dce.com.cn/dce/channel/list/172.html"
+    },
+    {
+     "label": "仓单日报",
+     "href": "http://www.dce.com.cn/dce/channel/list/187.html"
+    },
+    {
+     "label": "一次性交割卖方仓单查询",
+     "href": "http://www.dce.com.cn/dce/channel/list/188.html"
+    },
+    {
+     "label": "历史涨跌对比",
+     "href": "javascript:void(0);"
+    },
+    {
+     "label": "标准仓单质押",
+     "href": "http://www.dce.com.cn/dce/channel/list/7000058.html"
+    },
+    {
+     "label": "交易所历史规则查询",
+     "href": "http://www.dce.com.cn/dce/channel/list/148.html"
+    }
+   ],
+   "sample": "<html style=\"font-size: 192px; --nav-level-spacing: 44px;\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport",
+   "elapsed_s": 7.4
+  },
+  "dce_member_rank": {
+   "url": "http://www.dce.com.cn/dce/channel/list/166.html",
+   "gap": "§15 会员持仓因子：DCE 会员成交持仓统计入口",
+   "kws": [
+    "持仓",
+    "成交",
+    "会员",
+    "统计",
+    "日报"
+   ],
+   "status": 200,
+   "n_bytes": 183082,
+   "reachable": true,
+   "keyword_hits": [
+    "持仓",
+    "成交",
+    "会员",
+    "统计",
+    "日报"
+   ],
+   "snippets": [
+    "item-link\" tabindex=\"0\" role=\"menuitem\">历史数据<div class=\"nav-item",
+    "97162e71250019734fc835a260d.png\">扫码下载大商所APP                                      </"
+   ],
+   "matched_links": [
+    {
+     "label": "历史数据",
+     "href": "http://www.dce.com.cn/dce/channel/list/164.html"
+    },
+    {
+     "label": "标准仓单质押",
+     "href": "http://www.dce.com.cn/dce/channel/list/7000058.html"
+    },
+    {
+     "label": "交易所历史规则查询",
+     "href": "#"
+    },
+    {
+     "label": "历史数据",
+     "href": "http://www.dce.com.cn/dce/channel/list/164.html"
+    },
+    {
+     "label": "品种月度统计",
+     "href": "http://www.dce.com.cn/dce/channel/list/172.html"
+    },
+    {
+     "label": "仓单日报",
+     "href": "http://www.dce.com.cn/dce/channel/list/187.html"
+    },
+    {
+     "label": "一次性交割卖方仓单查询",
+     "href": "http://www.dce.com.cn/dce/channel/list/188.html"
+    },
+    {
+     "label": "历史涨跌对比",
+     "href": "javascript:void(0);"
+    },
+    {
+     "label": "标准仓单质押",
+     "href": "http://www.dce.com.cn/dce/channel/list/7000058.html"
+    },
+    {
+     "label": "交易所历史规则查询",
+     "href": "http://www.dce.com.cn/dce/channel/list/148.html"
+    }
+   ],
+   "sample": "<html style=\"font-size: 192px; --nav-level-spacing: 44px;\"><head><meta charset=\"UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport",
+   "elapsed_s": 7.4
+  }
+ },
+ "honest_boundary": [
+  "入口存在 + 页面有发布日程/历史查询 = 补数据『可行性成立』，但仍是规则/入口层，非『已重建历史逐日发布时刻』",
+  "§16 结论另有『无被过滤对象』独立理由，补日程不翻案；§14/§15/§18 补时点是强化依据非改主结论",
+  "逐日发布时刻的历史重建需逐交易日过瑞数 + 站点留档，成本高、成功率未验证；本轮未做",
+  "只读探测，未写生产库、未 push、仍在研究分支"
+ ]
+}
