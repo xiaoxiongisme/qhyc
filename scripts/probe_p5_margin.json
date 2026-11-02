@@ -1,0 +1,815 @@
+{
+ "dim_variety_l3_columns": [
+  [
+   "variety_code",
+   "text"
+  ],
+  [
+   "variety_name",
+   "text"
+  ],
+  [
+   "exchange",
+   "text"
+  ],
+  [
+   "sector",
+   "text"
+  ],
+  [
+   "tick_size",
+   "numeric"
+  ],
+  [
+   "multiplier",
+   "numeric"
+  ],
+  [
+   "quote_unit",
+   "text"
+  ],
+  [
+   "main_symbol",
+   "text"
+  ],
+  [
+   "is_active",
+   "boolean"
+  ],
+  [
+   "source",
+   "text"
+  ],
+  [
+   "updated_at",
+   "timestamp with time zone"
+  ],
+  [
+   "margin_rate_long",
+   "numeric"
+  ],
+  [
+   "margin_rate_short",
+   "numeric"
+  ],
+  [
+   "margin_per_lot_long",
+   "numeric"
+  ],
+  [
+   "margin_min_rate",
+   "numeric"
+  ],
+  [
+   "margin_max_rate",
+   "numeric"
+  ],
+  [
+   "exchange_name_src",
+   "text"
+  ],
+  [
+   "official_name",
+   "text"
+  ],
+  [
+   "continuous_follow_rule",
+   "text"
+  ],
+  [
+   "is_archive_only",
+   "boolean"
+  ]
+ ],
+ "dim_variety_sample": [
+  {
+   "variety_code": "B",
+   "variety_name": "豆二",
+   "exchange": "DCE",
+   "sector": "",
+   "tick_size": "1.000000",
+   "multiplier": "10.0000",
+   "quote_unit": "元/吨",
+   "main_symbol": "B888",
+   "is_active": true,
+   "source": "manual_fix",
+   "updated_at": "2026-10-24 22:35:49.252891+08:00",
+   "margin_rate_long": "0.130000",
+   "margin_rate_short": "0.110000",
+   "margin_per_lot_long": "0.0000",
+   "margin_min_rate": "0.110000",
+   "margin_max_rate": "0.110000",
+   "exchange_name_src": "akshare",
+   "official_name": "豆二",
+   "continuous_follow_rule": "NEAR_MONTH",
+   "is_archive_only": false
+  },
+  {
+   "variety_code": "CS",
+   "variety_name": "玉米淀粉",
+   "exchange": "DCE",
+   "sector": "",
+   "tick_size": "1.000000",
+   "multiplier": "10.0000",
+   "quote_unit": "元/吨",
+   "main_symbol": "CS888",
+   "is_active": true,
+   "source": "manual_fix",
+   "updated_at": "2026-10-24 22:35:49.252891+08:00",
+   "margin_rate_long": "0.130000",
+   "margin_rate_short": "0.110000",
+   "margin_per_lot_long": "0.0000",
+   "margin_min_rate": "0.110000",
+   "margin_max_rate": "0.110000",
+   "exchange_name_src": "akshare",
+   "official_name": "玉米淀粉",
+   "continuous_follow_rule": "NEAR_MONTH",
+   "is_archive_only": false
+  },
+  {
+   "variety_code": "BU",
+   "variety_name": "沥青",
+   "exchange": "SHFE",
+   "sector": null,
+   "tick_size": "1.000000",
+   "multiplier": "10.0000",
+   "quote_unit": "元/吨",
+   "main_symbol": "BU888",
+   "is_active": true,
+   "source": "011_backfill",
+   "updated_at": "2026-10-05 09:45:45.923020+08:00",
+   "margin_rate_long": "0.140000",
+   "margin_rate_short": "0.140000",
+   "margin_per_lot_long": "0.0000",
+   "margin_min_rate": "0.140000",
+   "margin_max_rate": "0.140000",
+   "exchange_name_src": "akshare",
+   "official_name": "石油沥青",
+   "continuous_follow_rule": "TRUE_MAIN",
+   "is_archive_only": false
+  },
+  {
+   "variety_code": "C",
+   "variety_name": "玉米",
+   "exchange": "DCE",
+   "sector": null,
+   "tick_size": "1.000000",
+   "multiplier": "10.0000",
+   "quote_unit": "元/吨",
+   "main_symbol": "C888",
+   "is_active": true,
+   "source": "011_backfill",
+   "updated_at": "2026-10-05 09:45:45.923020+08:00",
+   "margin_rate_long": "0.070000",
+   "margin_rate_short": "0.070000",
+   "margin_per_lot_long": "0.0000",
+   "margin_min_rate": "0.070000",
+   "margin_max_rate": "0.070000",
+   "exchange_name_src": "akshare",
+   "official_name": "黄玉米",
+   "continuous_follow_rule": "TRUE_MAIN",
+   "is_archive_only": false
+  }
+ ],
+ "futures_symbol_pub_columns": [
+  [
+   "symbol",
+   "text"
+  ],
+  [
+   "name",
+   "text"
+  ],
+  [
+   "exchange",
+   "text"
+  ],
+  [
+   "unit",
+   "text"
+  ],
+  [
+   "multiplier",
+   "numeric"
+  ],
+  [
+   "product",
+   "text"
+  ],
+  [
+   "is_main",
+   "boolean"
+  ],
+  [
+   "main_symbol",
+   "text"
+  ],
+  [
+   "active",
+   "boolean"
+  ],
+  [
+   "created_at",
+   "timestamp with time zone"
+  ],
+  [
+   "updated_at",
+   "timestamp with time zone"
+  ],
+  [
+   "price_tick",
+   "numeric"
+  ]
+ ],
+ "futures_symbol_sample": [
+  {
+   "symbol": "ZN2307",
+   "name": "ZN2307",
+   "exchange": "SHFE",
+   "unit": "吨",
+   "multiplier": "5.0000",
+   "product": "ZN",
+   "is_main": false,
+   "main_symbol": null,
+   "active": true,
+   "created_at": "2026-10-04 22:23:18.245320+08:00",
+   "updated_at": "2026-10-04 22:23:18.245320+08:00",
+   "price_tick": "5.000000"
+  },
+  {
+   "symbol": "SN2304",
+   "name": "SN2304",
+   "exchange": "SHFE",
+   "unit": "吨",
+   "multiplier": "1.0000",
+   "product": "SN",
+   "is_main": false,
+   "main_symbol": null,
+   "active": true,
+   "created_at": "2026-10-04 22:23:18.245320+08:00",
+   "updated_at": "2026-10-04 22:23:18.245320+08:00",
+   "price_tick": "10.000000"
+  },
+  {
+   "symbol": "EB2106",
+   "name": "EB2106",
+   "exchange": "DCE",
+   "unit": "吨",
+   "multiplier": "5.0000",
+   "product": "EB",
+   "is_main": false,
+   "main_symbol": null,
+   "active": true,
+   "created_at": "2026-10-04 22:23:18.245320+08:00",
+   "updated_at": "2026-10-04 22:23:18.245320+08:00",
+   "price_tick": "1.000000"
+  }
+ ],
+ "cfg_symbol_margin_columns": [
+  [
+   "variety_code",
+   "text"
+  ],
+  [
+   "exchange",
+   "text"
+  ],
+  [
+   "exchange_margin_ratio",
+   "numeric"
+  ],
+  [
+   "broker_margin_ratio",
+   "numeric"
+  ],
+  [
+   "margin_d2",
+   "numeric"
+  ],
+  [
+   "margin_d3",
+   "numeric"
+  ],
+  [
+   "source",
+   "text"
+  ],
+  [
+   "note",
+   "text"
+  ],
+  [
+   "updated_at",
+   "timestamp with time zone"
+  ]
+ ],
+ "cfg_margin_sample": [
+  {
+   "variety_code": "A",
+   "exchange": null,
+   "exchange_margin_ratio": "0.070000",
+   "broker_margin_ratio": "0.120000",
+   "margin_d2": null,
+   "margin_d3": null,
+   "source": "汇总表20260324",
+   "note": "D1 段；D2/D3 为连续同方向停板次日分段",
+   "updated_at": "2026-10-03 23:36:56.477094+08:00"
+  },
+  {
+   "variety_code": "AD",
+   "exchange": null,
+   "exchange_margin_ratio": "0.100000",
+   "broker_margin_ratio": "0.160000",
+   "margin_d2": null,
+   "margin_d3": null,
+   "source": "汇总表20260324",
+   "note": "D1 段；D2/D3 为连续同方向停板次日分段",
+   "updated_at": "2026-10-03 23:36:56.477094+08:00"
+  },
+  {
+   "variety_code": "AG",
+   "exchange": null,
+   "exchange_margin_ratio": "0.220000",
+   "broker_margin_ratio": "0.280000",
+   "margin_d2": null,
+   "margin_d3": null,
+   "source": "汇总表20260324",
+   "note": "D1 段；D2/D3 为连续同方向停板次日分段",
+   "updated_at": "2026-10-03 23:36:56.477094+08:00"
+  },
+  {
+   "variety_code": "AL",
+   "exchange": null,
+   "exchange_margin_ratio": "0.120000",
+   "broker_margin_ratio": "0.180000",
+   "margin_d2": null,
+   "margin_d3": null,
+   "source": "汇总表20260324",
+   "note": "D1 段；D2/D3 为连续同方向停板次日分段",
+   "updated_at": "2026-10-03 23:36:56.477094+08:00"
+  }
+ ],
+ "futures_rule_columns": [
+  [
+   "trade_date",
+   "date"
+  ],
+  [
+   "exchange",
+   "text"
+  ],
+  [
+   "variety",
+   "text"
+  ],
+  [
+   "code",
+   "text"
+  ],
+  [
+   "margin_ratio",
+   "numeric"
+  ],
+  [
+   "price_limit",
+   "numeric"
+  ],
+  [
+   "multiplier",
+   "numeric"
+  ],
+  [
+   "tick_size",
+   "numeric"
+  ],
+  [
+   "max_order_lots",
+   "integer"
+  ],
+  [
+   "special_note",
+   "text"
+  ],
+  [
+   "adjust_note",
+   "text"
+  ],
+  [
+   "updated_at",
+   "timestamp with time zone"
+  ]
+ ],
+ "futures_rule_sample": [
+  {
+   "trade_date": "2023-01-03",
+   "exchange": "上期所",
+   "variety": "铜",
+   "code": "CU",
+   "margin_ratio": "19.0000",
+   "price_limit": "10.0000",
+   "multiplier": "5.0000",
+   "tick_size": "10.000000",
+   "max_order_lots": 500,
+   "special_note": "CU2301合约交易保证金比例为22.0%",
+   "adjust_note": "nan",
+   "updated_at": "2026-10-05 10:40:27.855297+08:00"
+  },
+  {
+   "trade_date": "2023-01-03",
+   "exchange": "上期所",
+   "variety": "铜期权",
+   "code": "CU_O",
+   "margin_ratio": null,
+   "price_limit": null,
+   "multiplier": "5.0000",
+   "tick_size": "2.000000",
+   "max_order_lots": 100,
+   "special_note": "期权卖方交易保证金中涉及标的期货合约的公司交易保证金按照对应的期货合约保证金标准收取",
+   "adjust_note": "nan",
+   "updated_at": "2026-10-05 10:40:27.855297+08:00"
+  },
+  {
+   "trade_date": "2023-01-03",
+   "exchange": "上期所",
+   "variety": "铝",
+   "code": "AL",
+   "margin_ratio": "20.0000",
+   "price_limit": "10.0000",
+   "multiplier": "5.0000",
+   "tick_size": "5.000000",
+   "max_order_lots": 500,
+   "special_note": "AL2301合约交易保证金比例为23.0%",
+   "adjust_note": "nan",
+   "updated_at": "2026-10-05 10:40:27.855297+08:00"
+  },
+  {
+   "trade_date": "2023-01-03",
+   "exchange": "上期所",
+   "variety": "铝期权",
+   "code": "AL_O",
+   "margin_ratio": null,
+   "price_limit": null,
+   "multiplier": "5.0000",
+   "tick_size": "1.000000",
+   "max_order_lots": 100,
+   "special_note": "期权卖方交易保证金中涉及标的期货合约的公司交易保证金按照对应的期货合约保证金标准收取",
+   "adjust_note": "nan",
+   "updated_at": "2026-10-05 10:40:27.855297+08:00"
+  }
+ ],
+ "dim_variety_l3_ref_columns": [
+  [
+   "variety_code",
+   "text"
+  ],
+  [
+   "variety_name",
+   "text"
+  ],
+  [
+   "exchange",
+   "text"
+  ],
+  [
+   "sector",
+   "text"
+  ],
+  [
+   "tick_size",
+   "numeric"
+  ],
+  [
+   "multiplier",
+   "numeric"
+  ],
+  [
+   "quote_unit",
+   "text"
+  ],
+  [
+   "main_symbol",
+   "text"
+  ],
+  [
+   "is_active",
+   "boolean"
+  ],
+  [
+   "source",
+   "text"
+  ],
+  [
+   "updated_at",
+   "timestamp with time zone"
+  ],
+  [
+   "margin_rate_long",
+   "numeric"
+  ],
+  [
+   "margin_rate_short",
+   "numeric"
+  ],
+  [
+   "margin_per_lot_long",
+   "numeric"
+  ],
+  [
+   "margin_min_rate",
+   "numeric"
+  ],
+  [
+   "margin_max_rate",
+   "numeric"
+  ],
+  [
+   "exchange_name_src",
+   "text"
+  ],
+  [
+   "official_name",
+   "text"
+  ],
+  [
+   "continuous_follow_rule",
+   "text"
+  ],
+  [
+   "is_archive_only",
+   "boolean"
+  ]
+ ],
+ "coverage": {
+  "l3_ref.dim_variety.multiplier": [
+   "26",
+   "26",
+   "1.0000",
+   "1000.0000"
+  ],
+  "l3_ref.dim_variety.margin_rate_long": [
+   "26",
+   "26",
+   "0.070000",
+   "0.220000"
+  ],
+  "l3_ref.dim_variety.margin_rate_short": [
+   "26",
+   "26",
+   "0.070000",
+   "0.180000"
+  ],
+  "l3_ref.dim_variety.margin_per_lot_long": [
+   "26",
+   "26",
+   "0.0000",
+   "0.0000"
+  ],
+  "l3_ref.dim_variety.tick_size": [
+   "26",
+   "26",
+   "0.020000",
+   "10.000000"
+  ],
+  "public.futures_symbol.multiplier": [
+   "0",
+   "0",
+   "None",
+   "None"
+  ]
+ },
+ "l3_ref.dim_variety_b3_rows": [
+  {
+   "variety_code": "AG",
+   "multiplier": "15.0000",
+   "margin_rate_long": "0.220000",
+   "margin_rate_short": "0.180000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "AU",
+   "multiplier": "1000.0000",
+   "margin_rate_long": "0.190000",
+   "margin_rate_short": "0.180000",
+   "tick_size": "0.020000"
+  },
+  {
+   "variety_code": "C",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.070000",
+   "margin_rate_short": "0.070000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "CS",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.130000",
+   "margin_rate_short": "0.110000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "CU",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.120000",
+   "margin_rate_short": "0.110000",
+   "tick_size": "10.000000"
+  },
+  {
+   "variety_code": "FG",
+   "multiplier": "20.0000",
+   "margin_rate_long": "0.130000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "FU",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.220000",
+   "margin_rate_short": "0.180000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "HC",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.090000",
+   "margin_rate_short": "0.090000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "J",
+   "multiplier": "100.0000",
+   "margin_rate_long": "0.200000",
+   "margin_rate_short": "0.120000",
+   "tick_size": "0.500000"
+  },
+  {
+   "variety_code": "JM",
+   "multiplier": "60.0000",
+   "margin_rate_long": "0.130000",
+   "margin_rate_short": "0.120000",
+   "tick_size": "0.500000"
+  },
+  {
+   "variety_code": "L",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.110000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "M",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.070000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "MA",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.160000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "NI",
+   "multiplier": "1.0000",
+   "margin_rate_long": "0.140000",
+   "margin_rate_short": "0.120000",
+   "tick_size": "10.000000"
+  },
+  {
+   "variety_code": "P",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.120000",
+   "margin_rate_short": "0.110000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "PP",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.110000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "RB",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.090000",
+   "margin_rate_short": "0.090000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "RM",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.070000",
+   "margin_rate_short": "0.090000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "SA",
+   "multiplier": "20.0000",
+   "margin_rate_long": "0.120000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "SC",
+   "multiplier": "1000.0000",
+   "margin_rate_long": "0.220000",
+   "margin_rate_short": "0.180000",
+   "tick_size": "0.100000"
+  },
+  {
+   "variety_code": "SF",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.080000",
+   "margin_rate_short": "0.090000",
+   "tick_size": "2.000000"
+  },
+  {
+   "variety_code": "SM",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.080000",
+   "margin_rate_short": "0.090000",
+   "tick_size": "2.000000"
+  },
+  {
+   "variety_code": "SS",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.100000",
+   "margin_rate_short": "0.090000",
+   "tick_size": "5.000000"
+  },
+  {
+   "variety_code": "TA",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.150000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "2.000000"
+  },
+  {
+   "variety_code": "Y",
+   "multiplier": "10.0000",
+   "margin_rate_long": "0.110000",
+   "margin_rate_short": "0.100000",
+   "tick_size": "1.000000"
+  },
+  {
+   "variety_code": "ZN",
+   "multiplier": "5.0000",
+   "margin_rate_long": "0.120000",
+   "margin_rate_short": "0.110000",
+   "tick_size": "5.000000"
+  }
+ ],
+ "futures_symbol_public_columns": [
+  [
+   "symbol",
+   "text"
+  ],
+  [
+   "name",
+   "text"
+  ],
+  [
+   "exchange",
+   "text"
+  ],
+  [
+   "unit",
+   "text"
+  ],
+  [
+   "multiplier",
+   "numeric"
+  ],
+  [
+   "product",
+   "text"
+  ],
+  [
+   "is_main",
+   "boolean"
+  ],
+  [
+   "main_symbol",
+   "text"
+  ],
+  [
+   "active",
+   "boolean"
+  ],
+  [
+   "created_at",
+   "timestamp with time zone"
+  ],
+  [
+   "updated_at",
+   "timestamp with time zone"
+  ],
+  [
+   "price_tick",
+   "numeric"
+  ]
+ ],
+ "public.futures_symbol_b3_rows": []
+}

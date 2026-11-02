@@ -1,0 +1,510 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "window": 60,
+  "entry_z": 2.0,
+  "exit_z": 0.5,
+  "train_end": "2023-12-31",
+  "oos_start": "2024-01-01",
+  "n_windows": 23,
+  "train_definition": "时间上 entry<=2023 的样本用于定剔除规则；与 WF train_days (reestimate=False) 不是同一概念，口径同 §13",
+  "preregistration": "规则阈值在阶段1 仅用训练期统计量固定；R2b 的 0.50 阈值来自 §11.7 全样本观察，有轻微信息泄漏、仅作对照；事后池 §11.7 含全样本选择偏差、不可固化",
+  "caveat": [
+   "训练期逐对样本量可能偏小（见 train_pair_stats），规则稳定性受限，结论强度须相应下调",
+   "多规则并排披露，不挑表现最好者报告（纪律4）",
+   "各池均重新 compute_targets+simulate_windows；另给事后过滤 195 笔口径与 §11.7 逐位可比",
+   "OOS 验证为同一样本内的时间外推，非独立新数据源；固化生产池前仍须更长期跟踪"
+  ]
+ },
+ "train": {
+  "n_trades": 54,
+  "cost_ratio_Q3": 0.02488,
+  "n_pairs_with_cost_ratio": 11,
+  "pair_stats": {
+   "RB-HC": {
+    "n": 4,
+    "sum_return_px": 0.01342,
+    "mean_net_R": 0.09625,
+    "cost_ratio": 0.01293
+   },
+   "M-RM": {
+    "n": 6,
+    "sum_return_px": 0.03264,
+    "mean_net_R": 0.18602,
+    "cost_ratio": 0.01782
+   },
+   "Y-P": {
+    "n": 8,
+    "sum_return_px": 0.11116,
+    "mean_net_R": 0.21461,
+    "cost_ratio": 0.00927
+   },
+   "TA-MA": {
+    "n": 2,
+    "sum_return_px": 0.03374,
+    "mean_net_R": 0.22556,
+    "cost_ratio": 0.03213
+   },
+   "FG-SA": {
+    "n": 2,
+    "sum_return_px": -0.01197,
+    "mean_net_R": 0.01605,
+    "cost_ratio": 0.02338
+   },
+   "J-JM": {
+    "n": 0,
+    "sum_return_px": 0.0,
+    "mean_net_R": null,
+    "cost_ratio": null
+   },
+   "PP-L": {
+    "n": 0,
+    "sum_return_px": 0.0,
+    "mean_net_R": null,
+    "cost_ratio": null
+   },
+   "AU-AG": {
+    "n": 6,
+    "sum_return_px": 0.06739,
+    "mean_net_R": 0.37214,
+    "cost_ratio": 0.02431
+   },
+   "FU-SC": {
+    "n": 2,
+    "sum_return_px": 0.04189,
+    "mean_net_R": 0.14892,
+    "cost_ratio": 0.01051
+   },
+   "SF-SM": {
+    "n": 6,
+    "sum_return_px": 0.02545,
+    "mean_net_R": 0.0851,
+    "cost_ratio": 0.02544
+   },
+   "C-CS": {
+    "n": 10,
+    "sum_return_px": 0.06458,
+    "mean_net_R": 0.08394,
+    "cost_ratio": 0.0267
+   },
+   "CU-ZN": {
+    "n": 2,
+    "sum_return_px": 0.02025,
+    "mean_net_R": 0.21346,
+    "cost_ratio": 0.01967
+   },
+   "NI-SS": {
+    "n": 6,
+    "sum_return_px": 0.12121,
+    "mean_net_R": 0.42262,
+    "cost_ratio": 0.006
+   }
+  }
+ },
+ "preregistered_rules": {
+  "R1_train_return_le0": [
+   "FG-SA"
+  ],
+  "R2a_train_costratio_ge_Q3": [
+   "C-CS",
+   "SF-SM",
+   "TA-MA"
+  ],
+  "R2b_train_costratio_ge_0.50_posthoc_threshold": [],
+  "R3_train_n_lt5": [
+   "CU-ZN",
+   "FG-SA",
+   "FU-SC",
+   "J-JM",
+   "PP-L",
+   "RB-HC",
+   "TA-MA"
+  ],
+  "R4_union_R1_R2a_R3": [
+   "C-CS",
+   "CU-ZN",
+   "FG-SA",
+   "FU-SC",
+   "J-JM",
+   "PP-L",
+   "RB-HC",
+   "SF-SM",
+   "TA-MA"
+  ],
+  "POSTHOC_11_7_fullsample": [
+   "FG-SA",
+   "PP-L",
+   "RB-HC"
+  ]
+ },
+ "full_baseline_check": {
+  "n_all": 195,
+  "n_oos": 141,
+  "expected_all": 195
+ },
+ "oos_evals": {
+  "FULL_13": {
+   "label": "FULL_13",
+   "excluded": [],
+   "n_pairs": 13,
+   "n": 141,
+   "mean_net_R": 0.18809,
+   "PF": 1.749,
+   "sum_return_px": 1.37958,
+   "mdd": 0.21941,
+   "sharpe_daily": 2.076,
+   "by_year": {
+    "2024": {
+     "n": 54,
+     "sum_return_px": 0.4221,
+     "PF": 1.679,
+     "mdd": 0.03887,
+     "mean_net_R": 0.15779
+    },
+    "2025": {
+     "n": 59,
+     "sum_return_px": 0.66839,
+     "PF": 2.001,
+     "mdd": 0.04453,
+     "mean_net_R": 0.22603
+    },
+    "2026": {
+     "n": 28,
+     "sum_return_px": 0.28909,
+     "PF": 1.488,
+     "mdd": 0.21941,
+     "mean_net_R": 0.16655
+    }
+   }
+  },
+  "R1_train_return_le0": {
+   "label": "R1_train_return_le0",
+   "excluded": [
+    "FG-SA"
+   ],
+   "n_pairs": 12,
+   "n": 129,
+   "mean_net_R": 0.19874,
+   "PF": 1.787,
+   "sum_return_px": 1.32993,
+   "mdd": 0.21941,
+   "sharpe_daily": 2.042,
+   "by_year": {
+    "2024": {
+     "n": 48,
+     "sum_return_px": 0.43877,
+     "PF": 1.718,
+     "mdd": 0.00854,
+     "mean_net_R": 0.17639
+    },
+    "2025": {
+     "n": 57,
+     "sum_return_px": 0.64815,
+     "PF": 1.999,
+     "mdd": 0.04453,
+     "mean_net_R": 0.22755
+    },
+    "2026": {
+     "n": 24,
+     "sum_return_px": 0.243,
+     "PF": 1.54,
+     "mdd": 0.21941,
+     "mean_net_R": 0.175
+    }
+   }
+  },
+  "R2a_train_costratio_ge_Q3": {
+   "label": "R2a_train_costratio_ge_Q3",
+   "excluded": [
+    "C-CS",
+    "SF-SM",
+    "TA-MA"
+   ],
+   "n_pairs": 10,
+   "n": 107,
+   "mean_net_R": 0.178,
+   "PF": 1.629,
+   "sum_return_px": 0.99537,
+   "mdd": 0.21941,
+   "sharpe_daily": 1.577,
+   "by_year": {
+    "2024": {
+     "n": 42,
+     "sum_return_px": 0.30353,
+     "PF": 1.515,
+     "mdd": 0.03887,
+     "mean_net_R": 0.13568
+    },
+    "2025": {
+     "n": 41,
+     "sum_return_px": 0.505,
+     "PF": 1.888,
+     "mdd": 0.04453,
+     "mean_net_R": 0.25325
+    },
+    "2026": {
+     "n": 24,
+     "sum_return_px": 0.18684,
+     "PF": 1.395,
+     "mdd": 0.21941,
+     "mean_net_R": 0.12352
+    }
+   }
+  },
+  "R2b_train_costratio_ge_0.50_posthoc_threshold": {
+   "label": "R2b_train_costratio_ge_0.50_posthoc_threshold",
+   "excluded": [],
+   "n_pairs": 13,
+   "n": 141,
+   "mean_net_R": 0.18809,
+   "PF": 1.749,
+   "sum_return_px": 1.37958,
+   "mdd": 0.21941,
+   "sharpe_daily": 2.076,
+   "by_year": {
+    "2024": {
+     "n": 54,
+     "sum_return_px": 0.4221,
+     "PF": 1.679,
+     "mdd": 0.03887,
+     "mean_net_R": 0.15779
+    },
+    "2025": {
+     "n": 59,
+     "sum_return_px": 0.66839,
+     "PF": 2.001,
+     "mdd": 0.04453,
+     "mean_net_R": 0.22603
+    },
+    "2026": {
+     "n": 28,
+     "sum_return_px": 0.28909,
+     "PF": 1.488,
+     "mdd": 0.21941,
+     "mean_net_R": 0.16655
+    }
+   }
+  },
+  "R3_train_n_lt5": {
+   "label": "R3_train_n_lt5",
+   "excluded": [
+    "CU-ZN",
+    "FG-SA",
+    "FU-SC",
+    "J-JM",
+    "PP-L",
+    "RB-HC",
+    "TA-MA"
+   ],
+   "n_pairs": 6,
+   "n": 64,
+   "mean_net_R": 0.22325,
+   "PF": 2.248,
+   "sum_return_px": 0.70569,
+   "mdd": 0.0001,
+   "sharpe_daily": 2.772,
+   "by_year": {
+    "2024": {
+     "n": 22,
+     "sum_return_px": 0.21273,
+     "PF": 2.101,
+     "mdd": 0.0,
+     "mean_net_R": 0.18509
+    },
+    "2025": {
+     "n": 34,
+     "sum_return_px": 0.35428,
+     "PF": 2.474,
+     "mdd": 0.0001,
+     "mean_net_R": 0.26494
+    },
+    "2026": {
+     "n": 8,
+     "sum_return_px": 0.13867,
+     "PF": 1.736,
+     "mdd": 0.0,
+     "mean_net_R": 0.151
+    }
+   }
+  },
+  "R4_union_R1_R2a_R3": {
+   "label": "R4_union_R1_R2a_R3",
+   "excluded": [
+    "C-CS",
+    "CU-ZN",
+    "FG-SA",
+    "FU-SC",
+    "J-JM",
+    "PP-L",
+    "RB-HC",
+    "SF-SM",
+    "TA-MA"
+   ],
+   "n_pairs": 4,
+   "n": 42,
+   "mean_net_R": 0.27086,
+   "PF": 2.399,
+   "sum_return_px": 0.55032,
+   "mdd": 0.0001,
+   "sharpe_daily": 2.31,
+   "by_year": {
+    "2024": {
+     "n": 16,
+     "sum_return_px": 0.17857,
+     "PF": 2.199,
+     "mdd": 0.0,
+     "mean_net_R": 0.18915
+    },
+    "2025": {
+     "n": 20,
+     "sum_return_px": 0.24642,
+     "PF": 2.627,
+     "mdd": 0.0001,
+     "mean_net_R": 0.36495
+    },
+    "2026": {
+     "n": 6,
+     "sum_return_px": 0.12533,
+     "PF": 1.938,
+     "mdd": 0.0,
+     "mean_net_R": 0.17512
+    }
+   }
+  },
+  "POSTHOC_11_7_fullsample": {
+   "label": "POSTHOC_11_7_fullsample",
+   "excluded": [
+    "FG-SA",
+    "PP-L",
+    "RB-HC"
+   ],
+   "n_pairs": 10,
+   "n": 117,
+   "mean_net_R": 0.22095,
+   "PF": 1.926,
+   "sum_return_px": 1.36902,
+   "mdd": 0.21941,
+   "sharpe_daily": 2.076,
+   "by_year": {
+    "2024": {
+     "n": 42,
+     "sum_return_px": 0.48935,
+     "PF": 1.986,
+     "mdd": 0.0,
+     "mean_net_R": 0.20818
+    },
+    "2025": {
+     "n": 51,
+     "sum_return_px": 0.63666,
+     "PF": 2.146,
+     "mdd": 0.04453,
+     "mean_net_R": 0.2531
+    },
+    "2026": {
+     "n": 24,
+     "sum_return_px": 0.243,
+     "PF": 1.54,
+     "mdd": 0.21941,
+     "mean_net_R": 0.175
+    }
+   }
+  },
+  "POSTHOC_11_7_filter_195": {
+   "label": "POSTHOC_11_7_filter_195",
+   "excluded": [
+    "FG-SA",
+    "PP-L",
+    "RB-HC"
+   ],
+   "n_pairs": 10,
+   "n": 117,
+   "mean_net_R": 0.22095,
+   "PF": 1.926,
+   "sum_return_px": 1.36902,
+   "mdd": 0.21941,
+   "sharpe_daily": 2.076,
+   "by_year": {
+    "2024": {
+     "n": 42,
+     "sum_return_px": 0.48935,
+     "PF": 1.986,
+     "mdd": 0.0,
+     "mean_net_R": 0.20818
+    },
+    "2025": {
+     "n": 51,
+     "sum_return_px": 0.63666,
+     "PF": 2.146,
+     "mdd": 0.04453,
+     "mean_net_R": 0.2531
+    },
+    "2026": {
+     "n": 24,
+     "sum_return_px": 0.243,
+     "PF": 1.54,
+     "mdd": 0.21941,
+     "mean_net_R": 0.175
+    }
+   }
+  }
+ },
+ "verdicts": {
+  "R1_train_return_le0": {
+   "PF_not_worse": true,
+   "return_kept_95pct": true,
+   "no_year_crash": true,
+   "rule_inert_no_exclusion": false,
+   "candidate_for_production_pool": true
+  },
+  "R2a_train_costratio_ge_Q3": {
+   "PF_not_worse": false,
+   "return_kept_95pct": false,
+   "no_year_crash": true,
+   "rule_inert_no_exclusion": false,
+   "candidate_for_production_pool": false
+  },
+  "R2b_train_costratio_ge_0.50_posthoc_threshold": {
+   "PF_not_worse": true,
+   "return_kept_95pct": true,
+   "no_year_crash": true,
+   "rule_inert_no_exclusion": true,
+   "candidate_for_production_pool": false
+  },
+  "R3_train_n_lt5": {
+   "PF_not_worse": true,
+   "return_kept_95pct": false,
+   "no_year_crash": true,
+   "rule_inert_no_exclusion": false,
+   "candidate_for_production_pool": false
+  },
+  "R4_union_R1_R2a_R3": {
+   "PF_not_worse": true,
+   "return_kept_95pct": false,
+   "no_year_crash": true,
+   "rule_inert_no_exclusion": false,
+   "candidate_for_production_pool": false
+  },
+  "POSTHOC_11_7_fullsample": {
+   "PF_not_worse": true,
+   "return_kept_95pct": true,
+   "no_year_crash": true,
+   "rule_inert_no_exclusion": false,
+   "candidate_for_production_pool": true
+  },
+  "POSTHOC_11_7_filter_195": {
+   "PF_not_worse": true,
+   "return_kept_95pct": true,
+   "no_year_crash": true,
+   "rule_inert_no_exclusion": false,
+   "candidate_for_production_pool": true
+  }
+ },
+ "conclusion": {
+  "11_7_posthoc_reproduced_in_oos": "§11.7 事后池 OOS PF 1.749→1.926、净R 0.18809→0.22095、归一收益 1.37958→1.36902（几乎持平）、逐年全正，与 §11.7 全样本观察一致；但剔除理由用全样本成本占比，含选择偏差，仍不可固化",
+  "posthoc_threshold_not_reproducible_from_train": "训练期 cost_ratio 最大仅 0.03213，远低于 §11.7 的 0.50 阈值 → R2b 训练期剔除 0 对（规则空转）。『成本占比>50%』是全样本指标，无法由训练期先验复现",
+  "r3_r4_improvement_is_R_illusion": "R3/R4 净R/PF 大幅改善但归一收益腰斩（1.37958→0.70569/0.55032）；MDD 从 0.21941 骤降至 0.0001 的机械原因是剔除了 FU-SC（P2 已证其为 2026 回撤来源），属『剔掉亏损源同时损失收益』，非规则稳健",
+  "only_clean_prior_rule": "纯训练期、无信息泄漏且通过判定的仅 R1（剔训练期唯一负收益对 FG-SA）：PF 1.749→1.787、归一收益 −3.6%，改善微弱",
+  "recommendation": "不建议现在固化『按品种剔除』生产池：事后池含选择偏差、先验规则或空转或收益腰斩或改善微弱。更优先且更有依据的是 P1/P2 指向的『修复配对腿完整性 / 剔除单腿裸露成交』（P2 已证 2026 MDD 减半、收益反升），该动作不依赖全样本选择"
+ }
+}

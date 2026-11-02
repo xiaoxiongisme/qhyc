@@ -1,0 +1,1734 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "pair_set": "ext",
+  "window": 60,
+  "entry_z": 2.0,
+  "exit_z": 0.5,
+  "rate_mode": "dim",
+  "cost_mult": 1.0,
+  "size_mode": "fixed_lot",
+  "notional_per_leg": 1000000.0,
+  "risk_capital": 100000.0,
+  "n_windows": 23,
+  "margin_source": "l3_ref.dim_variety (static, updated 2026-10)",
+  "futures_rule_coverage": {
+   "min_trade_date": "2023-01-03",
+   "max_trade_date": "2026-11-02",
+   "n_dates": 915,
+   "n_codes": 162,
+   "n_b3_varieties_covered": 26,
+   "note": "margin_ratio 为百分数，已 /100 转比例；2021-2022 无记录，回退 dim 静态率"
+  },
+  "size_rule": "每腿固定 1 手，大乘数品种主导金额盈亏",
+  "amount_rule": "net_amt=size×(pnl−cost×cost_mult)×multiplier；margin=size×entry_px×multiplier×rate(side)",
+  "caveat": [
+   "★ 金额口径符号由规模假设决定：等名义本金(§19口径)为正、固定1手因大乘数品种主导为负、等风险为正；不可只报一种当作『真实』",
+   "静态保证金率非逐日历史对齐（dim updated 2026-10 / cfg 20260324）；futures_rule 档覆盖 2023-01-03..2026-11-02、26/26 品种，2021-22 回退 dim",
+   "未做按权益动态缩放+整数手数+逐日盯市的真实动态复利；固定分数复利隐含无并行冲突、属上界敏感性",
+   "未计资金成本/利息、组合保证金优惠、滑点随规模变化；两腿保证金全额计",
+   "存在单腿未对冲裸露头寸（缺腿），已单列；生产应剔除或补对冲",
+   "并行对数上限与真实容量见 §11，本节只折算已成交样本、不外推"
+  ]
+ },
+ "baseline_check": {
+  "n": 195,
+  "mean_net_R": 0.19007,
+  "PF": 1.734,
+  "simple_sum_return_px": 1.89933,
+  "expected": "n=195 / 0.19007 / 1.734 / 1.89933 (§19)"
+ },
+ "margin_data": {
+  "n_dim_varieties": 1336,
+  "n_cfg_margin": 91,
+  "n_rate_fallback_legs": 0,
+  "n_missing_legs": 0,
+  "missing_symbols": [],
+  "b3_varieties": [
+   "AG",
+   "AU",
+   "C",
+   "CS",
+   "CU",
+   "FG",
+   "FU",
+   "HC",
+   "J",
+   "JM",
+   "L",
+   "M",
+   "MA",
+   "NI",
+   "P",
+   "PP",
+   "RB",
+   "RM",
+   "SA",
+   "SC",
+   "SF",
+   "SM",
+   "SS",
+   "TA",
+   "Y",
+   "ZN"
+  ]
+ },
+ "pair_aggregation": {
+  "n_legs": 195,
+  "n_pair_groups": 102,
+  "n_incomplete": 9,
+  "incomplete_sample": [
+   {
+    "pair": "FU-SC",
+    "entry": "2023-02-20",
+    "exit": "2023-03-23",
+    "n_legs": "1",
+    "sides": "['SHORT']",
+    "margin": "5153.4",
+    "net_amt": "2474.254",
+    "ret_on_margin": "0.48012069701556254",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2023-07-15",
+    "exit": "2023-07-29",
+    "n_legs": "1",
+    "sides": "['SHORT']",
+    "margin": "104616.0",
+    "net_amt": "-25880.01999999991",
+    "ret_on_margin": "-0.2473810889347701",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2025-01-08",
+    "exit": "2025-01-11",
+    "n_legs": "1",
+    "sides": "['SHORT']",
+    "margin": "105426.0",
+    "net_amt": "-26080.019999999953",
+    "ret_on_margin": "-0.2473774970121218",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2025-01-16",
+    "exit": "2025-01-18",
+    "n_legs": "1",
+    "sides": "['SHORT']",
+    "margin": "113940.0",
+    "net_amt": "5919.980000000045",
+    "ret_on_margin": "0.05195699490960194",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2025-02-10",
+    "exit": "2025-03-04",
+    "n_legs": "1",
+    "sides": "['SHORT']",
+    "margin": "6724.8",
+    "net_amt": "5922.508",
+    "ret_on_margin": "0.8806965262907447",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2026-04-08",
+    "exit": "2026-04-18",
+    "n_legs": "1",
+    "sides": "['LONG']",
+    "margin": "155848.0",
+    "net_amt": "-111380.02000000002",
+    "ret_on_margin": "-0.7146708331194498",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2026-05-07",
+    "exit": "2026-05-16",
+    "n_legs": "1",
+    "sides": "['LONG']",
+    "margin": "139172.0",
+    "net_amt": "32519.979999999956",
+    "ret_on_margin": "0.23366754807001378",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2026-09-05",
+    "exit": "2026-09-29",
+    "n_legs": "1",
+    "sides": "['SHORT']",
+    "margin": "124326.0",
+    "net_amt": "-35980.01999999993",
+    "ret_on_margin": "-0.2894006080787601",
+    "exit_consistent": "True"
+   },
+   {
+    "pair": "FU-SC",
+    "entry": "2026-09-07",
+    "exit": "2026-09-29",
+    "n_legs": "1",
+    "sides": "['LONG']",
+    "margin": "8467.8",
+    "net_amt": "5472.282",
+    "ret_on_margin": "0.6462460143130447",
+    "exit_consistent": "True"
+   }
+  ]
+ },
+ "naked_single_leg": {
+  "n_groups": 9,
+  "net_amount": -147011.08,
+  "clean_net_amount_excl_naked": 54004.46,
+  "note": "单腿组因配对另一腿缺失（数据/停牌）未对冲，方向性暴露；生产上应剔除"
+ },
+ "B_margin_return_simple": 5.83821,
+ "C_linear_account": {
+  "e0_peak_margin_based": 459852.3,
+  "total_net_amount": -93006.61,
+  "capital_efficiency_on_peak": -0.20225,
+  "annualized_capital_efficiency": -0.03476,
+  "peak_margin_occ": 459852.3,
+  "mean_margin_occ": 26745.16,
+  "mean_utilization_pct": 5.82,
+  "exposure_days_pct": 45.57,
+  "n_calendar_days": 1602,
+  "n_active_days": 730,
+  "mdd_amount": 163140.4,
+  "mdd_on_e0": 0.35477,
+  "sharpe_daily": -0.265,
+  "span_years": 5.82,
+  "nav_head": [
+   459852.3,
+   459852.3,
+   459852.3,
+   459852.3,
+   459852.3
+  ],
+  "nav_tail": [
+   366845.69,
+   366845.69,
+   366845.69,
+   366845.69,
+   366845.69
+  ]
+ },
+ "D_fixed_fraction_compound": {
+  "0.25": {
+   "final_nav": 3.70898,
+   "total_return": 2.70898,
+   "mdd_frac": 0.2682,
+   "n_pairs": 102,
+   "curve_tail": [
+    3.31857,
+    3.45573,
+    3.20571,
+    3.1931,
+    3.70898
+   ]
+  },
+  "0.5": {
+   "final_nav": 10.19969,
+   "total_return": 9.19969,
+   "mdd_frac": 0.5204,
+   "n_pairs": 102,
+   "curve_tail": [
+    8.39083,
+    9.08448,
+    7.76996,
+    7.7088,
+    10.19969
+   ]
+  },
+  "1.0": {
+   "final_nav": 25.55247,
+   "total_return": 24.55247,
+   "mdd_frac": 0.88665,
+   "n_pairs": 102,
+   "curve_tail": [
+    19.04379,
+    22.19239,
+    15.7699,
+    15.52166,
+    25.55247
+   ]
+  }
+ },
+ "E_by_year": {
+  "2022": {
+   "n_legs": 4,
+   "n_pairs": 2,
+   "net_return_px_simple": 0.03731,
+   "sum_ret_on_margin": 0.17485,
+   "total_net_amount": 0.0,
+   "peak_margin_occ": 13249.4,
+   "capital_efficiency_on_peak": 0.0,
+   "exposure_days_pct": 2.81
+  },
+  "2023": {
+   "n_legs": 50,
+   "n_pairs": 26,
+   "net_return_px_simple": 0.48245,
+   "sum_ret_on_margin": 2.08245,
+   "total_net_amount": 17931.83,
+   "peak_margin_occ": 212846.1,
+   "capital_efficiency_on_peak": 0.08425,
+   "exposure_days_pct": 67.25
+  },
+  "2024": {
+   "n_legs": 54,
+   "n_pairs": 27,
+   "net_return_px_simple": 0.4221,
+   "sum_ret_on_margin": 1.08031,
+   "total_net_amount": 11943.57,
+   "peak_margin_occ": 204271.6,
+   "capital_efficiency_on_peak": 0.05847,
+   "exposure_days_pct": 79.09
+  },
+  "2025": {
+   "n_legs": 59,
+   "n_pairs": 31,
+   "net_return_px_simple": 0.66839,
+   "sum_ret_on_margin": 2.11784,
+   "total_net_amount": 26261.96,
+   "peak_margin_occ": 192506.15,
+   "capital_efficiency_on_peak": 0.13642,
+   "exposure_days_pct": 64.83
+  },
+  "2026": {
+   "n_legs": 28,
+   "n_pairs": 16,
+   "net_return_px_simple": 0.28909,
+   "sum_ret_on_margin": 0.38276,
+   "total_net_amount": -107624.2,
+   "peak_margin_occ": 459852.3,
+   "capital_efficiency_on_peak": -0.23404,
+   "exposure_days_pct": 51.52
+  }
+ },
+ "per_pair": [
+  {
+   "pair": "SF-SM",
+   "entry": "2022-12-22",
+   "exit": "2023-01-17",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6504.2,
+   "net_amt": 337.96000000000004,
+   "ret_on_margin": 0.05196027182435965,
+   "exit_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "entry": "2022-12-23",
+   "exit": "2023-01-04",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6745.200000000001,
+   "net_amt": 828.906,
+   "ret_on_margin": 0.12288827610745418,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2023-01-31",
+   "exit": "2023-02-10",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5813.4,
+   "net_amt": 524.56,
+   "ret_on_margin": 0.09023291017304846,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2023-02-20",
+   "exit": "2023-03-23",
+   "n_legs": 1,
+   "sides": [
+    "SHORT"
+   ],
+   "margin": 5153.4,
+   "net_amt": 2474.254,
+   "ret_on_margin": 0.48012069701556254,
+   "exit_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "entry": "2023-03-03",
+   "exit": "2023-03-08",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 19089.4,
+   "net_amt": 2109.96,
+   "ret_on_margin": 0.11053045145473403,
+   "exit_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "entry": "2023-03-07",
+   "exit": "2023-04-07",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 7672.5,
+   "net_amt": 282.9100000000003,
+   "ret_on_margin": 0.03687324861518414,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2023-03-10",
+   "exit": "2023-03-31",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5407.0,
+   "net_amt": 454.55999999999995,
+   "ret_on_margin": 0.08406879970408729,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2023-03-10",
+   "exit": "2023-04-13",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5946.1,
+   "net_amt": 593.96,
+   "ret_on_margin": 0.09989068465044315,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2023-03-15",
+   "exit": "2023-03-27",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 32030.2,
+   "net_amt": 8899.96,
+   "ret_on_margin": 0.27786151819220606,
+   "exit_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "entry": "2023-03-17",
+   "exit": "2023-04-19",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 17571.4,
+   "net_amt": 1989.96,
+   "ret_on_margin": 0.11324994024380526,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2023-04-18",
+   "exit": "2023-04-20",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6193.1,
+   "net_amt": -172.03999999999996,
+   "ret_on_margin": -0.027779302772440288,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2023-04-26",
+   "exit": "2023-06-07",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4995.1,
+   "net_amt": -126.04000000000019,
+   "ret_on_margin": -0.025232728073512078,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2023-04-27",
+   "exit": "2023-05-30",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5175.6,
+   "net_amt": 114.55999999999983,
+   "ret_on_margin": 0.022134631733518786,
+   "exit_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "entry": "2023-05-29",
+   "exit": "2023-06-09",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6380.1,
+   "net_amt": 225.78200000000015,
+   "ret_on_margin": 0.035388473534897595,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2023-06-01",
+   "exit": "2023-06-15",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 28478.45,
+   "net_amt": 14659.96,
+   "ret_on_margin": 0.5147738026472648,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2023-06-30",
+   "exit": "2023-07-13",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5351.400000000001,
+   "net_amt": 424.56,
+   "ret_on_margin": 0.07933624845834734,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2023-07-07",
+   "exit": "2023-07-21",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6061.3,
+   "net_amt": 1493.96,
+   "ret_on_margin": 0.2464751785920512,
+   "exit_consistent": true
+  },
+  {
+   "pair": "AU-AG",
+   "entry": "2023-07-15",
+   "exit": "2023-08-03",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 102168.8,
+   "net_amt": 2556.221,
+   "ret_on_margin": 0.025019585235414334,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2023-07-15",
+   "exit": "2023-07-29",
+   "n_legs": 1,
+   "sides": [
+    "SHORT"
+   ],
+   "margin": 104616.0,
+   "net_amt": -25880.01999999991,
+   "ret_on_margin": -0.2473810889347701,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2023-08-05",
+   "exit": "2023-08-15",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 52929.75,
+   "net_amt": -1065.5299999999997,
+   "ret_on_margin": -0.0201310227235156,
+   "exit_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "entry": "2023-08-14",
+   "exit": "2023-08-15",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 16987.199999999997,
+   "net_amt": 3709.96,
+   "ret_on_margin": 0.2183973815578789,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2023-08-21",
+   "exit": "2023-08-31",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5659.1,
+   "net_amt": 654.56,
+   "ret_on_margin": 0.11566503507624885,
+   "exit_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "entry": "2023-09-12",
+   "exit": "2023-09-22",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 17253.199999999997,
+   "net_amt": 1449.9599999999996,
+   "ret_on_margin": 0.08404006213340133,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2023-10-25",
+   "exit": "2023-12-07",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 27251.850000000002,
+   "net_amt": -11180.04,
+   "ret_on_margin": -0.41024884549122353,
+   "exit_consistent": true
+  },
+  {
+   "pair": "AU-AG",
+   "entry": "2023-11-02",
+   "exit": "2023-11-16",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 105255.29999999999,
+   "net_amt": 7798.223300000016,
+   "ret_on_margin": 0.07408865206787703,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "entry": "2023-11-10",
+   "exit": "2023-12-07",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 8761.400000000001,
+   "net_amt": -925.5439999999999,
+   "ret_on_margin": -0.10563882484534431,
+   "exit_consistent": true
+  },
+  {
+   "pair": "AU-AG",
+   "entry": "2023-11-25",
+   "exit": "2023-12-08",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 104926.7,
+   "net_amt": 6863.17049999997,
+   "ret_on_margin": 0.06540919041578522,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2023-12-28",
+   "exit": "2024-01-03",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5629.3,
+   "net_amt": 817.96,
+   "ret_on_margin": 0.14530403424937383,
+   "exit_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "entry": "2024-01-08",
+   "exit": "2024-01-09",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6793.4,
+   "net_amt": 829.182,
+   "ret_on_margin": 0.12205699649659965,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2024-01-16",
+   "exit": "2024-02-02",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4788.3,
+   "net_amt": 124.55999999999999,
+   "ret_on_margin": 0.026013407681222976,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2024-01-23",
+   "exit": "2024-02-01",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 108688.4,
+   "net_amt": -11425.984000000022,
+   "ret_on_margin": -0.10512606681117785,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2024-02-20",
+   "exit": "2024-03-08",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 49905.5,
+   "net_amt": -3090.294999999999,
+   "ret_on_margin": -0.06192293434591376,
+   "exit_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "entry": "2024-02-28",
+   "exit": "2024-03-28",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 7053.0,
+   "net_amt": 728.806,
+   "ret_on_margin": 0.10333276619878067,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2024-03-02",
+   "exit": "2024-03-28",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 23461.899999999998,
+   "net_amt": 5419.959999999999,
+   "ret_on_margin": 0.23101112868096785,
+   "exit_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "entry": "2024-03-07",
+   "exit": "2024-04-11",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6824.7,
+   "net_amt": -275.20600000000013,
+   "ret_on_margin": -0.04032499597051887,
+   "exit_consistent": true
+  },
+  {
+   "pair": "AU-AG",
+   "entry": "2024-03-16",
+   "exit": "2024-03-27",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 113769.0,
+   "net_amt": 9170.354000000023,
+   "ret_on_margin": 0.08060503300547621,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2024-03-16",
+   "exit": "2024-04-11",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 53163.0,
+   "net_amt": -9467.699999999997,
+   "ret_on_margin": -0.17808814400993167,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2024-04-01",
+   "exit": "2024-04-09",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5160.4,
+   "net_amt": 1073.9599999999998,
+   "ret_on_margin": 0.2081156499496163,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2024-04-20",
+   "exit": "2024-05-08",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 57688.0,
+   "net_amt": 353.920000000001,
+   "ret_on_margin": 0.006135071418665944,
+   "exit_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "entry": "2024-04-26",
+   "exit": "2024-06-07",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 16347.199999999999,
+   "net_amt": 829.96,
+   "ret_on_margin": 0.05077077419986298,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2024-05-07",
+   "exit": "2024-05-17",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5333.5,
+   "net_amt": 374.55999999999995,
+   "ret_on_margin": 0.07022780538108184,
+   "exit_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "entry": "2024-05-14",
+   "exit": "2024-06-04",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6927.5,
+   "net_amt": 778.7719999999999,
+   "ret_on_margin": 0.11241746661854925,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2024-05-17",
+   "exit": "2024-06-03",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 24879.6,
+   "net_amt": 444.96000000000004,
+   "ret_on_margin": 0.017884531905657648,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2024-06-14",
+   "exit": "2024-07-02",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5311.0,
+   "net_amt": 653.9599999999999,
+   "ret_on_margin": 0.12313311993974768,
+   "exit_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "entry": "2024-06-25",
+   "exit": "2024-07-31",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6535.799999999999,
+   "net_amt": 385.4359999999999,
+   "ret_on_margin": 0.05897304079072187,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2024-06-27",
+   "exit": "2024-08-01",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 60145.75,
+   "net_amt": -8695.04,
+   "ret_on_margin": -0.14456615804109185,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "entry": "2024-08-15",
+   "exit": "2024-09-04",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6281.2,
+   "net_amt": 302.712,
+   "ret_on_margin": 0.04819333885244858,
+   "exit_consistent": true
+  },
+  {
+   "pair": "J-JM",
+   "entry": "2024-08-16",
+   "exit": "2024-10-11",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 47002.4,
+   "net_amt": 20886.396,
+   "ret_on_margin": 0.44436871308699133,
+   "exit_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "entry": "2024-08-16",
+   "exit": "2024-09-24",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5729.4,
+   "net_amt": -1562.772,
+   "ret_on_margin": -0.27276364017174576,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2024-10-12",
+   "exit": "2024-11-05",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 60771.25,
+   "net_amt": 2055.0850000000005,
+   "ret_on_margin": 0.033816730773186345,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "entry": "2024-10-15",
+   "exit": "2024-11-19",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6170.4,
+   "net_amt": -1196.536,
+   "ret_on_margin": -0.19391546739271362,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2024-10-29",
+   "exit": "2024-11-06",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 23603.4,
+   "net_amt": 2959.96,
+   "ret_on_margin": 0.12540396722506078,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2024-12-05",
+   "exit": "2024-12-10",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4148.400000000001,
+   "net_amt": 284.55999999999995,
+   "ret_on_margin": 0.06859512101051006,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "entry": "2024-12-13",
+   "exit": "2025-01-24",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6421.6,
+   "net_amt": -96.18400000000003,
+   "ret_on_margin": -0.014978198579793201,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2024-12-19",
+   "exit": "2025-01-09",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 3814.7,
+   "net_amt": 613.9599999999999,
+   "ret_on_margin": 0.1609458148740399,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2025-01-08",
+   "exit": "2025-01-11",
+   "n_legs": 1,
+   "sides": [
+    "SHORT"
+   ],
+   "margin": 105426.0,
+   "net_amt": -26080.019999999953,
+   "ret_on_margin": -0.2473774970121218,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2025-01-16",
+   "exit": "2025-01-18",
+   "n_legs": 1,
+   "sides": [
+    "SHORT"
+   ],
+   "margin": 113940.0,
+   "net_amt": 5919.980000000045,
+   "ret_on_margin": 0.05195699490960194,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2025-02-10",
+   "exit": "2025-03-04",
+   "n_legs": 1,
+   "sides": [
+    "SHORT"
+   ],
+   "margin": 6724.8,
+   "net_amt": 5922.508,
+   "ret_on_margin": 0.8806965262907447,
+   "exit_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "entry": "2025-02-24",
+   "exit": "2025-03-05",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6078.6,
+   "net_amt": 246.45200000000006,
+   "ret_on_margin": 0.040544204257559315,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2025-03-07",
+   "exit": "2025-04-02",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4644.200000000001,
+   "net_amt": 1423.96,
+   "ret_on_margin": 0.30661039576245636,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2025-03-08",
+   "exit": "2025-03-19",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 22585.1,
+   "net_amt": 2649.96,
+   "ret_on_margin": 0.11733222345705797,
+   "exit_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "entry": "2025-03-11",
+   "exit": "2025-04-08",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5881.5,
+   "net_amt": 166.89000000000004,
+   "ret_on_margin": 0.028375414435093095,
+   "exit_consistent": true
+  },
+  {
+   "pair": "J-JM",
+   "entry": "2025-03-14",
+   "exit": "2025-03-19",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 40295.2,
+   "net_amt": -1765.5120000000002,
+   "ret_on_margin": -0.04381444936369593,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2025-04-10",
+   "exit": "2025-04-15",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4938.700000000001,
+   "net_amt": 1033.96,
+   "ret_on_margin": 0.20935873812946726,
+   "exit_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "entry": "2025-04-16",
+   "exit": "2025-05-30",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 17526.0,
+   "net_amt": -30.040000000000077,
+   "ret_on_margin": -0.0017140248773251214,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2025-05-09",
+   "exit": "2025-06-04",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 108093.0,
+   "net_amt": 1094.1100000000342,
+   "ret_on_margin": 0.010121932040002907,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2025-05-23",
+   "exit": "2025-05-27",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4924.8,
+   "net_amt": 837.96,
+   "ret_on_margin": 0.17015107212475633,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2025-07-10",
+   "exit": "2025-07-12",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 22512.7,
+   "net_amt": 1744.96,
+   "ret_on_margin": 0.07751002767326887,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2025-07-24",
+   "exit": "2025-08-01",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4992.2,
+   "net_amt": 687.96,
+   "ret_on_margin": 0.13780697888706384,
+   "exit_consistent": true
+  },
+  {
+   "pair": "PP-L",
+   "entry": "2025-08-14",
+   "exit": "2025-09-12",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 7594.65,
+   "net_amt": 10.960000000000036,
+   "ret_on_margin": 0.001443121144489876,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2025-08-14",
+   "exit": "2025-08-26",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5125.8,
+   "net_amt": 527.96,
+   "ret_on_margin": 0.10300050723789457,
+   "exit_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "entry": "2025-08-14",
+   "exit": "2025-08-20",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5996.0,
+   "net_amt": 759.018,
+   "ret_on_margin": 0.12658739159439628,
+   "exit_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "entry": "2025-08-27",
+   "exit": "2025-09-03",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6249.200000000001,
+   "net_amt": 599.196,
+   "ret_on_margin": 0.09588363310503743,
+   "exit_consistent": true
+  },
+  {
+   "pair": "AU-AG",
+   "entry": "2025-09-02",
+   "exit": "2025-09-08",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 178662.30000000002,
+   "net_amt": 21735.24050000004,
+   "ret_on_margin": 0.12165543878031368,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2025-10-10",
+   "exit": "2025-10-28",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 21312.1,
+   "net_amt": 2474.96,
+   "ret_on_margin": 0.11612933497872102,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2025-10-13",
+   "exit": "2025-10-24",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4741.9,
+   "net_amt": 337.96000000000004,
+   "ret_on_margin": 0.07127100951095554,
+   "exit_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "entry": "2025-10-28",
+   "exit": "2025-11-04",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4623.1,
+   "net_amt": 763.9599999999999,
+   "ret_on_margin": 0.1652484263805671,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "entry": "2025-11-11",
+   "exit": "2025-11-27",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5233.0,
+   "net_amt": 588.248,
+   "ret_on_margin": 0.1124112363844831,
+   "exit_consistent": true
+  },
+  {
+   "pair": "J-JM",
+   "entry": "2025-11-21",
+   "exit": "2025-12-05",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 28332.9,
+   "net_amt": 1093.8539999999998,
+   "ret_on_margin": 0.038607202227798766,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2025-11-24",
+   "exit": "2025-11-27",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4701.0,
+   "net_amt": 247.95999999999998,
+   "ret_on_margin": 0.0527462242076154,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2025-12-06",
+   "exit": "2026-01-16",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 64616.5,
+   "net_amt": -39477.215,
+   "ret_on_margin": -0.6109463527117686,
+   "exit_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "entry": "2025-12-08",
+   "exit": "2025-12-17",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4905.0,
+   "net_amt": 94.56000000000006,
+   "ret_on_margin": 0.01927828746177371,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2025-12-10",
+   "exit": "2025-12-23",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 22012.100000000002,
+   "net_amt": 3174.9599999999996,
+   "ret_on_margin": 0.14423703326806617,
+   "exit_consistent": true
+  },
+  {
+   "pair": "J-JM",
+   "entry": "2025-12-22",
+   "exit": "2026-01-08",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 29490.6,
+   "net_amt": 1451.9160000000002,
+   "ret_on_margin": 0.049233179385973845,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2025-12-26",
+   "exit": "2026-01-22",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 21779.4,
+   "net_amt": -6305.040000000001,
+   "ret_on_margin": -0.2894955783905893,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2025-12-26",
+   "exit": "2026-01-05",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4889.0,
+   "net_amt": 307.96000000000004,
+   "ret_on_margin": 0.06299038658212314,
+   "exit_consistent": true
+  },
+  {
+   "pair": "SF-SM",
+   "entry": "2026-01-07",
+   "exit": "2026-01-09",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5024.5,
+   "net_amt": 377.96000000000004,
+   "ret_on_margin": 0.0752234053139616,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "entry": "2026-01-09",
+   "exit": "2026-01-23",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 5186.4,
+   "net_amt": 848.504,
+   "ret_on_margin": 0.16360172759524913,
+   "exit_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "entry": "2026-03-04",
+   "exit": "2026-03-18",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 6803.5,
+   "net_amt": 2828.7980000000007,
+   "ret_on_margin": 0.41578569853751757,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2026-03-10",
+   "exit": "2026-03-20",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 181029.6,
+   "net_amt": -3788.464000000023,
+   "ret_on_margin": -0.020927317963471293,
+   "exit_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "entry": "2026-03-16",
+   "exit": "2026-03-26",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 20339.0,
+   "net_amt": 1589.96,
+   "ret_on_margin": 0.07817296818919318,
+   "exit_consistent": true
+  },
+  {
+   "pair": "J-JM",
+   "entry": "2026-03-23",
+   "exit": "2026-04-01",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 45504.8,
+   "net_amt": -3971.6479999999992,
+   "ret_on_margin": -0.0872797594978991,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2026-04-08",
+   "exit": "2026-04-18",
+   "n_legs": 1,
+   "sides": [
+    "LONG"
+   ],
+   "margin": 155848.0,
+   "net_amt": -111380.02000000002,
+   "ret_on_margin": -0.7146708331194498,
+   "exit_consistent": true
+  },
+  {
+   "pair": "J-JM",
+   "entry": "2026-04-10",
+   "exit": "2026-04-23",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 27747.9,
+   "net_amt": -9785.236,
+   "ret_on_margin": -0.3526478039779587,
+   "exit_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "entry": "2026-04-10",
+   "exit": "2026-04-16",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 25156.600000000002,
+   "net_amt": 6299.959999999999,
+   "ret_on_margin": 0.2504297083071639,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2026-04-14",
+   "exit": "2026-05-16",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 69661.0,
+   "net_amt": -13656.43,
+   "ret_on_margin": -0.19604125694434477,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2026-05-07",
+   "exit": "2026-05-16",
+   "n_legs": 1,
+   "sides": [
+    "LONG"
+   ],
+   "margin": 139172.0,
+   "net_amt": 32519.979999999956,
+   "ret_on_margin": 0.23366754807001378,
+   "exit_consistent": true
+  },
+  {
+   "pair": "AU-AG",
+   "entry": "2026-05-13",
+   "exit": "2026-05-16",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 251019.3,
+   "net_amt": 7783.712499999998,
+   "ret_on_margin": 0.0310084224599463,
+   "exit_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "entry": "2026-09-05",
+   "exit": "2026-09-23",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 80378.25,
+   "net_amt": 13289.36,
+   "ret_on_margin": 0.16533527415687702,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2026-09-05",
+   "exit": "2026-09-29",
+   "n_legs": 1,
+   "sides": [
+    "SHORT"
+   ],
+   "margin": 124326.0,
+   "net_amt": -35980.01999999993,
+   "ret_on_margin": -0.2894006080787601,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "entry": "2026-09-07",
+   "exit": "2026-09-29",
+   "n_legs": 2,
+   "sides": [
+    "LONG",
+    "SHORT"
+   ],
+   "margin": 4630.799999999999,
+   "net_amt": -72.89599999999996,
+   "ret_on_margin": -0.01574155653450807,
+   "exit_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "entry": "2026-09-07",
+   "exit": "2026-09-29",
+   "n_legs": 1,
+   "sides": [
+    "LONG"
+   ],
+   "margin": 8467.8,
+   "net_amt": 5472.282,
+   "ret_on_margin": 0.6462460143130447,
+   "exit_consistent": true
+  }
+ ]
+}
