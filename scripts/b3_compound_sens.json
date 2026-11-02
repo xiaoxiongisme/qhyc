@@ -1,0 +1,536 @@
+{
+  "meta": {
+    "start": "2021-01-01",
+    "end": "2026-10-30",
+    "E0_base": 1000000.0,
+    "calendar_mode": "weekend_drop",
+    "basis": "risk",
+    "frac_anchor": 0.05,
+    "e0_grid_pre_registered": [
+      1000000,
+      5000000,
+      20000000,
+      100000000
+    ],
+    "margin_disc_grid_pre_registered": [
+      1.0,
+      0.8,
+      0.6
+    ],
+    "settle_source": "public.daily_bar.settle (888 主连, 非空 93.4%)",
+    "purpose": "八期 P1 复利三敏感性 + P3 边界/MDD 推进实证",
+    "caveats": [
+      "S3 结算价仅替换逐日盯市的浮动盈亏估值；成交 pnl 仍为 open-to-open、与 §19 逐位一致，故 NAV 差异只经由权益/保证金判定→后续手数间接产生",
+      "S2 保证金折扣为情景假设（组合优惠/净头寸），非真实交易所组合保证金规则，不事后挑最漂亮档",
+      "S1 E0 缩放时 lots∝e0、margin∝e0，保证金占用比例与 E0 无关 → 超保证金次数预期不变（须实证），仅强制1手减少",
+      "逐日盯市、整数手数、lots<1 强制1手、不含资金成本/滑点随规模变化；分段重置各自从 e0 起算",
+      "三敏感性均为情景分析，不构成参数选择依据（选参须训练期定、OOS 只验一次，见 §28.2）"
+    ]
+  },
+  "selfcheck": {
+    "six_phase_nav": 1.4968,
+    "mine_nav": 1.4968,
+    "six_phase_mdd_over_E0": 0.32031,
+    "mine_mdd_over_E0": 0.32031,
+    "six_phase_breach": 0,
+    "mine_breach": 0,
+    "pass": true
+  },
+  "s1_e0_scaling": {
+    "1000000": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1496771.29,
+        "nav_multiple_on_segment": 1.4968,
+        "segment_return": 0.49677,
+        "cagr": 0.07178,
+        "mdd_over_e0": 0.32031,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1184636.7,
+        "nav_multiple_on_segment": 1.1846,
+        "segment_return": 0.18464,
+        "cagr": 0.0618,
+        "mdd_over_e0": 0.34234,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    },
+    "5000000": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 5000000.0,
+        "nav_end": 9439795.67,
+        "nav_multiple_on_segment": 1.888,
+        "segment_return": 0.88796,
+        "cagr": 0.11542,
+        "mdd_over_e0": 0.04738,
+        "n_forced_one_lot": 1,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 5000000.0,
+        "nav_end": 7632209.19,
+        "nav_multiple_on_segment": 1.5264,
+        "segment_return": 0.52644,
+        "cagr": 0.16147,
+        "mdd_over_e0": 0.03963,
+        "n_forced_one_lot": 2,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    },
+    "20000000": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 20000000.0,
+        "nav_end": 37933344.99,
+        "nav_multiple_on_segment": 1.8967,
+        "segment_return": 0.89667,
+        "cagr": 0.1163,
+        "mdd_over_e0": 0.04771,
+        "n_forced_one_lot": 0,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 20000000.0,
+        "nav_end": 30445164.1,
+        "nav_multiple_on_segment": 1.5223,
+        "segment_return": 0.52226,
+        "cagr": 0.16034,
+        "mdd_over_e0": 0.03429,
+        "n_forced_one_lot": 0,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    },
+    "100000000": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 100000000.0,
+        "nav_end": 188686499.83,
+        "nav_multiple_on_segment": 1.8869,
+        "segment_return": 0.88686,
+        "cagr": 0.11531,
+        "mdd_over_e0": 0.04784,
+        "n_forced_one_lot": 0,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 100000000.0,
+        "nav_end": 151797432.39,
+        "nav_multiple_on_segment": 1.518,
+        "segment_return": 0.51797,
+        "cagr": 0.15919,
+        "mdd_over_e0": 0.03768,
+        "n_forced_one_lot": 0,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    }
+  },
+  "s1b_e0_scaling_frac_0_10": {
+    "1000000": {
+      "full_NAV": 3.413,
+      "full_n_margin_breach": 25,
+      "full_n_forced_one_lot": 4,
+      "oos_NAV": 2.1192,
+      "oos_n_margin_breach": 19
+    },
+    "5000000": {
+      "full_NAV": 3.5221,
+      "full_n_margin_breach": 26,
+      "full_n_forced_one_lot": 0,
+      "oos_NAV": 2.3223,
+      "oos_n_margin_breach": 20
+    },
+    "20000000": {
+      "full_NAV": 3.4964,
+      "full_n_margin_breach": 26,
+      "full_n_forced_one_lot": 0,
+      "oos_NAV": 2.2855,
+      "oos_n_margin_breach": 20
+    },
+    "100000000": {
+      "full_NAV": 3.4942,
+      "full_n_margin_breach": 26,
+      "full_n_forced_one_lot": 0,
+      "oos_NAV": 2.2773,
+      "oos_n_margin_breach": 20
+    }
+  },
+  "s2_margin_discount": {
+    "1.0": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1496771.29,
+        "nav_multiple_on_segment": 1.4968,
+        "segment_return": 0.49677,
+        "cagr": 0.07178,
+        "mdd_over_e0": 0.32031,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1184636.7,
+        "nav_multiple_on_segment": 1.1846,
+        "segment_return": 0.18464,
+        "cagr": 0.0618,
+        "mdd_over_e0": 0.34234,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    },
+    "0.8": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1496771.29,
+        "nav_multiple_on_segment": 1.4968,
+        "segment_return": 0.49677,
+        "cagr": 0.07178,
+        "mdd_over_e0": 0.32031,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1184636.7,
+        "nav_multiple_on_segment": 1.1846,
+        "segment_return": 0.18464,
+        "cagr": 0.0618,
+        "mdd_over_e0": 0.34234,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    },
+    "0.6": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1496771.29,
+        "nav_multiple_on_segment": 1.4968,
+        "segment_return": 0.49677,
+        "cagr": 0.07178,
+        "mdd_over_e0": 0.32031,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1184636.7,
+        "nav_multiple_on_segment": 1.1846,
+        "segment_return": 0.18464,
+        "cagr": 0.0618,
+        "mdd_over_e0": 0.34234,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    }
+  },
+  "s2_frac_0_10_margin_discount": {
+    "1.0": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 3412986.3,
+        "nav_multiple_on_segment": 3.413,
+        "segment_return": 2.41299,
+        "cagr": 0.23491,
+        "mdd_over_e0": 0.18865,
+        "n_forced_one_lot": 4,
+        "n_margin_breach": 25,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 2119241.06,
+        "nav_multiple_on_segment": 2.1192,
+        "segment_return": 1.11924,
+        "cagr": 0.3045,
+        "mdd_over_e0": 0.16063,
+        "n_forced_one_lot": 6,
+        "n_margin_breach": 19,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    },
+    "0.6": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 3412986.3,
+        "nav_multiple_on_segment": 3.413,
+        "segment_return": 2.41299,
+        "cagr": 0.23491,
+        "mdd_over_e0": 0.18865,
+        "n_forced_one_lot": 4,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 2119241.06,
+        "nav_multiple_on_segment": 2.1192,
+        "segment_return": 1.11924,
+        "cagr": 0.3045,
+        "mdd_over_e0": 0.16063,
+        "n_forced_one_lot": 6,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    }
+  },
+  "s3_settle_price": {
+    "close_baseline": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1496771.29,
+        "nav_multiple_on_segment": 1.4968,
+        "segment_return": 0.49677,
+        "cagr": 0.07178,
+        "mdd_over_e0": 0.32031,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1184636.7,
+        "nav_multiple_on_segment": 1.1846,
+        "segment_return": 0.18464,
+        "cagr": 0.0618,
+        "mdd_over_e0": 0.34234,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 0,
+        "close": 2054,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 0,
+        "close": 1532,
+        "missing": 0
+      }
+    },
+    "settle": {
+      "full_period": {
+        "n_calendar_days": 1352,
+        "nav_start": 1000000.0,
+        "nav_end": 1496171.87,
+        "nav_multiple_on_segment": 1.4962,
+        "segment_return": 0.49617,
+        "cagr": 0.07171,
+        "mdd_over_e0": 0.26185,
+        "n_forced_one_lot": 19,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "oos_reset": {
+        "n_calendar_days": 625,
+        "nav_start": 1000000.0,
+        "nav_end": 1177124.56,
+        "nav_multiple_on_segment": 1.1771,
+        "segment_return": 0.17712,
+        "cagr": 0.05941,
+        "mdd_over_e0": 0.27839,
+        "n_forced_one_lot": 16,
+        "n_margin_breach": 0,
+        "n_skipped_by_margin": 0,
+        "n_missing_margin_data": 0
+      },
+      "price_source_stats_full": {
+        "settle": 2054,
+        "close": 0,
+        "missing": 0
+      },
+      "price_source_stats_oos": {
+        "settle": 1532,
+        "close": 0,
+        "missing": 0
+      }
+    },
+    "settle_coverage": {
+      "n_settle_map": 158781,
+      "b3_calendar_cells": 35152,
+      "b3_cells_covered": 35151,
+      "coverage_pct": 100.0,
+      "note": "public.daily_bar.settle 888 主连；缺失单元格回退 close 盯市"
+    },
+    "settle_price_ratio_check": {
+      "n_pairs_compared": 35066,
+      "median": 0.9998,
+      "p01": 0.95966,
+      "p99": 1.04106,
+      "pct_outside_0_5_2": 0.0,
+      "verdict": "settle/close 量纲一致（比率集中 ~1）"
+    }
+  },
+  "p3_boundary": {
+    "max_bucket": "2026-11-02 13:00:00+08:00",
+    "n_bars_after_20261030": 241,
+    "n_distinct_days_after_20261030": 2,
+    "n_symbols_after_20261030": 50,
+    "seven_phase_max_bucket": "2026-11-02 11:00",
+    "advanced_vs_seven_phase": true
+  },
+  "p3_mdd_rolling": {
+    "verdict": "structural_time_gap_confirmed",
+    "note": "真正把 end 推进到最新可用日重新实证（非 --end 不变的同义反复）；若 n_new_trades=0 且 MDD 不变，则确认新增 bar 均属 11-02 未收盘日内、无新增完整交易日",
+    "tracking": {
+      "baseline_end": "2026-10-30",
+      "tracked_end": "2026-11-02",
+      "n_trades_baseline": 190,
+      "n_trades_tracked": 190,
+      "n_new_trades": 0,
+      "n_calendar_days_baseline": 1352,
+      "n_calendar_days_tracked": 1353,
+      "mdd_2026_baseline": 0.10284,
+      "mdd_2026_tracked": 0.10284,
+      "n_2026_trades_baseline": 32,
+      "n_2026_trades_tracked": 32,
+      "baseline_reproduce_0_10284": true
+    }
+  }
+}

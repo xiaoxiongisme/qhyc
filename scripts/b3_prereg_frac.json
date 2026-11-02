@@ -1,0 +1,402 @@
+{
+  "meta": {
+    "start": "2021-01-01",
+    "end": "2026-10-30",
+    "E0": 1000000.0,
+    "calendar_mode": "weekend_drop",
+    "basis": "risk",
+    "frac_grid_pre_registered": [
+      0.02,
+      0.03,
+      0.04,
+      0.05,
+      0.06,
+      0.08,
+      0.1
+    ],
+    "anchor_frac": 0.05,
+    "train_years": [
+      "2021",
+      "2023"
+    ],
+    "oos_years": [
+      "2024",
+      "2026"
+    ],
+    "narrow_window_posthoc": [
+      0.05,
+      0.06
+    ],
+    "max_margin_pct": 0.5,
+    "train_end": "2023-12-31",
+    "purpose": "八期 P0：训练期预注册 frac、OOS 只验证一次（落实 §27.3 裁定）",
+    "two_stage_isolation": "阶段1 choose_fracs() 仅接收 train_grid；阶段2 才构造 OOS 段；准则函数无 OOS 输入",
+    "caveats": [
+      "预注册网格与 4 条准则均在查看任何 OOS 复利结果前固定（同步写入 §28.2），运行期未修改",
+      "多准则并排披露，不挑 OOS 表现最好者报告（纪律4）",
+      "OOS 单次验证只对预注册准则选出的 frac 各评估一次、不扫格挑方向",
+      "事后全网格 OOS 为描述性对照（post-hoc），仅坐实 §27.3 窄窗与选择偏差，不作参数选择依据",
+      "分段重置各自从 E0 起算（隔离训练期复利路径），与 §27.3 同口径；逐日盯市用 close 近似 settle",
+      "lots<1 强制 1 手、不含资金成本/组合保证金优惠/滑点随规模变化"
+    ]
+  },
+  "selfcheck": {
+    "anchor_frac": 0.05,
+    "train_nav": 1.1961,
+    "train_mdd_over_E0": 0.05942,
+    "oos_nav": 1.1846,
+    "oos_mdd_over_E0": 0.34234,
+    "s27_3_train_nav": 1.1961,
+    "s27_3_train_mdd": 0.05942,
+    "s27_3_oos_nav": 1.1846,
+    "s27_3_oos_mdd": 0.34234,
+    "train_match": true,
+    "oos_match": true,
+    "pass": true
+  },
+  "stage1_train_grid": {
+    "0.02": {
+      "n_calendar_days": 727,
+      "start_date": "2021-01-04",
+      "end_date": "2023-12-29",
+      "nav_start": 1000000.0,
+      "nav_end": 1058054.6,
+      "nav_multiple_on_segment": 1.0581,
+      "segment_return": 0.05805,
+      "cagr": 0.01911,
+      "mdd_over_E0": 0.08142,
+      "n_events_in_segment": 11,
+      "n_forced_one_lot": 11,
+      "n_margin_breach": 0,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 52
+    },
+    "0.03": {
+      "n_calendar_days": 727,
+      "start_date": "2021-01-04",
+      "end_date": "2023-12-29",
+      "nav_start": 1000000.0,
+      "nav_end": 1093220.13,
+      "nav_multiple_on_segment": 1.0932,
+      "segment_return": 0.09322,
+      "cagr": 0.03034,
+      "mdd_over_E0": 0.07042,
+      "n_events_in_segment": 10,
+      "n_forced_one_lot": 10,
+      "n_margin_breach": 0,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 52
+    },
+    "0.04": {
+      "n_calendar_days": 727,
+      "start_date": "2021-01-04",
+      "end_date": "2023-12-29",
+      "nav_start": 1000000.0,
+      "nav_end": 1149178.86,
+      "nav_multiple_on_segment": 1.1492,
+      "segment_return": 0.14918,
+      "cagr": 0.04774,
+      "mdd_over_E0": 0.06545,
+      "n_events_in_segment": 7,
+      "n_forced_one_lot": 7,
+      "n_margin_breach": 0,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 52
+    },
+    "0.05": {
+      "n_calendar_days": 727,
+      "start_date": "2021-01-04",
+      "end_date": "2023-12-29",
+      "nav_start": 1000000.0,
+      "nav_end": 1196122.46,
+      "nav_multiple_on_segment": 1.1961,
+      "segment_return": 0.19612,
+      "cagr": 0.06191,
+      "mdd_over_E0": 0.05942,
+      "n_events_in_segment": 6,
+      "n_forced_one_lot": 6,
+      "n_margin_breach": 0,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 52
+    },
+    "0.06": {
+      "n_calendar_days": 727,
+      "start_date": "2021-01-04",
+      "end_date": "2023-12-29",
+      "nav_start": 1000000.0,
+      "nav_end": 1238304.19,
+      "nav_multiple_on_segment": 1.2383,
+      "segment_return": 0.2383,
+      "cagr": 0.07432,
+      "mdd_over_E0": 0.05563,
+      "n_events_in_segment": 3,
+      "n_forced_one_lot": 3,
+      "n_margin_breach": 0,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 52
+    },
+    "0.08": {
+      "n_calendar_days": 727,
+      "start_date": "2021-01-04",
+      "end_date": "2023-12-29",
+      "nav_start": 1000000.0,
+      "nav_end": 1353576.86,
+      "nav_multiple_on_segment": 1.3536,
+      "segment_return": 0.35358,
+      "cagr": 0.10688,
+      "mdd_over_E0": 0.07512,
+      "n_events_in_segment": 3,
+      "n_forced_one_lot": 2,
+      "n_margin_breach": 1,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 52
+    },
+    "0.1": {
+      "n_calendar_days": 727,
+      "start_date": "2021-01-04",
+      "end_date": "2023-12-29",
+      "nav_start": 1000000.0,
+      "nav_end": 1480431.82,
+      "nav_multiple_on_segment": 1.4804,
+      "segment_return": 0.48043,
+      "cagr": 0.14064,
+      "mdd_over_E0": 0.09944,
+      "n_events_in_segment": 7,
+      "n_forced_one_lot": 2,
+      "n_margin_breach": 5,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 52
+    }
+  },
+  "stage1_prereg_choices": {
+    "R1_structural_mid": {
+      "frac": 0.04,
+      "feasible_set": [
+        "0.02",
+        "0.03",
+        "0.04",
+        "0.05",
+        "0.06"
+      ],
+      "pool_used": [
+        "0.02",
+        "0.03",
+        "0.04",
+        "0.05",
+        "0.06"
+      ],
+      "fallback_to_full_grid": false,
+      "rule": "train 可行域(breach=0 且 NAV>1) 中位元素；偶数取靠小者；空则回退全网格"
+    },
+    "R2_train_nav_max": {
+      "frac": 0.1,
+      "train_nav": 1.4804,
+      "rule": "argmax train NAV（仅训练期）"
+    },
+    "R3_train_calmar_max": {
+      "frac": 0.1,
+      "calmar_values": {
+        "0.02": 0.71297,
+        "0.03": 1.32377,
+        "0.04": 2.2793,
+        "0.05": 3.30057,
+        "0.06": 4.28366,
+        "0.08": 4.70687,
+        "0.1": 4.83136
+      },
+      "rule": "argmax train Calmar=segment_return/MDD_E0（仅 MDD>0 格，仅训练期）"
+    },
+    "R4_train_min_mdd": {
+      "frac": 0.06,
+      "pool_used": [
+        "0.02",
+        "0.03",
+        "0.04",
+        "0.05",
+        "0.06",
+        "0.08",
+        "0.1"
+      ],
+      "fallback_to_full_grid": false,
+      "train_mdd": 0.05563,
+      "rule": "argmin train MDD_E0（限 train NAV>1；空则回退全网格，仅训练期）"
+    }
+  },
+  "stage1_rule_feasibility_diag_train_only": {
+    "R1_structural_mid": {
+      "selected_frac": 0.04,
+      "train_nav": 1.1492,
+      "train_mdd_over_E0": 0.06545,
+      "train_n_margin_breach": 0,
+      "train_feasible_no_breach": true,
+      "note": "选中训练期未超限额，生产可行性层面通过（纯训练期判定）"
+    },
+    "R2_train_nav_max": {
+      "selected_frac": 0.1,
+      "train_nav": 1.4804,
+      "train_mdd_over_E0": 0.09944,
+      "train_n_margin_breach": 5,
+      "train_feasible_no_breach": false,
+      "note": "准则未把『无保证金超限』设为硬约束，选中训练期已超限档 → 该准则在本场景不适用（纯训练期即可判定）"
+    },
+    "R3_train_calmar_max": {
+      "selected_frac": 0.1,
+      "train_nav": 1.4804,
+      "train_mdd_over_E0": 0.09944,
+      "train_n_margin_breach": 5,
+      "train_feasible_no_breach": false,
+      "note": "准则未把『无保证金超限』设为硬约束，选中训练期已超限档 → 该准则在本场景不适用（纯训练期即可判定）"
+    },
+    "R4_train_min_mdd": {
+      "selected_frac": 0.06,
+      "train_nav": 1.2383,
+      "train_mdd_over_E0": 0.05563,
+      "train_n_margin_breach": 0,
+      "train_feasible_no_breach": true,
+      "note": "选中训练期未超限额，生产可行性层面通过（纯训练期判定）"
+    }
+  },
+  "stage2_oos_single_verification": {
+    "0.04": {
+      "n_calendar_days": 625,
+      "start_date": "2024-01-02",
+      "end_date": "2026-10-30",
+      "nav_start": 1000000.0,
+      "nav_end": 1022147.03,
+      "nav_multiple_on_segment": 1.0221,
+      "segment_return": 0.02215,
+      "cagr": 0.00778,
+      "mdd_over_E0": 0.38621,
+      "n_events_in_segment": 22,
+      "n_forced_one_lot": 21,
+      "n_margin_breach": 1,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 138
+    },
+    "0.06": {
+      "n_calendar_days": 625,
+      "start_date": "2024-01-02",
+      "end_date": "2026-10-30",
+      "nav_start": 1000000.0,
+      "nav_end": 1350133.34,
+      "nav_multiple_on_segment": 1.3501,
+      "segment_return": 0.35013,
+      "cagr": 0.1121,
+      "mdd_over_E0": 0.28803,
+      "n_events_in_segment": 12,
+      "n_forced_one_lot": 12,
+      "n_margin_breach": 0,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 138
+    },
+    "0.1": {
+      "n_calendar_days": 625,
+      "start_date": "2024-01-02",
+      "end_date": "2026-10-30",
+      "nav_start": 1000000.0,
+      "nav_end": 2119241.06,
+      "nav_multiple_on_segment": 2.1192,
+      "segment_return": 1.11924,
+      "cagr": 0.3045,
+      "mdd_over_E0": 0.16063,
+      "n_events_in_segment": 25,
+      "n_forced_one_lot": 6,
+      "n_margin_breach": 19,
+      "n_skipped_by_margin": 0,
+      "n_missing_margin_data": 0,
+      "n_trades_in_segment": 138
+    }
+  },
+  "stage2_oos_posthoc_descriptive": {
+    "0.02": {
+      "oos_nav_multiple": 0.7929,
+      "oos_mdd_over_E0": 0.44945,
+      "oos_n_margin_breach": 2,
+      "oos_n_forced_one_lot": 42
+    },
+    "0.03": {
+      "oos_nav_multiple": 0.8973,
+      "oos_mdd_over_E0": 0.40335,
+      "oos_n_margin_breach": 1,
+      "oos_n_forced_one_lot": 26
+    },
+    "0.04": {
+      "oos_nav_multiple": 1.0221,
+      "oos_mdd_over_E0": 0.38621,
+      "oos_n_margin_breach": 1,
+      "oos_n_forced_one_lot": 21
+    },
+    "0.05": {
+      "oos_nav_multiple": 1.1846,
+      "oos_mdd_over_E0": 0.34234,
+      "oos_n_margin_breach": 0,
+      "oos_n_forced_one_lot": 16
+    },
+    "0.06": {
+      "oos_nav_multiple": 1.3501,
+      "oos_mdd_over_E0": 0.28803,
+      "oos_n_margin_breach": 0,
+      "oos_n_forced_one_lot": 12
+    },
+    "0.08": {
+      "oos_nav_multiple": 1.7188,
+      "oos_mdd_over_E0": 0.22589,
+      "oos_n_margin_breach": 10,
+      "oos_n_forced_one_lot": 10
+    },
+    "0.1": {
+      "oos_nav_multiple": 2.1192,
+      "oos_mdd_over_E0": 0.16063,
+      "oos_n_margin_breach": 19,
+      "oos_n_forced_one_lot": 6
+    }
+  },
+  "verdict": {
+    "n_prereg_rules": 4,
+    "distinct_selected_fracs": [
+      "0.04",
+      "0.06",
+      "0.1"
+    ],
+    "selected_fracs_in_s27_3_posthoc_narrow_window": [
+      "0.06"
+    ],
+    "n_selected_hitting_narrow_window": 1,
+    "selected_fracs_outside_narrow_window": [
+      "0.04",
+      "0.1"
+    ],
+    "anchor_0_05_selected_by_any_rule": false,
+    "oos_single_results": {
+      "0.04": 1.0221,
+      "0.06": 1.3501,
+      "0.1": 2.1192
+    },
+    "selected_fracs_with_oos_loss": [],
+    "cleanest_rule_R1": {
+      "frac": 0.04,
+      "oos_nav": 1.0221,
+      "oos_mdd_over_E0": 0.38621,
+      "oos_n_margin_breach": 1,
+      "note": "R1 含『无保证金超限』硬约束，是 4 条准则中生产可行性最干净者"
+    },
+    "high_nav_ignoring_margin": {
+      "frac": 0.1,
+      "oos_nav": 2.1192,
+      "oos_n_margin_breach": 19,
+      "train_n_margin_breach": 5,
+      "note": "0.10 账面 OOS NAV 最高，但训练期已 breach=5、OOS breach 更多；属 §21/§27 反复警示的『忽略保证金约束的账面高收益』，不可作生产预期"
+    },
+    "conclusion": "4 条预注册准则无一选中含-OOS 扫描锚点 0.05（anchor_selected=False），选出 frac 分散于 ['0.04', '0.06', '0.1']、其中 2/4 未落入 §27.3 事后窄窗 0.05-0.06 → 含 OOS 全期扫描确属选择偏差。含『无超限』硬约束的最干净准则 R1 选 0.04，OOS 仅 1.0221x、MDD 0.38621 反劣于锚点 0.05 的 1.1846x/0.34234 → 训练期预注册并不能使 frac 稳健，印证 §27.3『非稳健 alpha、不可作生产资金曲线』。",
+    "any_prereg_rule_losses_on_oos": false
+  }
+}

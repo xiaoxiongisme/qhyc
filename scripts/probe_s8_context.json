@@ -1,0 +1,583 @@
+{
+  "A_boundary": {
+    "max_bucket": "2026-11-02 13:00:00+08:00",
+    "n_bars_after_20261030": 241,
+    "n_distinct_days_after_20261030": 2,
+    "n_symbols_after_20261030": 50,
+    "seven_phase_max_bucket": "2026-11-02 11:00",
+    "advanced_vs_seven_phase": true
+  },
+  "A_nov02_hours": {
+    "0": 11,
+    "9": 50,
+    "10": 50,
+    "11": 50,
+    "13": 50
+  },
+  "A_days_after": [
+    {
+      "date": "2026-10-31",
+      "n_bars": 30,
+      "hour_min": 0,
+      "hour_max": 10
+    },
+    {
+      "date": "2026-11-02",
+      "n_bars": 211,
+      "hour_min": 0,
+      "hour_max": 13
+    }
+  ],
+  "B_settle_columns": [
+    {
+      "schema": "access",
+      "table": "v_daily_main",
+      "column": "ret_settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "access",
+      "table": "v_daily_main",
+      "column": "settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "l0_raw",
+      "table": "contract_daily",
+      "column": "settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar",
+      "column": "ret_settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar",
+      "column": "settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar_uni",
+      "column": "ret_settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar_uni",
+      "column": "settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "l0_raw",
+      "table": "minute_bar",
+      "column": "settle_price",
+      "type": "numeric"
+    },
+    {
+      "schema": "public",
+      "table": "contract_daily",
+      "column": "settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "public",
+      "table": "daily_bar",
+      "column": "ret_settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "public",
+      "table": "daily_bar",
+      "column": "settle",
+      "type": "numeric"
+    },
+    {
+      "schema": "public",
+      "table": "minute_bar",
+      "column": "settle_price",
+      "type": "numeric"
+    }
+  ],
+  "C_candidates": [
+    {
+      "schema": "access",
+      "table": "v_daily_main",
+      "settle_col": "ret_settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 140827,
+        "nonnull_pct": 82.84,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 140827,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "access",
+      "table": "v_daily_main",
+      "settle_col": "settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 158781,
+        "nonnull_pct": 93.4,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 158781,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "l0_raw",
+      "table": "contract_daily",
+      "settle_col": "settle",
+      "n_columns": 14,
+      "columns": [
+        "symbol",
+        "product",
+        "exchange",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "oi",
+        "src",
+        "version",
+        "created_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 755039,
+        "n_settle_nonnull": 719964,
+        "nonnull_pct": 95.35,
+        "min_date": "2016-01-04",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 3461
+      },
+      "coverage_888": {
+        "n_rows": 0,
+        "n_settle_nonnull": 0,
+        "n_distinct_888_symbols": 0
+      }
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar",
+      "settle_col": "ret_settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 140827,
+        "nonnull_pct": 82.84,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 140827,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar",
+      "settle_col": "settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 158781,
+        "nonnull_pct": 93.4,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 158781,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar_uni",
+      "settle_col": "ret_settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 140827,
+        "nonnull_pct": 82.84,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 140827,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "l0_raw",
+      "table": "daily_bar_uni",
+      "settle_col": "settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 158781,
+        "nonnull_pct": 93.4,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 158781,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "l0_raw",
+      "table": "minute_bar",
+      "settle_col": "settle_price",
+      "n_columns": 15,
+      "columns": [
+        "symbol",
+        "ts",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "open_interest",
+        "high_limit",
+        "low_limit",
+        "pre_close",
+        "settle_price",
+        "contract",
+        "src"
+      ],
+      "date_col": null,
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 45717700,
+        "n_settle_nonnull": 3253878,
+        "nonnull_pct": 7.12,
+        "n_distinct_symbols": 59
+      },
+      "coverage_888": {
+        "n_rows": 45717700,
+        "n_settle_nonnull": 3253878,
+        "n_distinct_888_symbols": 59
+      }
+    },
+    {
+      "schema": "public",
+      "table": "contract_daily",
+      "settle_col": "settle",
+      "n_columns": 14,
+      "columns": [
+        "symbol",
+        "product",
+        "exchange",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "oi",
+        "src",
+        "version",
+        "created_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 755039,
+        "n_settle_nonnull": 719964,
+        "nonnull_pct": 95.35,
+        "min_date": "2016-01-04",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 3461
+      },
+      "coverage_888": {
+        "n_rows": 0,
+        "n_settle_nonnull": 0,
+        "n_distinct_888_symbols": 0
+      }
+    },
+    {
+      "schema": "public",
+      "table": "daily_bar",
+      "settle_col": "ret_settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 140827,
+        "nonnull_pct": 82.84,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 140827,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "public",
+      "table": "daily_bar",
+      "settle_col": "settle",
+      "n_columns": 17,
+      "columns": [
+        "symbol",
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "settle",
+        "volume",
+        "amount",
+        "oi",
+        "ret_close",
+        "ret_settle",
+        "ret5",
+        "ret20",
+        "src",
+        "created_at",
+        "updated_at"
+      ],
+      "date_col": "trade_date",
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 169997,
+        "n_settle_nonnull": 158781,
+        "nonnull_pct": 93.4,
+        "min_date": "2015-01-05",
+        "max_date": "2026-10-30",
+        "n_distinct_symbols": 124
+      },
+      "coverage_888": {
+        "n_rows": 160350,
+        "n_settle_nonnull": 158781,
+        "n_distinct_888_symbols": 82
+      }
+    },
+    {
+      "schema": "public",
+      "table": "minute_bar",
+      "settle_col": "settle_price",
+      "n_columns": 15,
+      "columns": [
+        "symbol",
+        "ts",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "open_interest",
+        "high_limit",
+        "low_limit",
+        "pre_close",
+        "settle_price",
+        "contract",
+        "src"
+      ],
+      "date_col": null,
+      "sym_col": "symbol",
+      "coverage": {
+        "n_rows": 45717700,
+        "n_settle_nonnull": 3253878,
+        "nonnull_pct": 7.12,
+        "n_distinct_symbols": 59
+      },
+      "coverage_888": {
+        "n_rows": 45717700,
+        "n_settle_nonnull": 3253878,
+        "n_distinct_888_symbols": 59
+      }
+    }
+  ],
+  "D_futures_rule": {
+    "n_rows": 121708,
+    "min_date": "2023-01-03",
+    "max_date": "2026-11-02",
+    "n_codes": 162
+  },
+  "meta": {
+    "purpose": "八期前置只读探针：边界/settle源/保证金源",
+    "note": "判不可用前扫全库；888 主连覆盖为 B3 结算价可直接使用的关键判据"
+  }
+}

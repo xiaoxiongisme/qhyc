@@ -1,0 +1,430 @@
+{
+  "meta": {
+    "start": "2021-01-01",
+    "end": "2026-10-30",
+    "weekend_drop": "主口径（日盘首 bar 成交）",
+    "session_map": "夜盘归位口径（hour>=21 归次日、周末推周一；实际首 bar 22:00）",
+    "purpose": "八期 P2：夜盘 22:00 成交语义对 B3 的实盘化成本量化",
+    "caveats": [
+      "一阶近似：仅替换建仓价，未重跑 session_map 完整成交序列（持仓/平仓时点亦会改变）",
+      "session_map 归位日 open 可能来自前一日夜盘（周一可差 2 天），价差含跨日信息",
+      "delta_net_R = -side×(sm_open−wd_entry_px)/trade['risk']（risk 已含 sl_mult×ATR，不重复乘；底座 signal_oos_backtest.py:254）；成交 pnl 原口径不变",
+      "交叉验证：A 段全单元格量级应与七期 D_overnight_gap（abs_mean 0.65%）同量级",
+      "结论仅用于判定语义可执行性成本，不作收益预期、不就地翻案"
+    ]
+  },
+  "A_cell_price_diff": {
+    "n_common_dates": 1619,
+    "overall": {
+      "n": 42053,
+      "mean_pct": -0.015,
+      "abs_mean_pct": 0.5555,
+      "median_pct": 0.0,
+      "p10_pct": -0.904,
+      "p90_pct": 0.8536,
+      "pct_positive": 41.5
+    },
+    "by_symbol": {
+      "AG888": {
+        "n": 1619,
+        "mean_pct": -0.0302,
+        "abs_mean_pct": 0.6979,
+        "median_pct": 0.0,
+        "p10_pct": -1.134,
+        "p90_pct": 1.0907,
+        "pct_positive": 44.47
+      },
+      "AU888": {
+        "n": 1619,
+        "mean_pct": 0.0202,
+        "abs_mean_pct": 0.3389,
+        "median_pct": 0.0,
+        "p10_pct": -0.5005,
+        "p90_pct": 0.5773,
+        "pct_positive": 47.5
+      },
+      "C888": {
+        "n": 1618,
+        "mean_pct": -0.0026,
+        "abs_mean_pct": 0.2757,
+        "median_pct": 0.0,
+        "p10_pct": -0.4695,
+        "p90_pct": 0.4368,
+        "pct_positive": 44.13
+      },
+      "CS888": {
+        "n": 1602,
+        "mean_pct": 0.0129,
+        "abs_mean_pct": 0.3318,
+        "median_pct": 0.0,
+        "p10_pct": -0.492,
+        "p90_pct": 0.5381,
+        "pct_positive": 45.82
+      },
+      "CU888": {
+        "n": 1619,
+        "mean_pct": -0.0241,
+        "abs_mean_pct": 0.3752,
+        "median_pct": 0.0,
+        "p10_pct": -0.6245,
+        "p90_pct": 0.5426,
+        "pct_positive": 43.17
+      },
+      "FG888": {
+        "n": 1618,
+        "mean_pct": 0.0247,
+        "abs_mean_pct": 0.7749,
+        "median_pct": 0.0,
+        "p10_pct": -1.2048,
+        "p90_pct": 1.2366,
+        "pct_positive": 45.43
+      },
+      "FU888": {
+        "n": 1618,
+        "mean_pct": 0.0247,
+        "abs_mean_pct": 1.1044,
+        "median_pct": 0.0,
+        "p10_pct": -1.7205,
+        "p90_pct": 1.7817,
+        "pct_positive": 45.06
+      },
+      "HC888": {
+        "n": 1618,
+        "mean_pct": -0.0517,
+        "abs_mean_pct": 0.4709,
+        "median_pct": 0.0,
+        "p10_pct": -0.8062,
+        "p90_pct": 0.616,
+        "pct_positive": 44.19
+      },
+      "J888": {
+        "n": 1618,
+        "mean_pct": -0.0658,
+        "abs_mean_pct": 0.818,
+        "median_pct": 0.0,
+        "p10_pct": -1.3677,
+        "p90_pct": 1.1991,
+        "pct_positive": 43.08
+      },
+      "JM888": {
+        "n": 1618,
+        "mean_pct": -0.046,
+        "abs_mean_pct": 0.9256,
+        "median_pct": 0.0,
+        "p10_pct": -1.4927,
+        "p90_pct": 1.4562,
+        "pct_positive": 45.55
+      },
+      "L888": {
+        "n": 1618,
+        "mean_pct": -0.0101,
+        "abs_mean_pct": 0.4427,
+        "median_pct": 0.0,
+        "p10_pct": -0.7144,
+        "p90_pct": 0.6512,
+        "pct_positive": 45.36
+      },
+      "M888": {
+        "n": 1618,
+        "mean_pct": 0.0048,
+        "abs_mean_pct": 0.5438,
+        "median_pct": 0.0,
+        "p10_pct": -0.8792,
+        "p90_pct": 0.8761,
+        "pct_positive": 47.71
+      },
+      "MA888": {
+        "n": 1618,
+        "mean_pct": -0.0126,
+        "abs_mean_pct": 0.6738,
+        "median_pct": 0.0,
+        "p10_pct": -0.9932,
+        "p90_pct": 0.9488,
+        "pct_positive": 45.24
+      },
+      "NI888": {
+        "n": 1619,
+        "mean_pct": -0.0345,
+        "abs_mean_pct": 0.6836,
+        "median_pct": 0.0,
+        "p10_pct": -1.1193,
+        "p90_pct": 0.9886,
+        "pct_positive": 45.4
+      },
+      "P888": {
+        "n": 1618,
+        "mean_pct": -0.0589,
+        "abs_mean_pct": 0.6575,
+        "median_pct": 0.0,
+        "p10_pct": -1.1283,
+        "p90_pct": 0.9529,
+        "pct_positive": 43.02
+      },
+      "PP888": {
+        "n": 1618,
+        "mean_pct": -0.0096,
+        "abs_mean_pct": 0.4394,
+        "median_pct": 0.0,
+        "p10_pct": -0.6982,
+        "p90_pct": 0.6492,
+        "pct_positive": 45.92
+      },
+      "RB888": {
+        "n": 1618,
+        "mean_pct": -0.0393,
+        "abs_mean_pct": 0.4689,
+        "median_pct": 0.0,
+        "p10_pct": -0.8003,
+        "p90_pct": 0.6366,
+        "pct_positive": 43.94
+      },
+      "RM888": {
+        "n": 1618,
+        "mean_pct": 0.0146,
+        "abs_mean_pct": 0.6577,
+        "median_pct": 0.0,
+        "p10_pct": -1.0315,
+        "p90_pct": 1.0912,
+        "pct_positive": 46.97
+      },
+      "SA888": {
+        "n": 1612,
+        "mean_pct": 0.0055,
+        "abs_mean_pct": 0.7968,
+        "median_pct": 0.0,
+        "p10_pct": -1.3008,
+        "p90_pct": 1.2961,
+        "pct_positive": 46.53
+      },
+      "SC888": {
+        "n": 1619,
+        "mean_pct": -0.0435,
+        "abs_mean_pct": 0.808,
+        "median_pct": 0.0,
+        "p10_pct": -1.2946,
+        "p90_pct": 1.233,
+        "pct_positive": 42.74
+      },
+      "SF888": {
+        "n": 1618,
+        "mean_pct": 0.0,
+        "abs_mean_pct": 0.0,
+        "median_pct": 0.0,
+        "p10_pct": 0.0,
+        "p90_pct": 0.0,
+        "pct_positive": 0.0
+      },
+      "SM888": {
+        "n": 1618,
+        "mean_pct": 0.0,
+        "abs_mean_pct": 0.0,
+        "median_pct": 0.0,
+        "p10_pct": 0.0,
+        "p90_pct": 0.0,
+        "pct_positive": 0.0
+      },
+      "SS888": {
+        "n": 1619,
+        "mean_pct": -0.0425,
+        "abs_mean_pct": 0.4709,
+        "median_pct": 0.0,
+        "p10_pct": -0.7469,
+        "p90_pct": 0.7062,
+        "pct_positive": 42.06
+      },
+      "TA888": {
+        "n": 1618,
+        "mean_pct": 0.0205,
+        "abs_mean_pct": 0.6795,
+        "median_pct": 0.0,
+        "p10_pct": -1.0143,
+        "p90_pct": 1.0693,
+        "pct_positive": 46.54
+      },
+      "Y888": {
+        "n": 1618,
+        "mean_pct": -0.0276,
+        "abs_mean_pct": 0.5616,
+        "median_pct": 0.0,
+        "p10_pct": -0.9336,
+        "p90_pct": 0.8911,
+        "pct_positive": 44.19
+      },
+      "ZN888": {
+        "n": 1619,
+        "mean_pct": -0.0172,
+        "abs_mean_pct": 0.4433,
+        "median_pct": 0.0,
+        "p10_pct": -0.7598,
+        "p90_pct": 0.6721,
+        "pct_positive": 45.09
+      }
+    }
+  },
+  "B_b3_trade_level": {
+    "n_trades_total": 190,
+    "n_matched": 190,
+    "n_unmatched": 0,
+    "match_rate_pct": 100.0,
+    "entry_price_diff_all": {
+      "n": 190,
+      "mean_pct": 0.2371,
+      "abs_mean_pct": 0.8342,
+      "median_pct": 0.0,
+      "p10_pct": -0.9226,
+      "p90_pct": 1.1928,
+      "pct_positive": 42.11
+    },
+    "delta_net_R_all": {
+      "n": 190,
+      "sum": -3.72084,
+      "mean": -0.01958,
+      "median": 0.0,
+      "pct_negative": 47.89,
+      "pct_positive": 35.26,
+      "min": -0.7155,
+      "max": 0.80288
+    },
+    "delta_net_R_by_side": {
+      "LONG": {
+        "n": 95,
+        "sum": -2.80311,
+        "mean": -0.02951,
+        "pct_negative": 49.47
+      },
+      "SHORT": {
+        "n": 95,
+        "sum": -0.91773,
+        "mean": -0.00966,
+        "pct_negative": 46.32
+      }
+    },
+    "delta_net_R_by_symbol_top_worst": [
+      {
+        "symbol": "C888",
+        "n": 6,
+        "sum": -0.97597
+      },
+      {
+        "symbol": "MA888",
+        "n": 5,
+        "sum": -0.845
+      },
+      {
+        "symbol": "NI888",
+        "n": 11,
+        "sum": -0.79381
+      },
+      {
+        "symbol": "JM888",
+        "n": 9,
+        "sum": -0.67992
+      },
+      {
+        "symbol": "SA888",
+        "n": 10,
+        "sum": -0.61369
+      },
+      {
+        "symbol": "HC888",
+        "n": 9,
+        "sum": -0.48615
+      },
+      {
+        "symbol": "ZN888",
+        "n": 6,
+        "sum": -0.37196
+      },
+      {
+        "symbol": "SC888",
+        "n": 11,
+        "sum": -0.31935
+      }
+    ],
+    "sample": [
+      {
+        "date": "2022-12-23",
+        "symbol": "TA888",
+        "side": "SHORT",
+        "entry_wd": 5404.0,
+        "entry_sm": 5448.0,
+        "diff_pct": 0.8142,
+        "delta_net_R": 0.12579
+      },
+      {
+        "date": "2022-12-23",
+        "symbol": "MA888",
+        "side": "LONG",
+        "entry_wd": 2527.0,
+        "entry_sm": 2535.0,
+        "diff_pct": 0.3166,
+        "delta_net_R": -0.04305
+      },
+      {
+        "date": "2022-12-26",
+        "symbol": "SF888",
+        "side": "LONG",
+        "entry_wd": 7986.0,
+        "entry_sm": 7986.0,
+        "diff_pct": 0.0,
+        "delta_net_R": -0.0
+      },
+      {
+        "date": "2022-12-26",
+        "symbol": "SM888",
+        "side": "SHORT",
+        "entry_wd": 7342.0,
+        "entry_sm": 7342.0,
+        "diff_pct": 0.0,
+        "delta_net_R": 0.0
+      },
+      {
+        "date": "2023-02-20",
+        "symbol": "FU888",
+        "side": "SHORT",
+        "entry_wd": 2863.0,
+        "entry_sm": 2864.0,
+        "diff_pct": 0.0349,
+        "delta_net_R": 0.00399
+      },
+      {
+        "date": "2023-02-20",
+        "symbol": "SC888",
+        "side": "LONG",
+        "entry_wd": 552.5,
+        "entry_sm": 557.5,
+        "diff_pct": 0.905,
+        "delta_net_R": -0.09667
+      },
+      {
+        "date": "2023-03-13",
+        "symbol": "NI888",
+        "side": "LONG",
+        "entry_wd": 177780.0,
+        "entry_sm": 179660.0,
+        "diff_pct": 1.0575,
+        "delta_net_R": -0.10437
+      },
+      {
+        "date": "2023-03-13",
+        "symbol": "SS888",
+        "side": "SHORT",
+        "entry_wd": 15800.0,
+        "entry_sm": 15810.0,
+        "diff_pct": 0.0633,
+        "delta_net_R": 0.01392
+      }
+    ]
+  },
+  "verdict": {
+    "b3_systematic_erosion": false,
+    "criterion": "sum(delta_net_R) < -0.05×n（即平均侵蚀 > 0.05R/笔）判为系统性侵蚀",
+    "sum_delta_net_R": -3.72084,
+    "pct_trades_worse_on_night_fill": 47.89,
+    "pct_trades_better_on_night_fill": 35.26,
+    "total_net_R_full_period": 38.5968,
+    "erosion_pct_of_total_net_R": -9.64,
+    "conclusion": "未达预注册的系统性侵蚀阈值（sum=-3.72084R vs 阈值 -9.50R），但存在**方向一致为负的非零偏移**：总 -3.72084R ≈ 全期净 R 总量 38.60R 的 -9.64%，变差笔数 47.89% > 变好 35.26%，LONG 腿（-2.80311R）大于 SHORT（-0.91773R）→ 属「小幅但非零」的执行成本，而非纯随机噪声；维持 §27.2『不作生产口径、仅情景对照』，且不可忽略该负向偏移",
+    "note": "一阶近似（仅替换建仓价，未重跑 session_map 完整成交序列）；session_map 归位日 open 可能来自前一日夜盘（周一可差 2 天）"
+  }
+}
