@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import warnings
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -92,6 +93,98 @@ def detect_bar_convention(session, start: date, end: date) -> dict:
             "n_left": len(left), "n_right": len(right)}
 
 
+# ------------------------------------------------- 切块网格断言（D2，十二期①）
+#: 会话网格：每 60 个交易分钟一根、跨休市继续累计，**标签 = 块结束时刻**。
+#:   日盘 10:00 / 11:15 / 14:15 / 15:00；夜盘 22:00 / 23:00（长夜盘 00:00 / 01:00 / 02:30）。
+#:   与 app/ingest/synthesizer.py 的 _SESSION_DAY_BOUNDS[60] = [60, 135, 315, 360] 同源。
+GRID_SESSION = "session"
+#: 自然整点网格：墙钟整点切块、**标签 = 块开始时刻**，且每个小节的残段被强行并入整点桶
+#:   （13:00 桶只含 13:30–14:00 的 30 分钟；并产生 15:00 零成交边界桶）。
+#:   2026-11-02 全市场 50 品种即此网格（由已停用的 time_bucket 路径写入），共 9 根/日。
+GRID_WALLCLOCK = "wallclock"
+#: 既无会话独有标签也无整点独有标签（残日 / 新上市半日 / 只有夜盘的跨零日）。
+GRID_UNKNOWN = "unknown"
+
+#: 两种网格的判别标签（HH:MM）。会话网格下 11:15 / 14:15 必然出现且整点网格下必然不出现；
+#: 反之 09:00 / 11:00 / 13:00 只在整点网格出现（60 交易分钟切块不会落在这些点上）。
+_SIG_SESSION = ("11:15", "14:15")
+_SIG_WALL = ("09:00", "11:00", "13:00")
+
+#: 最近一次 load_market 的网格体检报告（供调用方记录到结果 JSON）。
+LAST_GRID_REPORT: dict | None = None
+
+
+class BarGridError(RuntimeError):
+    """行情 bar 的切块网格与预期不一致 —— 60m 特征会被静默污染，必须显式中断。"""
+
+
+def detect_bar_grid(session, start: date, end: date, table: str = "bar_60m",
+                    symbols: list[str] | None = None) -> dict:
+    """按 (symbol, 交易日) 判定 60m 切块网格（D2 入口断言的判据）。
+
+    只统计**日盘时段**（hour ∈ [9,15]）的 bar：夜盘两套网格的整点标签可能重合，
+    而跨零夜盘日（周六凌晨残留）根本没有日盘 bar，无法判别 → 归 unknown 并豁免。
+
+    返回：
+      by_day  —— {date: {session: n_sym, wallclock: n_sym, unknown: n_sym}}
+      bad_days—— 判决为 wallclock 的日期（真正需要中断/剔除的污染日）
+      unknown_days —— 无判别证据的日（只有夜盘/极thin/残日），**豁免，不计异常**
+      offenders —— 判决为 session 的日里混入的 wallclock (date, symbol, grid) 列表
+      grids   —— 出现过的网格集合
+      mixed   —— 是否同时出现 session 与 wallclock
+    """
+    where = ["bucket >= :s", "bucket <= :e", "extract(hour from bucket) BETWEEN 9 AND 15"]
+    params = {"s": pd.Timestamp(start), "e": pd.Timestamp(end),
+              "sig_s": list(_SIG_SESSION), "sig_w": list(_SIG_WALL)}
+    if symbols:
+        where.append("symbol = ANY(:syms)")
+        params["syms"] = list(symbols)
+    sql = (
+        "SELECT bucket::date AS d, symbol, count(*) AS n, "
+        "       count(*) FILTER (WHERE to_char(bucket,'HH24:MI') = ANY(:sig_s)) AS n_s, "
+        "       count(*) FILTER (WHERE to_char(bucket,'HH24:MI') = ANY(:sig_w)) AS n_w "
+        f"FROM l1_mkt.{table} WHERE " + " AND ".join(where) + " GROUP BY 1, 2"
+    )
+    rows = session.execute(text(sql), params).all()
+
+    by_day: dict = defaultdict(lambda: {GRID_SESSION: 0, GRID_WALLCLOCK: 0, GRID_UNKNOWN: 0})
+    per_sym_grid: dict = {}
+    for d, sym, _n, n_s, n_w in rows:
+        if n_s:
+            g = GRID_SESSION
+        elif n_w:
+            g = GRID_WALLCLOCK
+        else:
+            g = GRID_UNKNOWN
+        by_day[d][g] += 1
+        per_sym_grid[(d, sym)] = g
+
+    bad_days, unknown_days, offenders = [], [], []
+    for d in sorted(by_day):
+        c = by_day[d]
+        verdict = max(((GRID_SESSION, c[GRID_SESSION]),
+                       (GRID_WALLCLOCK, c[GRID_WALLCLOCK]),
+                       (GRID_UNKNOWN, c[GRID_UNKNOWN])), key=lambda kv: kv[1])[0]
+        if verdict == GRID_WALLCLOCK:
+            bad_days.append(d)
+        elif verdict == GRID_UNKNOWN:
+            # 残日 / 只有 1 根 bar 的极thin品种 / 夜盘跨零日：无判别证据，豁免
+            unknown_days.append(d)
+        else:
+            for (dd, sym), g in per_sym_grid.items():
+                if dd == d and g == GRID_WALLCLOCK:
+                    offenders.append((d, sym, g))
+
+    grids = {g for c in by_day.values() for g, k in c.items() if k}
+    return {"by_day": {d: dict(c) for d, c in by_day.items()},
+            "bad_days": bad_days, "unknown_days": unknown_days,
+            "offenders": offenders,
+            "grids": sorted(grids),
+            "mixed": GRID_SESSION in grids and GRID_WALLCLOCK in grids,
+            "n_days": len(by_day), "n_bad": len(bad_days),
+            "n_unknown": len(unknown_days)}
+
+
 def _reagg_60m_from_5m(session, start: date, end: date) -> pd.DataFrame:
     """由 bar_5m 重聚合为「左端整点」60m（十期②）。
 
@@ -122,10 +215,20 @@ def _reagg_60m_from_5m(session, start: date, end: date) -> pd.DataFrame:
 
 def load_market(session, symbols: list[str], start: date, end: date,
                 calendar_mode: str = "raw", bar_mode: str = "native",
-                bar_frame: pd.DataFrame | None = None):
+                bar_frame: pd.DataFrame | None = None,
+                grid_policy: str = "warn"):
     """bar_mode（十期②新增，默认 'native' 保持既有研究逐位一致）：
-      'native' —— 直读 l1_mkt.bar_60m（历史口径，标签在 2026-11-02 前为右端/会话锚定）
+      'native' —— 直读 l1_mkt.bar_60m（历史口径：会话网格 + 右端标签）
       'reagg5' —— 由 bar_5m 重聚合为左端整点（单一口径，用于口径敏感性对照）
+
+    grid_policy（十二期① / D2 入口断言，默认 'warn' 保证既有研究逐位可复现）：
+      'warn'  —— 检出非会话网格的交易日则发 RuntimeWarning 并记入 LAST_GRID_REPORT，
+                 数据不删不改（与加断言前逐位一致）。
+      'raise' —— 同上检出即抛 BarGridError。**新研究请用这个**：口径污染不允许静默通过。
+      'drop'  —— 剔除被判非会话网格的整个交易日（同日所有品种一并剔除），
+                 用于"必须含污染日才能覆盖区间"的稳健性对照。
+      'off'   —— 完全不检查（零额外查询），仅用于已验证过的热路径。
+      reagg5 / bar_frame 路径本身已是单一口径，policy 自动降级为 'off'。
     """
     """一次性取全部品种 60m，重采样为日线 open/close/high/low（date×symbol）。
 
@@ -157,6 +260,31 @@ def load_market(session, symbols: list[str], start: date, end: date,
         raw = pd.DataFrame(rows, columns=["symbol", "dt", "open", "high", "low", "close"])
     else:
         raise ValueError(f"unknown bar_mode={bar_mode!r}")
+
+    # ---- D2 入口断言：切块网格必须全区间唯一且为会话网格 ----
+    global LAST_GRID_REPORT
+    if bar_mode != "native" or bar_frame is not None:
+        grid_policy = "off"          # 5m 重聚合 / 外部帧已是单一口径
+    if grid_policy not in ("off", "warn", "raise", "drop"):
+        raise ValueError(f"unknown grid_policy={grid_policy!r}")
+    if grid_policy != "off" and not raw.empty:
+        rep = detect_bar_grid(session, start, end, symbols=symbols)
+        rep["policy"] = grid_policy
+        LAST_GRID_REPORT = rep
+        if rep["n_bad"]:
+            bad = [str(d) for d in rep["bad_days"]]
+            msg = (f"60m 切块网格异常：{rep['n_bad']}/{rep['n_days']} 个交易日不是会话网格 "
+                   f"（会话网格=每60交易分钟一根、标签=块结束）。首尾：{bad[0]} … {bad[-1]}；"
+                   f"出现在区间内将污染 60m 特征与日线首末价。[{start}..{end}]")
+            if grid_policy == "raise":
+                raise BarGridError(msg + f"；异常日={bad[:10]}")
+            if grid_policy == "drop":
+                badset = set(rep["bad_days"])
+                n_before = len(raw)
+                raw = raw[~raw["dt"].dt.date.isin(badset)]
+                rep["dropped_rows"] = int(n_before - len(raw))
+            warnings.warn(msg, RuntimeWarning, stacklevel=2)
+
     for c in ("open", "high", "low", "close"):
         raw[c] = raw[c].astype(float)
     if calendar_mode == "raw":

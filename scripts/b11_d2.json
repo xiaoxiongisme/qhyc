@@ -1,0 +1,618 @@
+{
+ "meta": {
+  "range": [
+   "2021-01-01",
+   "2026-11-03"
+  ],
+  "focus": "2026-11-02",
+  "n_symbols": 59,
+  "run_at": "2026-11-03T07:07:14"
+ },
+ "A_scan": {
+  "range": [
+   "2021-01-01",
+   "2026-11-03"
+  ],
+  "n_days": 1355,
+  "grids": [
+   "session",
+   "unknown",
+   "wallclock"
+  ],
+  "mixed": true,
+  "bad_days": [
+   "2026-11-02"
+  ],
+  "bad_day_detail": {
+   "2026-11-02": {
+    "session": 0,
+    "wallclock": 50,
+    "unknown": 0
+   }
+  },
+  "n_offenders": 0,
+  "label_base_rates": {
+   "session_sig": 146557,
+   "wall_sig": 150,
+   "total": 293421
+  }
+ },
+ "B_assert": {
+  "W_ok": {
+   "window": [
+    "2021-01-01",
+    "2026-10-31"
+   ],
+   "n_bad": 0,
+   "bad_days": [],
+   "raise": "passed(no exception)",
+   "raise_sec": 16.4
+  },
+  "W_bad": {
+   "window": [
+    "2021-01-01",
+    "2026-11-03"
+   ],
+   "n_bad": 1,
+   "bad_days": [
+    "2026-11-02"
+   ],
+   "raise": "raised: 60m 切块网格异常：1/1355 个交易日不是会话网格 （会话网格=每60交易分钟一根、标签=块结束）。首尾：2026-11-02 … 2026-11-02；出现在区间内将污染 ",
+   "raise_sec": 9.7
+  },
+  "W_only": {
+   "window": [
+    "2026-11-01",
+    "2026-11-03"
+   ],
+   "n_bad": 1,
+   "bad_days": [
+    "2026-11-02"
+   ],
+   "raise": "raised: 60m 切块网格异常：1/1 个交易日不是会话网格 （会话网格=每60交易分钟一根、标签=块结束）。首尾：2026-11-02 … 2026-11-02；出现在区间内将污染 60m",
+   "raise_sec": 0.0
+  },
+  "warn_vs_off": {
+   "identical": true,
+   "n_warn": 1,
+   "message": "60m 切块网格异常：1/1355 个交易日不是会话网格 （会话网格=每60交易分钟一根、标签=块结束）。首尾：2026-11-02 … 2026-11-02；出现在区间内将污染 60m 特征与日线首末价。[2021-01-01..2026-11-03]"
+  },
+  "drop": {
+   "dropped_rows": 437,
+   "focus_day_removed": true,
+   "n_days_warn": 1354,
+   "n_days_drop": 1353
+  }
+ },
+ "C1_rebuild": {
+  "rebuilt_rows": 306,
+  "native_rows_on_focus": 437,
+  "native_bars_per_symbol_median": 9,
+  "rebuilt_bars_per_symbol_median": 6
+ },
+ "C2_daily": {
+  "n_bars_per_symbol_native": 6,
+  "n_bars_per_symbol_rebuilt": 4,
+  "labels_native": [
+   "09:00",
+   "10:00",
+   "11:00",
+   "13:00",
+   "14:00",
+   "15:00"
+  ],
+  "labels_rebuilt": [
+   "10:00",
+   "11:15",
+   "14:15",
+   "15:00"
+  ],
+  "day_ohlc_max_rel_diff": 0.0,
+  "n_symbols_ohlc_diff": 0,
+  "n_symbols": 50,
+  "verdict": "日线层无影响（两套网格覆盖同一批分钟，首末/极值等价）"
+ },
+ "C3_features": {
+  "n_symbols": 40,
+  "n_symbols_state_diff": 7,
+  "n_symbols_entry_flip": 7,
+  "atr_rel_median": 0.15850084044613433,
+  "atr_rel_max": 0.19813753605624074,
+  "ema_rel_max": 0.004380473891087755,
+  "flipped": [
+   {
+    "symbol": "CU888",
+    "n_bars": 288,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 15:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "EB888",
+    "n_bars": 215,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 10:00:00+08:00",
+    "last_diff": "2026-11-02 10:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "P888",
+    "n_bars": 215,
+    "diff_bars": 4,
+    "n_transition_flip": 1,
+    "first_diff": "2026-11-02 10:00:00+08:00",
+    "last_diff": "2026-11-02 23:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "RM888",
+    "n_bars": 215,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 15:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "RU888",
+    "n_bars": 215,
+    "diff_bars": 3,
+    "n_transition_flip": 1,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 23:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SC888",
+    "n_bars": 354,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 15:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SN888",
+    "n_bars": 287,
+    "diff_bars": 2,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 22:00:00+08:00",
+    "diff_bars_after_focus": 0
+   }
+  ],
+  "per_symbol": [
+   {
+    "symbol": "A888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "AG888",
+    "n_bars": 354,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "AL888",
+    "n_bars": 287,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "AO888",
+    "n_bars": 287,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "AU888",
+    "n_bars": 353,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "BU888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "C888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "CF888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "CU888",
+    "n_bars": 288,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 15:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "EB888",
+    "n_bars": 215,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 10:00:00+08:00",
+    "last_diff": "2026-11-02 10:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "EG888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "FG888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "FU888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "HC888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "I888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "J888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "JM888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "L888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "M888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "MA888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "NI888",
+    "n_bars": 288,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "OI888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "P888",
+    "n_bars": 215,
+    "diff_bars": 4,
+    "n_transition_flip": 1,
+    "first_diff": "2026-11-02 10:00:00+08:00",
+    "last_diff": "2026-11-02 23:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "PB888",
+    "n_bars": 287,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "PP888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "PX888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "RB888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "RM888",
+    "n_bars": 215,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 15:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "RU888",
+    "n_bars": 215,
+    "diff_bars": 3,
+    "n_transition_flip": 1,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 23:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SA888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SC888",
+    "n_bars": 354,
+    "diff_bars": 1,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 15:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SH888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SN888",
+    "n_bars": 287,
+    "diff_bars": 2,
+    "n_transition_flip": 2,
+    "first_diff": "2026-11-02 15:00:00+08:00",
+    "last_diff": "2026-11-02 22:00:00+08:00",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SP888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SR888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "SS888",
+    "n_bars": 287,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "TA888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "V888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "Y888",
+    "n_bars": 215,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   },
+   {
+    "symbol": "ZN888",
+    "n_bars": 289,
+    "diff_bars": 0,
+    "n_transition_flip": 0,
+    "first_diff": "",
+    "last_diff": "",
+    "diff_bars_after_focus": 0
+   }
+  ]
+ },
+ "C4_b3": {
+  "runs": {
+   "warn": {
+    "n": 38,
+    "agg_net": 7.6212,
+    "mean": 0.20056,
+    "win": 0.5,
+    "by_year": {
+     "2025": {
+      "n": 4,
+      "net": 2.57539
+     },
+     "2026": {
+      "n": 34,
+      "net": 5.04582
+     }
+    },
+    "n_entry_on_focus": 0,
+    "sec": 13.8
+   },
+   "drop": {
+    "n": 38,
+    "agg_net": 7.6212,
+    "mean": 0.20056,
+    "win": 0.5,
+    "by_year": {
+     "2025": {
+      "n": 4,
+      "net": 2.57539
+     },
+     "2026": {
+      "n": 34,
+      "net": 5.04582
+     }
+    },
+    "n_entry_on_focus": 0,
+    "sec": 13.5
+   }
+  },
+  "delta": {
+   "n_trades": 0,
+   "agg_net": 0.0
+  }
+ },
+ "D_wiring": {
+  "points": [
+   {
+    "where": "app/backtest/fusion_backtest.py::_read_hourly",
+    "side": "bar_60m 分支",
+    "note": "回测侧唯一 60m 入口；在此对返回帧做一次网格校验即可覆盖全部回测"
+   },
+   {
+    "where": "app/strategies/fusion_signal.py::run/walk",
+    "side": "实时侧",
+    "note": "实时走 cfg.hourly_src=akshare→l0_raw.hourly_bar；实测其 2026-11-02 为正常会话网格（10:00/11:15/14:15/15:00），故当日实盘信号未被污染"
+   },
+   {
+    "where": "app/ingest/synthesizer.py::_synth_one",
+    "side": "写入侧",
+    "note": "_INSERT_HEAD（自然整点桶）已停用但代码仍在；建议删除或加 import 期断言，防止回归"
+   },
+   {
+    "where": "scripts/signal_oos_backtest.py::load_market",
+    "side": "研究侧",
+    "note": "本次已加 grid_policy='raise'|'drop'|'warn'|'off'"
+   }
+  ]
+ }
+}
