@@ -1,0 +1,236 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "kinds": [
+   "chg5",
+   "chg20",
+   "level_z"
+  ],
+  "lags": [
+   1,
+   2,
+   3
+  ],
+  "q": 0.2,
+  "rebalance_by_kind": {
+   "chg5": 5,
+   "chg20": 21,
+   "level_z": 5
+  },
+  "alias_map": {
+   "PTA888": "TA888"
+  },
+  "direction_note": "先验固定 sign=-1（仓单增加=供给宽松=偏空）；反方向仅诊断",
+  "preshift_note": "created_at 批量回填不可用；显式 shift(lag)+lag∈{1,2,3} 稳健性",
+  "data_quality_note": "多仓库明细 sum(receipt_qty) 聚合；空19.6%+零44.3%；与主连交集49；仅15品种>=800天",
+  "n_windows": 23
+ },
+ "ic": {
+  "chg5": {
+   "full": {
+    "n": 731,
+    "ic": -0.01613,
+    "t": -1.848
+   },
+   "is": {
+    "n": 0,
+    "ic": null,
+    "t": null
+   },
+   "oos": {
+    "n": 731,
+    "ic": -0.01613,
+    "t": -1.848
+   },
+   "by_year": {
+    "2024": {
+     "n": 281,
+     "ic": -0.00463,
+     "t": -0.361
+    },
+    "2025": {
+     "n": 290,
+     "ic": -0.02039,
+     "t": -1.531
+    },
+    "2026": {
+     "n": 160,
+     "ic": -0.02861,
+     "t": -1.276
+    }
+   },
+   "horizon": 5,
+   "lag": 1,
+   "min_valid": 10
+  },
+  "chg20": {
+   "full": {
+    "n": 701,
+    "ic": -0.00557,
+    "t": -0.639
+   },
+   "is": {
+    "n": 0,
+    "ic": null,
+    "t": null
+   },
+   "oos": {
+    "n": 701,
+    "ic": -0.00557,
+    "t": -0.639
+   },
+   "by_year": {
+    "2024": {
+     "n": 266,
+     "ic": 0.03362,
+     "t": 2.401
+    },
+    "2025": {
+     "n": 290,
+     "ic": -0.00789,
+     "t": -0.59
+    },
+    "2026": {
+     "n": 145,
+     "ic": -0.07281,
+     "t": -3.88
+    }
+   },
+   "horizon": 20,
+   "lag": 1,
+   "min_valid": 10
+  },
+  "level_z": {
+   "full": {
+    "n": 701,
+    "ic": -0.0173,
+    "t": -2.052
+   },
+   "is": {
+    "n": 0,
+    "ic": null,
+    "t": null
+   },
+   "oos": {
+    "n": 701,
+    "ic": -0.0173,
+    "t": -2.052
+   },
+   "by_year": {
+    "2024": {
+     "n": 257,
+     "ic": 0.00835,
+     "t": 0.582
+    },
+    "2025": {
+     "n": 290,
+     "ic": -0.02131,
+     "t": -1.654
+    },
+    "2026": {
+     "n": 154,
+     "ic": -0.05255,
+     "t": -3.037
+    }
+   },
+   "horizon": 5,
+   "lag": 1,
+   "min_valid": 10
+  }
+ },
+ "grids": [],
+ "summary": {},
+ "placebo": {
+  "chg20:2:prior": {
+   "overall": {
+    "n": 191,
+    "win_rate": 50.26,
+    "mean_gross_R": 0.05228,
+    "mean_cost_R": 0.01415,
+    "mean_net_R": 0.03813,
+    "sum_net_R": 7.3,
+    "profit_factor": 1.101
+   },
+   "by_year": {
+    "2024": {
+     "n": 81,
+     "win_rate": 58.02,
+     "mean_gross_R": 0.03702,
+     "mean_cost_R": 0.01358,
+     "mean_net_R": 0.02344,
+     "sum_net_R": 1.9,
+     "profit_factor": 1.066
+    },
+    "2025": {
+     "n": 74,
+     "win_rate": 44.59,
+     "mean_gross_R": -0.01983,
+     "mean_cost_R": 0.01466,
+     "mean_net_R": -0.03449,
+     "sum_net_R": -2.6,
+     "profit_factor": 0.914
+    },
+    "2026": {
+     "n": 36,
+     "win_rate": 44.44,
+     "mean_gross_R": 0.23484,
+     "mean_cost_R": 0.01441,
+     "mean_net_R": 0.22043,
+     "sum_net_R": 7.9,
+     "profit_factor": 1.566
+    }
+   },
+   "mode": "prior",
+   "sign": -1,
+   "rebalance_n": 21,
+   "rand_ge_actual_pct": 28.3,
+   "n_perm": 60
+  },
+  "chg5:2:prior": {
+   "overall": {
+    "n": 954,
+    "win_rate": 45.81,
+    "mean_gross_R": -0.00708,
+    "mean_cost_R": 0.01388,
+    "mean_net_R": -0.02096,
+    "sum_net_R": -20.0,
+    "profit_factor": 0.91
+   },
+   "by_year": {
+    "2024": {
+     "n": 369,
+     "win_rate": 45.26,
+     "mean_gross_R": -0.0439,
+     "mean_cost_R": 0.01321,
+     "mean_net_R": -0.05711,
+     "sum_net_R": -21.1,
+     "profit_factor": 0.763
+    },
+    "2025": {
+     "n": 376,
+     "win_rate": 43.88,
+     "mean_gross_R": -0.02518,
+     "mean_cost_R": 0.01576,
+     "mean_net_R": -0.04094,
+     "sum_net_R": -15.4,
+     "profit_factor": 0.832
+    },
+    "2026": {
+     "n": 209,
+     "win_rate": 50.24,
+     "mean_gross_R": 0.09048,
+     "mean_cost_R": 0.01169,
+     "mean_net_R": 0.07879,
+     "sum_net_R": 16.5,
+     "profit_factor": 1.401
+    }
+   },
+   "mode": "prior",
+   "sign": -1,
+   "rebalance_n": 5,
+   "rand_ge_actual_pct": 51.7,
+   "n_perm": 60
+  }
+ }
+}

@@ -1,0 +1,328 @@
+{
+ "meta": {
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "pair_set": "ext",
+  "n_pairs": 13,
+  "window": 60,
+  "entry_z": 2.0,
+  "exit_z": 0.5,
+  "amount_rule": "归一收益率 (pnl−cost)/entry_px；固定名义本金、简单加总、无复利",
+  "calendar_rule": "完整交易日历，无成交日填 0；Sharpe 用日度序列年化 √252",
+  "caveat": "多对并行持仓的等名义本金假设见 §11；CAGR 由日历跨度与总收益推算，简单加总口径下仅供参考，不等同真实复利资金曲线",
+  "n_windows": 23
+ },
+ "baseline": {
+  "n": 195,
+  "win_rate": 59.49,
+  "mean_gross_R": 0.20464,
+  "mean_cost_R": 0.01457,
+  "mean_net_R": 0.19007,
+  "sum_net_R": 37.1,
+  "profit_factor": 1.734
+ },
+ "equity_return": {
+  "n_trades": 195,
+  "n_calendar_days": 1602,
+  "n_active_days": 92,
+  "exposure_pct": 5.74,
+  "total_return": 1.89933,
+  "cagr": 0.20077,
+  "sharpe_daily": 1.779,
+  "mdd": 0.21941,
+  "calmar": 8.656,
+  "win_day_pct": 84.78,
+  "span_years": 5.82,
+  "curve_head": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "curve_tail": [
+   1.89933,
+   1.89933,
+   1.89933,
+   1.89933,
+   1.89933
+  ]
+ },
+ "equity_R": {
+  "n_trades": 195,
+  "n_calendar_days": 1602,
+  "n_active_days": 92,
+  "exposure_pct": 5.74,
+  "total_return": 37.06458,
+  "cagr": 0.86923,
+  "sharpe_daily": 2.382,
+  "mdd": 1.09144,
+  "calmar": 33.959,
+  "win_day_pct": 85.87,
+  "span_years": 5.82,
+  "curve_head": [
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  "curve_tail": [
+   37.06458,
+   37.06458,
+   37.06458,
+   37.06458,
+   37.06458
+  ]
+ },
+ "by_year": {
+  "2022": {
+   "n": 4,
+   "mean_net_R": 0.08043,
+   "PF": 1.322,
+   "total_return": 0.03731,
+   "mdd": 0.0,
+   "sharpe_daily": 1.034,
+   "exposure_pct": 0.7
+  },
+  "2023": {
+   "n": 50,
+   "mean_net_R": 0.20446,
+   "PF": 1.725,
+   "total_return": 0.48245,
+   "mdd": 0.02715,
+   "sharpe_daily": 2.738,
+   "exposure_pct": 8.36
+  },
+  "2024": {
+   "n": 54,
+   "mean_net_R": 0.15779,
+   "PF": 1.679,
+   "total_return": 0.4221,
+   "mdd": 0.03887,
+   "sharpe_daily": 3.506,
+   "exposure_pct": 8.71
+  },
+  "2025": {
+   "n": 59,
+   "mean_net_R": 0.22603,
+   "PF": 2.001,
+   "total_return": 0.66839,
+   "mdd": 0.04453,
+   "sharpe_daily": 2.897,
+   "exposure_pct": 9.66
+  },
+  "2026": {
+   "n": 28,
+   "mean_net_R": 0.16655,
+   "PF": 1.488,
+   "total_return": 0.28909,
+   "mdd": 0.21941,
+   "sharpe_daily": 1.182,
+   "exposure_pct": 7.88
+  }
+ },
+ "per_pair": [
+  {
+   "pair": "AU-AG",
+   "n": 12,
+   "mean_net_R": 0.41693,
+   "sum_net_R": 5.0,
+   "sum_net_return": 0.19511,
+   "PF": 11.879,
+   "sign_consistent": true
+  },
+  {
+   "pair": "C-CS",
+   "n": 18,
+   "mean_net_R": 0.11544,
+   "sum_net_R": 2.08,
+   "sum_net_return": 0.10519,
+   "PF": 1.37,
+   "sign_consistent": true
+  },
+  {
+   "pair": "CU-ZN",
+   "n": 18,
+   "mean_net_R": 0.21939,
+   "sum_net_R": 3.95,
+   "sum_net_return": 0.13853,
+   "PF": 1.494,
+   "sign_consistent": true
+  },
+  {
+   "pair": "FG-SA",
+   "n": 14,
+   "mean_net_R": 0.06535,
+   "sum_net_R": 0.91,
+   "sum_net_return": 0.03768,
+   "PF": 1.249,
+   "sign_consistent": true
+  },
+  {
+   "pair": "FU-SC",
+   "n": 15,
+   "mean_net_R": 0.12719,
+   "sum_net_R": 1.91,
+   "sum_net_return": 0.06213,
+   "PF": 1.494,
+   "sign_consistent": true
+  },
+  {
+   "pair": "J-JM",
+   "n": 12,
+   "mean_net_R": 0.15581,
+   "sum_net_R": 1.87,
+   "sum_net_return": 0.29597,
+   "PF": 1.458,
+   "sign_consistent": true
+  },
+  {
+   "pair": "M-RM",
+   "n": 18,
+   "mean_net_R": 0.24937,
+   "sum_net_R": 4.49,
+   "sum_net_return": 0.24413,
+   "PF": 2.715,
+   "sign_consistent": true
+  },
+  {
+   "pair": "NI-SS",
+   "n": 24,
+   "mean_net_R": 0.32845,
+   "sum_net_R": 7.88,
+   "sum_net_return": 0.30349,
+   "PF": 1.989,
+   "sign_consistent": true
+  },
+  {
+   "pair": "PP-L",
+   "n": 2,
+   "mean_net_R": -0.12171,
+   "sum_net_R": -0.24,
+   "sum_net_return": -0.00068,
+   "PF": 0.788,
+   "sign_consistent": true
+  },
+  {
+   "pair": "RB-HC",
+   "n": 14,
+   "mean_net_R": 0.02958,
+   "sum_net_R": 0.41,
+   "sum_net_return": -0.02499,
+   "PF": 1.078,
+   "sign_consistent": false
+  },
+  {
+   "pair": "SF-SM",
+   "n": 20,
+   "mean_net_R": 0.1092,
+   "sum_net_R": 2.18,
+   "sum_net_return": 0.14021,
+   "PF": 1.743,
+   "sign_consistent": true
+  },
+  {
+   "pair": "TA-MA",
+   "n": 14,
+   "mean_net_R": 0.35806,
+   "sum_net_R": 5.01,
+   "sum_net_return": 0.26257,
+   "PF": 3.455,
+   "sign_consistent": true
+  },
+  {
+   "pair": "Y-P",
+   "n": 14,
+   "mean_net_R": 0.1145,
+   "sum_net_R": 1.6,
+   "sum_net_return": 0.13998,
+   "PF": 1.576,
+   "sign_consistent": true
+  }
+ ],
+ "n_sign_inconsistent_pairs": 1,
+ "cost_stress_equity": {
+  "1.0": {
+   "n_trades": 195,
+   "n_calendar_days": 1602,
+   "n_active_days": 92,
+   "exposure_pct": 5.74,
+   "total_return": 1.89933,
+   "cagr": 0.20077,
+   "sharpe_daily": 1.779,
+   "mdd": 0.21941,
+   "calmar": 8.656,
+   "win_day_pct": 84.78,
+   "span_years": 5.82,
+   "curve_head": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "curve_tail": [
+    1.89933,
+    1.89933,
+    1.89933,
+    1.89933,
+    1.89933
+   ]
+  },
+  "2.0": {
+   "n_trades": 195,
+   "n_calendar_days": 1602,
+   "n_active_days": 92,
+   "exposure_pct": 5.74,
+   "total_return": 1.75184,
+   "cagr": 0.19004,
+   "sharpe_daily": 1.672,
+   "mdd": 0.22312,
+   "calmar": 7.852,
+   "win_day_pct": 83.7,
+   "span_years": 5.82,
+   "curve_head": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "curve_tail": [
+    1.75184,
+    1.75184,
+    1.75184,
+    1.75184,
+    1.75184
+   ]
+  },
+  "3.0": {
+   "n_trades": 195,
+   "n_calendar_days": 1602,
+   "n_active_days": 92,
+   "exposure_pct": 5.74,
+   "total_return": 1.60434,
+   "cagr": 0.17883,
+   "sharpe_daily": 1.559,
+   "mdd": 0.22682,
+   "calmar": 7.073,
+   "win_day_pct": 82.61,
+   "span_years": 5.82,
+   "curve_head": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "curve_tail": [
+    1.60434,
+    1.60434,
+    1.60434,
+    1.60434,
+    1.60434
+   ]
+  }
+ }
+}
