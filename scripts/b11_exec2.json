@@ -1,0 +1,496 @@
+{
+ "meta": {
+  "generated_at": "2026-11-02T23:33:48",
+  "start": "2021-01-01",
+  "end": "2026-10-30",
+  "frac": 0.02,
+  "e0": 1000000.0,
+  "price_eps": 1e-06
+ },
+ "limit": {
+  "n_trades": 190,
+  "n_block_entry": 0,
+  "n_block_any": 0,
+  "n_no_rule": 0,
+  "blocked_net_R": 0,
+  "baseline": {
+   "n_trades": 190,
+   "nav": 1.815624,
+   "mdd": 0.135065,
+   "net_R": 38.5968
+  },
+  "after_drop": {
+   "n_trades": 190,
+   "nav": 1.815624,
+   "mdd": 0.135065,
+   "net_R": 38.5968
+  },
+  "after_defer": {
+   "n_trades": 190,
+   "nav": 1.815624,
+   "mdd": 0.135065,
+   "net_R": 38.5968
+  },
+  "n_defer_failed": 0,
+  "detail": [],
+  "n_one_word_legs": 0,
+  "n_rule_violated_legs": 5,
+  "note": "5/380 条腿出现 |开盘位移|>涨跌幅，说明 futures_rule.price_limit 在剧烈行情日**低估**（如 FU 2026-03-10 记 7% 而实际开盘 +8.43%、次日才上调到 20%）；本库无合约级价格、无逐日准确的涨跌幅，故涨跌停只能给**下界**：一字板腿数即硬阻断数。",
+  "closest_to_board": [
+   {
+    "ratio": 1.6672,
+    "symbol": "TA888",
+    "move_pct": 10.003,
+    "limit_pct": 6.0,
+    "leg": "2026-03-10"
+   },
+   {
+    "ratio": 1.4567,
+    "symbol": "FG888",
+    "move_pct": -11.654,
+    "limit_pct": 8.0,
+    "leg": "2023-08-14"
+   },
+   {
+    "ratio": 1.2849,
+    "symbol": "JM888",
+    "move_pct": 10.279,
+    "limit_pct": 8.0,
+    "leg": "2025-12-05"
+   },
+   {
+    "ratio": 1.2042,
+    "symbol": "FU888",
+    "move_pct": 8.429,
+    "limit_pct": 7.0,
+    "leg": "2026-03-10"
+   },
+   {
+    "ratio": 1.127,
+    "symbol": "SC888",
+    "move_pct": 7.889,
+    "limit_pct": 7.0,
+    "leg": "2026-03-10"
+   },
+   {
+    "ratio": 0.908,
+    "symbol": "P888",
+    "move_pct": -6.356,
+    "limit_pct": 7.0,
+    "leg": "2023-04-18"
+   },
+   {
+    "ratio": 0.7284,
+    "symbol": "SM888",
+    "move_pct": -5.827,
+    "limit_pct": 8.0,
+    "leg": "2025-07-28"
+   },
+   {
+    "ratio": 0.7045,
+    "symbol": "SF888",
+    "move_pct": 4.931,
+    "limit_pct": 7.0,
+    "leg": "2025-07-30"
+   }
+  ],
+  "n_legs": 380,
+  "n_close_at_limit_legs": 0,
+  "max_ratio": 1.6672
+ },
+ "margin": {
+  "dim_vs_cfg": {
+   "n": 59,
+   "dim_over_exchange_median": 1.0,
+   "broker_over_dim_median": 1.455,
+   "detail": [
+    {
+     "variety": "B",
+     "dim_long": 0.13,
+     "cfg_exchange": 0.07,
+     "cfg_broker": 0.12,
+     "dim_over_exchange": 1.857,
+     "broker_over_dim": 0.923
+    },
+    {
+     "variety": "CS",
+     "dim_long": 0.13,
+     "cfg_exchange": 0.06,
+     "cfg_broker": 0.11,
+     "dim_over_exchange": 2.167,
+     "broker_over_dim": 0.846
+    },
+    {
+     "variety": "BU",
+     "dim_long": 0.14,
+     "cfg_exchange": 0.14,
+     "cfg_broker": 0.2,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.429
+    },
+    {
+     "variety": "C",
+     "dim_long": 0.07,
+     "cfg_exchange": 0.07,
+     "cfg_broker": 0.12,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.714
+    },
+    {
+     "variety": "HC",
+     "dim_long": 0.09,
+     "cfg_exchange": 0.09,
+     "cfg_broker": 0.14,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.556
+    },
+    {
+     "variety": "OI",
+     "dim_long": 0.09,
+     "cfg_exchange": 0.09,
+     "cfg_broker": 0.15,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.667
+    },
+    {
+     "variety": "PS",
+     "dim_long": 0.15,
+     "cfg_exchange": 0.15,
+     "cfg_broker": 0.21,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.4
+    },
+    {
+     "variety": "RU",
+     "dim_long": 0.11,
+     "cfg_exchange": 0.11,
+     "cfg_broker": 0.17,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.545
+    },
+    {
+     "variety": "SA",
+     "dim_long": 0.12,
+     "cfg_exchange": 0.12,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.5
+    },
+    {
+     "variety": "SF",
+     "dim_long": 0.08,
+     "cfg_exchange": 0.08,
+     "cfg_broker": 0.13,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.625
+    },
+    {
+     "variety": "SI",
+     "dim_long": 0.1,
+     "cfg_exchange": 0.1,
+     "cfg_broker": 0.15,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.5
+    },
+    {
+     "variety": "SM",
+     "dim_long": 0.08,
+     "cfg_exchange": 0.08,
+     "cfg_broker": 0.13,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.625
+    },
+    {
+     "variety": "SN",
+     "dim_long": 0.14,
+     "cfg_exchange": 0.14,
+     "cfg_broker": 0.2,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.429
+    },
+    {
+     "variety": "SP",
+     "dim_long": 0.09,
+     "cfg_exchange": 0.09,
+     "cfg_broker": 0.14,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.556
+    },
+    {
+     "variety": "SR",
+     "dim_long": 0.06,
+     "cfg_exchange": 0.06,
+     "cfg_broker": 0.11,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.833
+    },
+    {
+     "variety": "SS",
+     "dim_long": 0.1,
+     "cfg_exchange": 0.1,
+     "cfg_broker": 0.16,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.6
+    },
+    {
+     "variety": "ZN",
+     "dim_long": 0.12,
+     "cfg_exchange": 0.12,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.5
+    },
+    {
+     "variety": "CJ",
+     "dim_long": 0.09,
+     "cfg_exchange": 0.09,
+     "cfg_broker": 0.14,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.556
+    },
+    {
+     "variety": "SC",
+     "dim_long": 0.22,
+     "cfg_exchange": 0.22,
+     "cfg_broker": 0.28,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.273
+    },
+    {
+     "variety": "EC",
+     "dim_long": 0.22,
+     "cfg_exchange": 0.22,
+     "cfg_broker": 0.32,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.455
+    },
+    {
+     "variety": "BR",
+     "dim_long": 0.14,
+     "cfg_exchange": 0.14,
+     "cfg_broker": 0.2,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.429
+    },
+    {
+     "variety": "PB",
+     "dim_long": 0.12,
+     "cfg_exchange": 0.12,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.5
+    },
+    {
+     "variety": "PP",
+     "dim_long": 0.11,
+     "cfg_exchange": 0.11,
+     "cfg_broker": 0.16,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.455
+    },
+    {
+     "variety": "RB",
+     "dim_long": 0.09,
+     "cfg_exchange": 0.09,
+     "cfg_broker": 0.14,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.556
+    },
+    {
+     "variety": "RM",
+     "dim_long": 0.07,
+     "cfg_exchange": 0.07,
+     "cfg_broker": 0.13,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.857
+    },
+    {
+     "variety": "CF",
+     "dim_long": 0.07,
+     "cfg_exchange": 0.07,
+     "cfg_broker": 0.12,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.714
+    },
+    {
+     "variety": "AP",
+     "dim_long": 0.15,
+     "cfg_exchange": 0.15,
+     "cfg_broker": 0.2,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.333
+    },
+    {
+     "variety": "A",
+     "dim_long": 0.07,
+     "cfg_exchange": 0.07,
+     "cfg_broker": 0.12,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.714
+    },
+    {
+     "variety": "AG",
+     "dim_long": 0.22,
+     "cfg_exchange": 0.22,
+     "cfg_broker": 0.28,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.273
+    },
+    {
+     "variety": "AL",
+     "dim_long": 0.12,
+     "cfg_exchange": 0.12,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.5
+    },
+    {
+     "variety": "AU",
+     "dim_long": 0.19,
+     "cfg_exchange": 0.19,
+     "cfg_broker": 0.25,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.316
+    },
+    {
+     "variety": "CU",
+     "dim_long": 0.12,
+     "cfg_exchange": 0.12,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.5
+    },
+    {
+     "variety": "EB",
+     "dim_long": 0.13,
+     "cfg_exchange": 0.13,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.385
+    },
+    {
+     "variety": "EG",
+     "dim_long": 0.13,
+     "cfg_exchange": 0.13,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.385
+    },
+    {
+     "variety": "FU",
+     "dim_long": 0.22,
+     "cfg_exchange": 0.22,
+     "cfg_broker": 0.28,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.273
+    },
+    {
+     "variety": "I",
+     "dim_long": 0.11,
+     "cfg_exchange": 0.11,
+     "cfg_broker": 0.17,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.545
+    },
+    {
+     "variety": "J",
+     "dim_long": 0.2,
+     "cfg_exchange": 0.2,
+     "cfg_broker": 0.25,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.25
+    },
+    {
+     "variety": "JD",
+     "dim_long": 0.07,
+     "cfg_exchange": 0.07,
+     "cfg_broker": 0.12,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.714
+    },
+    {
+     "variety": "JM",
+     "dim_long": 0.13,
+     "cfg_exchange": 0.13,
+     "cfg_broker": 0.18,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.385
+    },
+    {
+     "variety": "L",
+     "dim_long": 0.11,
+     "cfg_exchange": 0.11,
+     "cfg_broker": 0.16,
+     "dim_over_exchange": 1.0,
+     "broker_over_dim": 1.455
+    }
+   ]
+  },
+  "runs": {
+   "dim|disc=1.0": {
+    "nav": 1.815624,
+    "mdd": 0.135065,
+    "margin_util_max": 0.4783,
+    "n_breach": 0,
+    "n_skipped": 0
+   },
+   "dim|disc=0.8": {
+    "nav": 1.815624,
+    "mdd": 0.135065,
+    "margin_util_max": 0.3827,
+    "n_breach": 0,
+    "n_skipped": 0
+   },
+   "dim|disc=0.6": {
+    "nav": 1.815624,
+    "mdd": 0.135065,
+    "margin_util_max": 0.287,
+    "n_breach": 0,
+    "n_skipped": 0
+   },
+   "cfg_exchange|disc=1.0": {
+    "nav": 1.788908,
+    "mdd": 0.136991,
+    "margin_util_max": 0.4682,
+    "n_breach": 1,
+    "n_skipped": 1
+   },
+   "cfg_exchange|disc=0.8": {
+    "nav": 1.815624,
+    "mdd": 0.135065,
+    "margin_util_max": 0.4095,
+    "n_breach": 0,
+    "n_skipped": 0
+   },
+   "cfg_exchange|disc=0.6": {
+    "nav": 1.815624,
+    "mdd": 0.135065,
+    "margin_util_max": 0.3071,
+    "n_breach": 0,
+    "n_skipped": 0
+   },
+   "cfg_broker|disc=1.0": {
+    "nav": 1.752389,
+    "mdd": 0.138657,
+    "margin_util_max": 0.4924,
+    "n_breach": 11,
+    "n_skipped": 11
+   },
+   "cfg_broker|disc=0.8": {
+    "nav": 1.821309,
+    "mdd": 0.134879,
+    "margin_util_max": 0.4861,
+    "n_breach": 5,
+    "n_skipped": 5
+   },
+   "cfg_broker|disc=0.6": {
+    "nav": 1.815624,
+    "mdd": 0.135065,
+    "margin_util_max": 0.4405,
+    "n_breach": 0,
+    "n_skipped": 0
+   }
+  },
+  "note": "组合保证金（单向大边）官方规则未入库；disc=0.8/0.6 为**假设**敏感性，仅改变保证金占用判定，不改变手数。dim 源未传 rate_fn。"
+ }
+}
