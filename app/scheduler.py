@@ -2442,6 +2442,8 @@ def _minute_and_bars_job() -> None:
     """
     logger.info("[scheduler] minute_and_bars start")
     try:
+        from app.core.config import get_settings
+        mode = get_settings().ingest.bar_synth_mode
         with session_scope() as s:
             from app.ingest.minute_collector import MinuteCollector
             from app.ingest.synthesizer import minute_pipeline_lock
@@ -2458,8 +2460,22 @@ def _minute_and_bars_job() -> None:
                 # 2026-10-14：存储过程也纳入 ops.scheduled_task 字典控制与流水记录
                 # （用户要求"存储过程也需要"）。字典禁用则跳过 CALL 并显式记日志。
                 from app.ops.task_registry import record_execution, sp_enabled
+                from app.ingest.synthesizer import (
+                    purge_recent_buckets, synthesize_bars_incremental)
 
-                if not sp_enabled("sp_build_l1_from_minute"):
+                # ★ 2026-11-03 口径回归修复（docs/V2样本外崩塌排查.md §36）：
+                #   10-09 起本作业改成 CALL sp_build_l1_from_minute，而该 SP 用
+                #   time_bucket 以**自然整点**切桶（09:00/10:00/11:00/13:00…），
+                #   与回测/盘面使用的会话网格（10:00/11:15/14:15/15:00）不一致；
+                #   synthesizer 里已修好的 dedup 与网格定义（4bce7fd，11-01）
+                #   因此从未被调用 —— 修在了死代码上。
+                #   现改回 Python 增量合成：先 purge 最近 N 天旧桶（纯 upsert 不会
+                #   删掉另一套网格的旧桶，否则两套并存、一天 15 根），再重算。
+                #   回滚开关：config 里 ingest.bar_synth_mode="sp"。
+                if mode == "python":
+                    purge_recent_buckets(s, days_back=4)
+                    synth_stats = synthesize_bars_incremental(s, days_back=3)
+                elif not sp_enabled("sp_build_l1_from_minute"):
                     logger.warning(
                         "[scheduler] sp_build_l1_from_minute 被字典禁用"
                         "（ops.scheduled_task.enabled=false），跳过 L1 聚合"

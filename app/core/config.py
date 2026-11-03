@@ -84,6 +84,12 @@ class MainContractSpec(BaseModel):
 class IngestConfig(BaseModel):
     history_start: str = "2015-01-01"
     main_contracts: list[MainContractSpec] = Field(default_factory=list)
+    #: ``bar_*`` 的合成口径（2026-11-03 新增，见 docs §36）。
+    #: - "python"（默认）= ``synthesizer.synthesize_bars_incremental``，**会话网格**
+    #:   （日盘 10:00/11:15/14:15/15:00、夜盘 22:00/23:00），与回测/盘面一致；
+    #: - "sp" = 旧的 ``CALL sp_build_l1_from_minute``，内部用 ``time_bucket`` 自然整点
+    #:   （09:00/10:00/11:00/13:00…），会与回测口径冲突。**仅作回滚开关，勿长期使用**。
+    bar_synth_mode: str = "python"
 
 
 class CalibrationConfig(BaseModel):

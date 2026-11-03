@@ -423,6 +423,32 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
     })
 
 
+def purge_recent_buckets(session: Session, days_back: int = 4) -> dict[str, int]:
+    """删除「最近 days_back 天」的全部桶，供切换合成口径后清除旧网格残留。
+
+    背景（2026-11-03，见 docs/V2样本外崩塌排查.md §36）
+    -----------------------------------------------
+    ``synthesize_bars_incremental`` 是**纯 upsert**（ON CONFLICT DO UPDATE），不删任何行。
+    若库里已存在另一套网格的桶（例如存储过程用 ``time_bucket`` 写入的 09:00/11:00/13:00），
+    单纯 upsert 只会**新增**会话网格的桶，两套网格并存（一天 9+6=15 根），
+    下游按时间排序会把同一段行情数两遍。
+
+    故换口径时必须先删后写，且**删除范围 ⊆ 重建范围**（否则删了不补 = 丢数据）。
+    调用方应传 ``days_back >= synthesize_bars_incremental 的 days_back + 1``
+    （后者内部 ``since_session = now - (days_back+1) 天``）。
+
+    安全边界：本函数只 DELETE **不提交**，由调用方与随后的 upsert 在同一事务提交；
+    upsert 抛错则整体回滚，旧数据原样保留。
+    """
+    cutoff = datetime.now(_SH_TZ) - timedelta(days=days_back)
+    out: dict[str, int] = {}
+    for t, _ in _BARS:
+        r = session.execute(text(f"DELETE FROM {t} WHERE bucket >= :c"), {"c": cutoff})
+        out[t] = r.rowcount
+    logger.info(f"[synth] purge 最近 {days_back} 天旧桶（换口径前置）: {out}")
+    return out
+
+
 def synthesize_bars_incremental(session: Session, days_back: int = 3,
                                 max_retries: int = 2) -> dict:
     """增量重算最近 days_back 天的桶（覆盖在途桶），成本极低。返回各表影响行数。
