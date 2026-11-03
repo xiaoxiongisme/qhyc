@@ -745,7 +745,33 @@ def _f(v) -> float | None:
 # 数据读取：从 hourly_bar 取最近 N 根小时线
 # -----------------------------------------------------
 def _read_src(session, symbol: str, limit: int, src: str) -> pd.DataFrame | None:
-    """按单一 src 读取某品种小时线，返回按时间升序的 DataFrame。"""
+    """按单一 src 读取某品种小时线，返回按时间升序的 DataFrame。
+
+    src 语义（2026-11-03 对齐说明，见 docs §35）：
+      - ``"bar_60m"`` —— ``l1_mkt.bar_60m``，由 ``minute_bar`` 合成的**会话网格**，
+        **与回测 ``fusion_params_from_config(src="bar_60m")`` 完全同源**，且只含已收盘K。
+        选它即获得「回测=实盘」的单一真源，代价是继承 minute_bar 的 2026-06-15~09-03 缺口。
+      - ``"akshare"`` / ``"csv"`` —— ``l0_raw.hourly_bar``，采集器直写。网格形态同为会话网格
+        （10:00/11:15/14:15/15:00/22:00/23:00），但**额外混入** 09:30 / 10:45 / 13:45 / 14:45
+        等非网格点（集中在 AG/AU/SC 三品种），且**含正在形成的未收盘K**（靠
+        :func:`drop_forming_bars` 事后剔除）。实测与 bar_60m 逐 bar 四值全等率仅 54%。
+    """
+    if src == "bar_60m":
+        rows = session.execute(
+            text(
+                "SELECT bucket, open, high, low, close FROM l1_mkt.bar_60m "
+                "WHERE symbol = :sym ORDER BY bucket DESC LIMIT :n"
+            ),
+            {"sym": symbol, "n": int(limit)},
+        ).all()
+        rows = list(reversed(rows))
+        if not rows:
+            return None
+        df = pd.DataFrame(rows, columns=["dt", "open", "high", "low", "close"])
+        for col in ("open", "high", "low", "close"):
+            df[col] = df[col].astype(float)
+        return df
+
     rows = (
         session.execute(
             select(
@@ -779,7 +805,12 @@ def read_hourly_bars(session, symbol: str, limit: int) -> pd.DataFrame | None:
     不同的 K 同时喂进 EMA/ATR，导致周期参数被砍半、信号与回测/图表口径不一致
     （实测 09-14 单日读进 11 根 K，而真实只有 6 根）。
 
-    口径由 fusion.hourly_src 控制（默认 akshare，即 akshare 新浪主连分时 futures_zh_minute_sina，对应图表「收盘时刻」标签的 K）。
+    口径由 ``fusion.hourly_src`` 控制，可取三值：
+      - ``"akshare"``（历史默认）—— l0_raw.hourly_bar 的 akshare 源，与盘面「收盘时刻」标签一致；
+      - ``"csv"`` —— l0_raw.hourly_bar 的历史 CSV 源（起点标签，**不可与 akshare 混用**）；
+      - ``"bar_60m"``（推荐，2026-11-03 起可选）—— l1_mkt.bar_60m，与**回测同源**，
+        网格纯净且只含已收盘K；代价是继承 minute_bar 的 2026-06-15~09-03 缺口。
+        切到它之前先跑 ``scripts/verify_fusion_source.py`` 对账（会给出逐品种仓位差异）。
     仅当主源根数不足 min_bars（数据源故障期）才回退到另一源，并在日志告警——
     正常生产应恒为单源；故障期混用是无奈兜底，非预期状态。
     """

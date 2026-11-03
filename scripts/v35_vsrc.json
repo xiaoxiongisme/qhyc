@@ -1,0 +1,1165 @@
+{
+ "meta": {
+  "sources": [
+   "akshare",
+   "bar_60m"
+  ],
+  "n_symbols": 50,
+  "max_bars": 800,
+  "min_bars": 160,
+  "settle_delay_sec": 150
+ },
+ "n_state_diff": 6,
+ "rows": [
+  {
+   "symbol": "A888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 5263.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 5263.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": true,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "AG888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 09:30:00+08:00",
+   "base_close": 12052.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 02:00:00+08:00",
+     "close": 12156.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "AL888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 23275.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 23275.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "AO888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 2647.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 2647.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "AP888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 5757.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 5757.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "AU888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 09:30:00+08:00",
+   "base_close": 850.52,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 02:00:00+08:00",
+     "close": 849.16,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "B888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 3974.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 3974.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": true,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "BU888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 4989.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 4989.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "C888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 2235.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 2235.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "CF888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 15170.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 15170.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "CS888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 2504.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 2504.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "CU888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 108370.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 108370.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "EB888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 10006.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 10006.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "EG888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 5206.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 5206.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "FG888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 876.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 876.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "FU888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 5050.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 5050.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "HC888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 3167.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 3167.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "I888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 675.5,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 675.5,
+     "entry_px": 673.5,
+     "entry_atr": 5.214,
+     "cur_stop": 682.4281,
+     "lots": 1,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "J888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 1865.5,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 1865.5,
+     "entry_px": 1870.75,
+     "entry_atr": 20.5428,
+     "cur_stop": 1870.75,
+     "lots": 2,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "JD888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 3564.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 3564.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "JM888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 1396.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 1396.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "L888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 9332.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 9332.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "LC888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 90700.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 90740.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "LH888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 9500.0,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 9500.0,
+     "entry_px": 9702.5,
+     "entry_atr": 148.99,
+     "cur_stop": 9702.5,
+     "lots": 2,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "M888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 3179.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 3179.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "MA888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 3421.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 3421.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "NI888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 117330.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 117330.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "OI888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 10174.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 10174.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "P888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 9270.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 9270.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "PB888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 15950.0,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 15950.0,
+     "entry_px": 16002.5,
+     "entry_atr": 64.6793,
+     "cur_stop": 16002.5,
+     "lots": 2,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "PP888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 10155.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 10155.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "PX888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 9154.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 9154.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "RB888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 3017.0,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 3017.0,
+     "entry_px": 3031.5,
+     "entry_atr": 12.37,
+     "cur_stop": 3031.5,
+     "lots": 2,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "RM888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 2204.0,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 2204.0,
+     "entry_px": 2210.0,
+     "entry_atr": 12.4524,
+     "cur_stop": 2210.0,
+     "lots": 2,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "RU888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 19255.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 19255.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": true,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SA888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 967.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 967.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SC888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 09:30:00+08:00",
+   "base_close": 686.8,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 02:00:00+08:00",
+     "close": 681.1,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SF888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 5826.0,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 5826.0,
+     "entry_px": 5836.0,
+     "entry_atr": 37.4584,
+     "cur_stop": 5892.9169,
+     "lots": 1,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SH888",
+   "base_state": 2,
+   "base_pos": "SHORT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 1494.0,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 1494.0,
+     "entry_px": 1496.0,
+     "entry_atr": 22.5065,
+     "cur_stop": 1496.0,
+     "lots": 1,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SI888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 8590.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 8585.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SM888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 5854.0,
+   "sources": {
+    "bar_60m": {
+     "state": 2,
+     "pos": "SHORT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 5854.0,
+     "entry_px": 5840.0,
+     "entry_atr": 30.3255,
+     "cur_stop": 5900.6509,
+     "lots": 1,
+     "state_diff": true,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SN888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 368680.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 368680.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SP888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 4568.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 4568.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SR888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 5226.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 5226.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "SS888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 13875.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 13875.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "TA888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 6422.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 6422.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "UR888",
+   "base_state": 1,
+   "base_pos": "LONG",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 15:00:00+08:00",
+   "base_close": 1738.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 15:00:00+08:00",
+     "close": 1738.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": true,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "V888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 5170.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 5170.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "Y888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-02 23:00:00+08:00",
+   "base_close": 8984.0,
+   "sources": {
+    "bar_60m": {
+     "state": 0,
+     "pos": "FLAT",
+     "bars": 800,
+     "dt": "2026-11-02 23:00:00+08:00",
+     "close": 8984.0,
+     "entry_px": null,
+     "entry_atr": null,
+     "cur_stop": null,
+     "lots": 0,
+     "state_diff": false,
+     "bars_diff": false
+    }
+   }
+  },
+  {
+   "symbol": "ZN888",
+   "base_state": 0,
+   "base_pos": "FLAT",
+   "base_bars": 800,
+   "base_dt": "2026-11-03 01:00:00+08:00",
+   "base_close": 25885.0,
+   "sources": {
+    "bar_60m": {
+     "state": 1,
+     "pos": "LONG",
+     "bars": 800,
+     "dt": "2026-11-03 01:00:00+08:00",
+     "close": 25885.0,
+     "entry_px": 25895.0,
+     "entry_atr": 119.0834,
+     "cur_stop": 25656.8332,
+     "lots": 1,
+     "state_diff": true,
+     "bars_diff": false
+    }
+   }
+  }
+ ]
+}
