@@ -10,6 +10,9 @@
 * ``check_bar_grid_consistency.py`` —— 增量合成（synthesizer._SESSION_DAY_BOUNDS）
   与全量重建（rebuild_bars_session.DAY_BOUNDS）两侧的网格定义必须逐位相同；
   否则下一次增量又会把修好的 5m/15m 改回 13:30/10:30，两边无限拉锯。
+* ``check_db_bar_grid.py`` —— 直接读库断言 ``bar_60m`` 的桶标签属于会话网格。
+  C1 只比代码常量、C2 的 30 天窗口看不到当天，2026-11-03 的「代码对、库错」
+  正是从这个缝里漏过去的（§36）；本守卫专补这条缝。
 * ``check_cross_tf_consistency.py`` —— 低周期 bar 两两聚合后必须精确等于高周期
   bar（30m==15m、60m==30m）。它抓到了「双源末根重复计入」那种纯看网格时刻
   发现不了的真 bug（volume 翻倍、min(low) 吃脏值、收盘价自相矛盾）。
@@ -40,6 +43,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUARD_GRID = REPO_ROOT / "scripts/validate/check_bar_grid_consistency.py"
+GUARD_DB_GRID = REPO_ROOT / "scripts/validate/check_db_bar_grid.py"
 GUARD_CROSS = REPO_ROOT / "scripts/validate/check_cross_tf_consistency.py"
 
 
@@ -89,6 +93,15 @@ def main() -> int:
     if rc != 0:
         failures.append(f"check_bar_grid_consistency 退出码={rc}\n{out}")
 
+    # ---- C4 直接读库断言 60m 桶标签（纯 SQL，最便宜的实证守卫）----
+    #  2026-11-03 事故（§36）里 C1/C2 全绿，因为 C1 比的是代码常量、C2 的 30 天窗口
+    #  还没覆盖到被写坏的当天。C4 直接看库，能当场发现「09:00/11:00 这类非法标签」。
+    rc, out = _run_guard(GUARD_DB_GRID, ["--days", "3"], env)
+    print("===== check_db_bar_grid =====")
+    print(out)
+    if rc != 0:
+        failures.append(f"check_db_bar_grid 退出码={rc}\n{out}")
+
     # ---- C2 跨周期聚合自洽（需 DB）----
     rc, out = _run_guard(GUARD_CROSS, ["--days", str(args.days)], env)
     print("===== check_cross_tf_consistency =====")
@@ -103,7 +116,7 @@ def main() -> int:
             _alert("【qhyc 每日巡检】bar 一致性守卫告警", msg[:4000])
         return 1
 
-    print("\n[OK] bar 一致性巡检全部通过：网格定义一致 + 跨周期聚合自洽")
+    print("\n[OK] bar 一致性巡检全部通过：网格定义一致 + 库内标签合法 + 跨周期聚合自洽")
     return 0
 
 
