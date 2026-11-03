@@ -423,6 +423,26 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
     })
 
 
+def _session_floor(dt: datetime) -> datetime:
+    """回退到「不晚于 dt 的最近一个会话起点」（只有 09:00 / 21:00 两类，取 09:00）。
+
+    为什么需要它（2026-11-03，docs §36.12）
+    --------------------------------------
+    ``purge`` 的删除下界原本是「now − N 天」这种任意时刻（例如 14:19）。
+    ``_synth_one`` 会按桶对齐把 **14:19 所在的整根 60m 桶删掉**，却只从 14:19
+    之后读分钟 → 该桶被写成残缺值，且**不报错**。实测 10-30 14:15 那根 60m 的
+    volume 只有正确聚合的零头（RB888 57,166 vs 124,953），由 C2 跨周期守卫抓到。
+
+    会话起点只有 09:00（日盘）与 21:00（夜盘），夜盘最晚 02:30 收；故日盘 09:00
+    必然落在两段行情之间，从 09:00 起算不会有任何块被截断。
+    """
+    local = dt.astimezone(_SH_TZ)
+    cand = datetime(local.year, local.month, local.day, 9, 0, tzinfo=_SH_TZ)
+    if cand > local:
+        cand -= timedelta(days=1)
+    return cand
+
+
 def purge_recent_buckets(session: Session, days_back: int = 4) -> dict[str, int]:
     """删除「最近 days_back 天」的全部桶，供切换合成口径后清除旧网格残留。
 
@@ -434,18 +454,23 @@ def purge_recent_buckets(session: Session, days_back: int = 4) -> dict[str, int]
     下游按时间排序会把同一段行情数两遍。
 
     故换口径时必须先删后写，且**删除范围 ⊆ 重建范围**（否则删了不补 = 丢数据）。
-    调用方应传 ``days_back >= synthesize_bars_incremental 的 days_back + 1``
-    （后者内部 ``since_session = now - (days_back+1) 天``）。
+    调用方应传 ``days_back >= synthesize_bars_incremental 的 days_back + 1``：
+    后者内部取 ``since_session = _session_floor(now − (days_back+1) 天)``，而本函数
+    取 ``_session_floor(now − days_back)``，两者相差恰好一天且都对齐到 09:00。
 
     安全边界：本函数只 DELETE **不提交**，由调用方与随后的 upsert 在同一事务提交；
     upsert 抛错则整体回滚，旧数据原样保留。
     """
     cutoff = datetime.now(_SH_TZ) - timedelta(days=days_back)
+    # 会话表必须把下界对齐到会话起点：任意时刻作下界会把「下界所在的那根桶」
+    # 一起删掉，而重建只从下界之后读分钟 → 半截桶（§36.12 实测踩过）。
+    cutoff_session = _session_floor(cutoff)
     out: dict[str, int] = {}
     for t, _ in _BARS:
-        r = session.execute(text(f"DELETE FROM {t} WHERE bucket >= :c"), {"c": cutoff})
+        c = cutoff_session if t in _SESSION_BARS else cutoff
+        r = session.execute(text(f"DELETE FROM {t} WHERE bucket >= :c"), {"c": c})
         out[t] = r.rowcount
-    logger.info(f"[synth] purge 最近 {days_back} 天旧桶（换口径前置）: {out}")
+    logger.info(f"[synth] purge 最近 {days_back} 天旧桶（换口径前置，下界 {cutoff_session:%Y-%m-%d %H:%M}）: {out}")
     return out
 
 
@@ -469,10 +494,11 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
     绝不静默返回成功——调用方与告警都能看见。
     """
     since = datetime.now(_SH_TZ) - timedelta(days=days_back)
-    # ★ 会话式切分必须向前多看 1 天：它按「连续分钟段」累计交易分钟计数，
-    #   若 since 落在段的中间，前面的分钟没参与计数 → 该段所有 bar 错位。
-    #   单个连续段最长约 6 小时（夜盘 21:00→次日 02:30），留 1 天余量足够。
-    since_session = since - timedelta(days=1)
+    # ★ 会话式切分必须向前多看 1 天，并把起点**对齐到会话起点**：它按「连续分钟段」
+    #   累计交易分钟计数，若 since 落在段的中间，前面的分钟没参与计数 → 该段所有 bar
+    #   错位；若不对齐，还会把 since 所在的整根桶写成半截（§36.12）。单个连续段最长
+    #   约 6 小时（夜盘 21:00→次日 02:30），多留 1 天余量足够。
+    since_session = _session_floor(since - timedelta(days=1))
     stats: dict[str, int] = {}
     for t, iv in _BARS:
         stats[t] = _synth_one(
@@ -512,7 +538,7 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
             break
         # 重跑：扩大窗口重算，覆盖刚被并发写入的分钟线（纯 upsert，无需先 DELETE）
         since = datetime.now(_SH_TZ) - timedelta(days=days_back)
-        since_session = since - timedelta(days=1)
+        since_session = _session_floor(since - timedelta(days=1))
         for t, iv in _BARS:
             stats[t] = _synth_one(
                 session, t, iv,
