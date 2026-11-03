@@ -2378,7 +2378,10 @@ def _minute_and_bars_job() -> None:
     logger.info("[scheduler] minute_and_bars start")
     try:
         from app.core.config import get_settings
-        mode = get_settings().ingest.bar_synth_mode
+        # 注意：IngestConfig 挂在 YamlConfig 下（Settings 只有 env/yaml 两个顶层字段），
+        # 必须走 .yaml.ingest；写成 .ingest 会在本作业首次触发时抛 AttributeError，
+        # 被外层 except 吞掉后表现为「作业静默不干活」，正是本次要根治的那类故障。
+        mode = get_settings().yaml.ingest.bar_synth_mode
         with session_scope() as s:
             from app.ingest.minute_collector import MinuteCollector
             from app.ingest.synthesizer import minute_pipeline_lock
