@@ -90,6 +90,12 @@ class IngestConfig(BaseModel):
     #: - "sp" = 旧的 ``CALL sp_build_l1_from_minute``，内部用 ``time_bucket`` 自然整点
     #:   （09:00/10:00/11:00/13:00…），会与回测口径冲突。**仅作回滚开关，勿长期使用**。
     bar_synth_mode: str = "python"
+    #: 2026-11-06 全合约采集（scripts/fetch_contract_1min.py）。
+    #: 只写 minute_bar 的 contract 层，L1 合成已加 layer 过滤，不影响主连口径。
+    collect_all_contracts: bool = True
+    contract_max_workers: int = 6
+    contract_universe_ttl_hours: float = 12.0
+    contract_request_pause_sec: float = 0.05
 
 
 class CalibrationConfig(BaseModel):

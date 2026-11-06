@@ -105,11 +105,15 @@ def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
     bounds = _SESSION_DAY_BOUNDS[step]
     day_when = " ".join(f"WHEN rel_end <= {b} THEN {b}" for b in bounds)
     day_case = f"CASE {day_when} ELSE {bounds[-1]} END"
+    # 2026-11-06：全合约采集会在 minute_bar 写入大量 layer='contract' 行。
+    # L1 四张表只应包含 888 主连，否则 670+ 合约会被合成进来（上轮审计 H1 风险）。
+    layer_filter = "layer = 'continuous'"
+    where_sql = (where + " AND " + layer_filter) if where else ("WHERE " + layer_filter)
     return (
         "WITH m AS (\n"
         "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
         "    FROM minute_bar\n"
-        f"    {where}\n"
+        f"    {where_sql}\n"
         "), norm AS (\n"
         "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
         "                        THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n\n"
@@ -401,7 +405,11 @@ def _max_bucket(session: Session, table: str) -> datetime | None:
 
 
 def _max_minute_ts(session: Session) -> datetime | None:
-    return session.execute(text("SELECT max(ts) FROM minute_bar")).scalar()
+    # 2026-11-06：全合约采集后 contract 层可能比 continuous 层更新，
+    # 若用全表 max(ts) 做「L1 是否追平」校验会永远判 lag 并触发假告警/无谓重试。
+    return session.execute(text(
+        "SELECT max(ts) FROM minute_bar WHERE layer = 'continuous'"
+    )).scalar()
 
 
 def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
@@ -409,8 +417,11 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
     """单表合成：自动在「自然整点桶」与「交易分钟会话桶」之间选择正确口径。"""
     step = _SESSION_BARS.get(t)
     if step is None:
+        # 2026-11-06：与 _session_insert_sql 同口径，只合成 continuous 层。
+        layer_where = ("WHERE ts >= :since AND layer = 'continuous'\n"
+                       if since is not None else "WHERE layer = 'continuous'\n")
         sql = _INSERT_HEAD.format(t=t, iv=iv) + \
-              ("WHERE ts >= :since\n" if since is not None else "") + \
+              layer_where + \
               "GROUP BY symbol, bucket\n" + tail
         return _run(session, sql, {"since": since} if since is not None else None)
     sql = _session_insert_sql(
