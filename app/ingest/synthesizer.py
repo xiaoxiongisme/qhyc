@@ -112,7 +112,7 @@ def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
     return (
         "WITH m AS (\n"
         "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
-        "    FROM minute_bar\n"
+        "    FROM l0_raw.minute_bar\n"
         f"    {where_sql}\n"
         "), norm AS (\n"
         "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
@@ -200,7 +200,7 @@ _INSERT_HEAD = (
     "       time_bucket(INTERVAL '{iv}', ts, 'Asia/Shanghai') AS bucket,\n"
     "       first(open, ts), max(high), min(low), last(close, ts),\n"
     "       sum(volume)::bigint, sum(amount), last(open_interest, ts)\n"
-    "FROM minute_bar\n"
+    "FROM l0_raw.minute_bar\n"
 )
 #: ⚠ 已停用（2026-10-31）：自然整点桶口径与同花顺网格互斥，5m/15m 一旦走到
 #: 这条分支就会产出 13:30/10:30 等错误标签。保留仅为追溯，勿重新启用。
@@ -408,7 +408,7 @@ def _max_minute_ts(session: Session) -> datetime | None:
     # 2026-11-06：全合约采集后 contract 层可能比 continuous 层更新，
     # 若用全表 max(ts) 做「L1 是否追平」校验会永远判 lag 并触发假告警/无谓重试。
     return session.execute(text(
-        "SELECT max(ts) FROM minute_bar WHERE layer = 'continuous'"
+        "SELECT max(ts) FROM l0_raw.minute_bar WHERE layer = 'continuous'"
     )).scalar()
 
 
