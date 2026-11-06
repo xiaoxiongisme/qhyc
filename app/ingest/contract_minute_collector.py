@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""全部合约 1 分钟行情采集器（2026-11-06 新增）。
+"""全部合约 1 分钟行情采集器（2026-11-06 新增，同日做增量效率优化）。
 
 与 ``MinuteCollector`` 的区别
 -----------------------------
@@ -24,11 +24,24 @@ src                          akshare_1min                 akshare_1min_contract
    历史 CSV 已写入的同 symbol+ts 行优先保留，不被 akshare 覆盖。
 4. **失败隔离**：退市/无成交合约接口会抛 ``ValueError: Length mismatch``，
    单合约失败只记日志，不影响整批。
+
+增量效率优化（2026-11-06 晚）
+-----------------------------
+akshare 1 分钟接口**固定返回最近约 1024 根**，无法只拉增量；但可以在写库前
+按每合约已有 ``max(ts)`` 过滤，只提交真正新增的分钟行。实测收盘后每轮
+原本提交 68 万行、实际新增 0 行，优化后提交 0 行。
+
+* :func:`load_watermarks` 一条 SQL 批量取所有目标合约的水位线；
+* :meth:`ContractMinuteCollector.collect` 用 ``watermarks`` 过滤 ``ts > 水位``；
+* **无水位线的新合约保留全部返回行**（首次采集需要回填历史窗口）；
+* ``--force`` 可绕过水位线过滤做全量重提（历史补采/口径修复用）；
+* 水位线只回看 ``lookback_days`` 天，避免对 1.19 亿行 hypertable 全表扫描。
 """
 from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from sqlalchemy import text
@@ -47,6 +60,33 @@ _INSERT = text(
     "        :open_interest, :contract, :src, 'contract', :exchange, :variety_code) "
     "ON CONFLICT (symbol, ts) DO NOTHING"
 )
+
+_WATERMARK_SQL = text(
+    "SELECT symbol, max(ts) AS last_ts "
+    "FROM l0_raw.minute_bar "
+    "WHERE layer = 'contract' "
+    "  AND symbol = ANY(:syms) "
+    "  AND ts >= :floor "
+    "GROUP BY symbol"
+)
+
+
+def load_watermarks(
+    session: Session,
+    symbols: Iterable[str],
+    lookback_days: int = 8,
+) -> dict[str, datetime]:
+    """批量取每个合约在 contract 层的最新分钟时间戳。
+
+    一次查询完成（``symbol = ANY(array)`` + 时间下界走 hypertable 索引），
+    避免 668 次单合约查询。无历史数据的合约不出现在返回字典里。
+    """
+    syms = list(dict.fromkeys(symbols))
+    if not syms:
+        return {}
+    floor = datetime.now(timezone.utc) - timedelta(days=max(1, int(lookback_days)))
+    rows = session.execute(_WATERMARK_SQL, {"syms": syms, "floor": floor}).all()
+    return {str(r[0]): r[1] for r in rows if r[1] is not None}
 
 
 def _fetch_one(spec: dict[str, Any]) -> tuple[str, list[dict], str | None]:
@@ -100,10 +140,18 @@ class ContractMinuteCollector:
         contracts: Iterable[dict[str, Any]],
         dry_run: bool = False,
         batch_size: int = 2000,
+        watermarks: dict[str, datetime] | None = None,
+        incremental: bool = True,
     ) -> dict[str, Any]:
+        """采集并写库。
+
+        ``incremental=True`` 且给了 ``watermarks`` 时，只提交 ``ts > 水位线`` 的行；
+        没有水位线的合约（新上市/首次采集）保留全部返回行。
+        """
         specs = list(contracts)
         fetched: list[dict] = []
         errors: list[tuple[str, str]] = []
+        rows_fetched = 0
         t0 = time.time()
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             futs = {pool.submit(_fetch_one, s): s["symbol"] for s in specs}
@@ -112,6 +160,11 @@ class ContractMinuteCollector:
                 if err:
                     errors.append((sym, err))
                 else:
+                    rows_fetched += len(rows)
+                    if incremental and watermarks is not None:
+                        wm = watermarks.get(sym)
+                        if wm is not None:
+                            rows = [r for r in rows if r["ts"] > wm]
                     fetched.extend(rows)
                 if self.pause_sec:
                     time.sleep(self.pause_sec)
@@ -126,14 +179,19 @@ class ContractMinuteCollector:
             "contracts": len(specs),
             "ok": len(specs) - len(errors),
             "failed": len(errors),
-            "rows": len(fetched),
+            "rows": len(fetched),                       # 过滤后待写行数
             "submitted": inserted,
+            "rows_fetched": rows_fetched,               # 接口原始返回行数
+            "rows_skipped": rows_fetched - len(fetched),  # 被水位线滤掉的重复行
+            "incremental": bool(incremental and watermarks is not None),
+            "watermarks": len(watermarks or {}),
             "seconds": round(time.time() - t0, 1),
             "errors": errors[:20],
         }
         logger.info(
             f"[contract_minute] done: {stats['ok']}/{stats['contracts']} 合约 "
             f"rows={stats['rows']} submitted={stats['submitted']} "
-            f"failed={stats['failed']} {stats['seconds']}s"
+            f"skipped={stats['rows_skipped']} failed={stats['failed']} "
+            f"{stats['seconds']}s"
         )
         return stats

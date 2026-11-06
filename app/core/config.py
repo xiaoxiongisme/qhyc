@@ -96,6 +96,11 @@ class IngestConfig(BaseModel):
     contract_max_workers: int = 6
     contract_universe_ttl_hours: float = 12.0
     contract_request_pause_sec: float = 0.05
+    #: 2026-11-06 采集效率优化：非交易时段跳过整轮 HTTP（--force 可绕过）。
+    #: 时段规则见 app/ingest/trading_window.py；节假日只会多采几轮，不丢数据。
+    contract_session_gate: bool = True
+    #: 增量水位线回看天数（akshare 固定返回约 1024 根 ≈ 6 交易日）。
+    contract_watermark_lookback_days: int = 8
 
 
 class CalibrationConfig(BaseModel):

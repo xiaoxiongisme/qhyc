@@ -22,6 +22,9 @@ ingest:
   contract_max_workers: 6
   contract_universe_ttl_hours: 12
   contract_request_pause_sec: 0.05
+  # 2026-11-06 采集效率优化：交易时段门控 + 增量水位线
+  contract_session_gate: true
+  contract_watermark_lookback_days: 8
   main_contracts:
     # ---- CZCE 郑商所 ----
     - { symbol: "FG888", exchange: "CZCE", product: "FG", name: "玻璃", unit: "吨", multiplier: 20 }
