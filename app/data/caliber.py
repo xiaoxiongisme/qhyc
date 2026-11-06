@@ -108,7 +108,9 @@ ROUTES: dict[tuple[str, str], Route] = {
     #                                 note="已废弃：小时线前复权（不可达）"),
     # —— 日线 ——
     # 2026-10-04 (G9) 退役 fut_kline.continuous：daily 未复权主连改读 daily_bar（L0 原始主连）
-    ("daily", "continuous"): Route("daily_bar", where="symbol LIKE '%888'",
+    # 2026-11-06：补入 8888 指数日线后，LIKE '%888' 会把 RB8888 也当成主连，
+    # 未复权主连口径会被指数序列污染。改用严格正则只取「字母 + 888」。
+    ("daily", "continuous"): Route("daily_bar", where="symbol ~ '^[A-Za-z]+888$'",
                                    time_col="trade_date",
                                    note="日线未复权主连（G9 后改读 daily_bar，fut_kline.continuous 已退役）"),
     # ("daily", "cont_adj"):   Route("fut_kline", where="freq='daily' AND kind='cont_adj'",

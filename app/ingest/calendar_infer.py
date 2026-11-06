@@ -35,7 +35,7 @@ def infer_calendar(session: Session, min_ratio: float = 0.8) -> dict:
             """
             SELECT trade_date, count(DISTINCT symbol) AS n
             FROM daily_bar
-            WHERE symbol LIKE '%888'
+            WHERE symbol ~ '^[A-Za-z]+888$'
               AND trade_date >= :start
             GROUP BY trade_date
             HAVING count(DISTINCT symbol) >= :threshold
