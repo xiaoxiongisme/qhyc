@@ -17,6 +17,11 @@ database:
 
 ingest:
   history_start: "2015-01-01"
+  # 2026-11-06 全品种全部合约采集（cron_fetch_1min）
+  collect_all_contracts: true
+  contract_max_workers: 6
+  contract_universe_ttl_hours: 12
+  contract_request_pause_sec: 0.05
   main_contracts:
     # ---- CZCE 郑商所 ----
     - { symbol: "FG888", exchange: "CZCE", product: "FG", name: "玻璃", unit: "吨", multiplier: 20 }
