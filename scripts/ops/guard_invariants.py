@@ -135,17 +135,101 @@ def _c_whitelist_in_config(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_l1_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
-    """近 3 天 L1 主连新数据。窗口取短，收口后能快速转 PASS。"""
+    """近 3 天 L1 主连新数据 ⊆ 白名单 ∪ 持仓豁免。窗口取短，收口后能快速转 PASS。
+
+    ★ 持仓豁免是口径的一部分（CL-20261107-01）：非白名单但有持仓的品种必须继续
+      派生，否则它不再有新 bar，止损/平仓判定拿不到最新价，持仓被永久冻结。
+      不加这一项，断言会在「口径正确」的情况下永远 FAIL，最后只能靠豁免遮住。
+    """
     rows = c.rows("""
         SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v
         FROM l1_mkt.bar_60m
         WHERE bucket >= now() - interval '3 days' AND symbol ~ '^[A-Za-z]+888$'
     """)
     got = {r[0] for r in rows}
-    extra = sorted(got - c.whitelist)
-    return not extra, "L1 主连新数据 ⊆ 白名单", (
-        f"{len(got)} 个品种，越界 {len(extra)}"), (
+    held = {r[0] for r in c.rows("""
+        SELECT DISTINCT regexp_replace(symbol, '8888?$', '')
+        FROM fusion_position WHERE COALESCE(position, 'FLAT') <> 'FLAT'
+    """)}
+    extra = sorted(got - c.whitelist - held)
+    return not extra, "L1 主连新数据 ⊆ 白名单 ∪ 持仓豁免", (
+        f"{len(got)} 个品种（持仓豁免 {len(held)}），越界 {len(extra)}"), (
         f"越界品种（不交易品种仍在加工层）：{','.join(extra)}" if extra else "")
+
+
+def _c_scope_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """口径**真的被引用**了吗？——直接针对本次事故的根因断言。
+
+    2026-11-07 之前 ``l3_ref.tradable_variety`` 已落库 38 行，但 L1 派生、
+    L2 复权、7 个兼容视图**没有一处引用它**。结果「白名单已生效」是一句
+    没有任何证据支撑的话，四套口径继续并存。
+
+    本断言检查三处关键路径的定义文本里是否出现口径来源标识：
+      · L1 派生存储过程  → tradable_scope_array
+      · L2 复权存储过程  → tradable_scope_array
+      · public.bar_* 视图 → tradable_variety / tradable_filter_on
+    任何一处丢失引用即 block FAIL ——「表建了却没人读」不许再静默通过。
+    """
+    checks = [
+        ("L1 派生 sp_build_l1_from_minute",
+         "SELECT pg_get_functiondef('public.sp_build_l1_from_minute(text,timestamptz,timestamptz)'::regprocedure)",
+         "tradable_scope_array"),
+        ("L2 复权 sp_build_l2_back_adjusted",
+         "SELECT pg_get_functiondef('l2_adj.sp_build_l2_back_adjusted(text,text,boolean)'::regprocedure)",
+         "tradable_scope_array"),
+    ]
+    bad, seen = [], []
+    for label, sql, token in checks:
+        try:
+            d = c.scalar(sql) or ""
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"{label} 读取失败({type(exc).__name__})")
+            continue
+        if token in d:
+            seen.append(label)
+        else:
+            bad.append(f"{label} 未引用 {token}")
+
+    views = ["public.bar_60m", "public.bar_15m", "access.v_bar_60m_main"]
+    for v in views:
+        try:
+            d = c.scalar(f"SELECT pg_get_viewdef('{v}'::regclass, true)") or ""
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"{v} 读取失败({type(exc).__name__})")
+            continue
+        if "tradable_variety" in d or "tradable_filter_on" in d:
+            seen.append(v)
+        else:
+            bad.append(f"{v} 未引用白名单")
+
+    return not bad, "口径被 L1/L2/视图真实引用", (
+        f"{len(seen)}/{len(seen) + len(bad)} 处已接入口径"), (
+        "口径未接入（表建了没人读）：" + "; ".join(bad) if bad else "")
+
+
+def _c_scope_view_healthy(c: Ctx) -> tuple[bool, str, str, str]:
+    """口径视图必须存在、非空，且覆盖全部有效白名单品种。
+
+    视图为空 = 所有消费方 fail-open = 收口静默失效。这种「不报错、只是不生效」
+    的退化最难发现，所以单独一条 block 断言。
+    """
+    try:
+        n = c.scalar("SELECT count(*) FROM l3_ref.v_tradable_scope") or 0
+    except Exception as exc:  # noqa: BLE001
+        return False, "口径视图存在且非空", f"读取失败 {type(exc).__name__}", str(exc)[:200]
+    if n == 0:
+        return False, "口径视图存在且非空", "0 行", (
+            "口径视图为空 → 所有消费方 fail-open → 收口静默失效")
+    miss = c.rows("""
+        SELECT v.variety_code FROM l3_ref.tradable_variety v
+        WHERE v.effective_from <= CURRENT_DATE
+          AND (v.effective_to IS NULL OR v.effective_to >= CURRENT_DATE)
+          AND (v.variety_code || '888') NOT IN (SELECT symbol FROM l3_ref.v_tradable_scope)
+    """)
+    miss = [r[0] for r in miss]
+    return not miss, "口径视图存在且非空", (
+        f"{n} 个 symbol，白名单覆盖缺失 {len(miss)}"), (
+        f"白名单品种未进口径视图：{','.join(miss)}" if miss else "")
 
 
 # ---------------------------------------------------------------- 数据新鲜度
@@ -245,7 +329,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 不因不交易而停采），所以允许是超集。信号池收口由 VAR-SIGNAL-IN-WHITELIST 保证。
     ("VAR-CONFIG-IN-WHITELIST", "cloud.yaml 主连（采集口径，允许超集）", "info", _c_config_in_whitelist),
     ("VAR-WHITELIST-IN-CONFIG", "白名单 ⊆ cloud.yaml 主连", "block", _c_whitelist_in_config),
-    ("VAR-L1-IN-WHITELIST", "L1 主连新数据 ⊆ 白名单", "warn", _c_l1_in_whitelist),
+    ("VAR-L1-IN-WHITELIST", "L1 主连新数据 ⊆ 白名单 ∪ 持仓豁免", "warn", _c_l1_in_whitelist),
+    # 直接针对 2026-11-07 事故根因：白名单落库 38 行，但 L1/L2/视图**零引用**。
+    # 「建了表却没人读」= 口径永远不生效，且不报错，所以必须 block。
+    ("VAR-SCOPE-WIRED", "口径被 L1/L2/视图真实引用", "block", _c_scope_wired),
+    ("VAR-SCOPE-VIEW-OK", "口径视图存在、非空、覆盖白名单", "block", _c_scope_view_healthy),
     ("DATA-L0-LAYERS-FRESH", "L0 各 layer 未断层", "block", _c_l0_layers_fresh),
     # warn 而非 block：录权益是运营动作，且调度器已有每日一条 pushplus 提醒，
     # 守卫再报 block 只会重复轰炸。挂账后变 WAIVED，录满 20 天自动转 PASS。

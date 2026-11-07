@@ -1305,6 +1305,9 @@ SUBPROCESS_SCRIPTS = (
     "collect_roll_yield.py",
     "sync_cost_from_exchange.py",
     "rebuild_dict_from_akshare.py",
+    # CL-20261107-01 S5：月度归档（子目录，路径相对 scripts/）。
+    # 缺了不会报错、只会每月静默少一份归档，所以同样纳入启动自检。
+    "ops/archive_nontradable.py",
 )
 
 
@@ -1626,6 +1629,19 @@ def _build_scheduler() -> BlockingScheduler:
         coalesce=True,
     )
     logger.info("[scheduler] registered cron day1 06:30 (weights_monthly_update)")
+
+    # S5 非白名单历史月度归档（CL-20261107-01）：每月 1 日 03:20，只导出不删。
+    # 早于 06:30 的月更，磁盘最空；纯读操作，与分钟管线 :07/:37 不冲突。
+    sched.add_job(
+        _archive_nontradable_job,
+        trigger=CronTrigger(day=1, hour=3, minute=20, timezone=settings.env.TZ),
+        id="archive_nontradable",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=7200,
+    )
+    logger.info("[scheduler] registered cron day1 03:20 (archive_nontradable)")
 
     # 融合策略实时信号扫描：每个整点后 :05/:35 触发（小时线落盘后再生成信号/推送，
     # 与每小时 :00 的 hourly_collect 错开，避免重叠；与每日三次 ingest 并行，互不影响）
@@ -2822,8 +2838,14 @@ def _minute_and_bars_job() -> None:
                 #   删掉另一套网格的旧桶，否则两套并存、一天 15 根），再重算。
                 #   回滚开关：config 里 ingest.bar_synth_mode="sp"。
                 if mode == "python":
-                    purge_recent_buckets(s, days_back=4)
-                    synth_stats = synthesize_bars_incremental(s, days_back=3)
+                    # CL-20261107-01 S2：口径只读一次，purge 与 synth 共用。
+                    # 两者范围必须严格一致（purge ⊇ synth 的删除边界），否则会出现
+                    # 「删了不补」的静默丢数据；此处用同一个 Scope 对象保证这一点。
+                    from app.data.tradable_scope import load_scope
+                    scope = load_scope(s)
+                    purge_recent_buckets(s, days_back=4, scope=scope)
+                    synth_stats = synthesize_bars_incremental(
+                        s, days_back=3, scope=scope)
                 elif not sp_enabled("sp_build_l1_from_minute"):
                     logger.warning(
                         "[scheduler] sp_build_l1_from_minute 被字典禁用"
@@ -2901,6 +2923,48 @@ def _back_adjusted_job() -> None:
     except Exception as e:  # noqa: BLE016
         record_finish(run_id, "failed", message=str(e)[:500])
         logger.exception(f"[scheduler] back_adjusted failed: {e}")
+
+
+def _archive_nontradable_job() -> None:
+    """S5：非白名单历史月度归档（CL-20261107-01）。
+
+    每月 1 日 03:20 以 subprocess 调 ``scripts/ops/archive_nontradable.py``，
+    把「上次水位 → 现在」的非白名单行增量导出到 ``/Docker/qhyc_archive/nontradable``。
+    水位线落 ``l3_ref.nontradable_archive_log``，``(table_name, batch_key)`` 唯一，
+    失败重跑不会重复导出。
+
+    ⚠ **本作业不删任何数据**。方案 v3 / D1 定案是「只导出不删，观察 1 个月」——
+    删除不可逆，且 L0 分钟是唯一可再生源，删了就只能靠归档还原。
+    删除必须由用户单独拍板，不在本作业职责内。
+
+    选 03:20 的理由：早于 06:30 的权重月更与日间采集，磁盘 IO 最空；
+    且月度归档是纯读操作，与分钟管线（:07/:37）不冲突。
+    """
+    import subprocess
+    import sys as _sys
+
+    script = _scripts_dir() / "ops" / "archive_nontradable.py"
+    if not script.is_file():
+        logger.error(
+            f"[scheduler] 找不到归档脚本 {script} —— 本月归档未执行"
+            "（典型原因：scripts/ops 未随镜像/仓库同步）")
+        return
+    batch = datetime.now(_SH_TZ).strftime("%Y-%m")
+    cmd = [_sys.executable, str(script), "--batch-key", batch]
+    logger.info(f"[scheduler] archive_nontradable start: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+        logger.info(
+            f"[scheduler] archive_nontradable exit={proc.returncode} "
+            f"batch={batch} tail={(proc.stdout or '')[-600:]}")
+        if proc.returncode != 0:
+            logger.warning(
+                f"[scheduler] archive_nontradable 非 0 退出 batch={batch} "
+                f"stderr={(proc.stderr or '')[-800:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] archive_nontradable timeout>7200s")
+    except Exception:  # noqa: BLE001
+        logger.exception("[scheduler] archive_nontradable failed")
 
 
 def _inventory_job() -> None:

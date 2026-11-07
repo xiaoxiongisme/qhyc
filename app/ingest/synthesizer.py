@@ -21,6 +21,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.logging import logger
+from app.data.tradable_scope import (
+    Scope,
+    load_scope,
+    log_scope,
+    scope_params,
+    where_clause,
+)
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -438,22 +445,36 @@ def _max_minute_ts(session: Session) -> datetime | None:
 
 
 def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
-               tail: str) -> int:
-    """单表合成：自动在「自然整点桶」与「交易分钟会话桶」之间选择正确口径。"""
+               tail: str, scope: Scope | None = None) -> int:
+    """单表合成：自动在「自然整点桶」与「交易分钟会话桶」之间选择正确口径。
+
+    ``scope``（CL-20261107-01 S2）：品种口径。``None`` / fail-open 时不过滤。
+    过滤必须加在**读取侧**（``FROM minute_bar`` 的 WHERE），而不是落库后删除 ——
+    后者会在 upsert 前短暂写入不该存在的品种，且与 ``purge`` 的删除边界打架。
+    """
     step = _SESSION_BARS.get(t)
+    # 「WHERE TRUE」打底：这样 since / 口径两个条件都能无条件以 AND 追加，
+    # 不必为四种组合各写一套拼接（写死条件顺序是这类 SQL 拼装 bug 的高发点）。
+    where = "WHERE TRUE"
+    if since is not None:
+        where += " AND ts >= :since"
+    where += where_clause(scope, "symbol")
+    params: dict = {}
+    if since is not None:
+        params["since"] = since
+    if scope is not None:
+        params.update(scope_params(scope))
+
     if step is None:
-        sql = _INSERT_HEAD.format(t=t, iv=iv) + \
-              ("WHERE ts >= :since\n" if since is not None else "") + \
-              "GROUP BY symbol, bucket\n" + tail
-        return _run(session, sql, {"since": since} if since is not None else None)
-    sql = _session_insert_sql(
-        step, where=("WHERE ts >= :since" if since is not None else ""), tail=tail, t=t)
-    return _run(session, sql, {
-        "since": since,
+        sql = _INSERT_HEAD.format(t=t, iv=iv) + where + "\nGROUP BY symbol, bucket\n" + tail
+        return _run(session, sql, params)
+    sql = _session_insert_sql(step, where=where, tail=tail, t=t)
+    params.update({
         "srcs": _SESSION_SRC_PRIORITY,
         "end_srcs": _SESSION_END_LABELED_SRCS,
         "maxgap": _SESSION_MAX_GAP_MIN,
     })
+    return _run(session, sql, params)
 
 
 def _session_floor(dt: datetime) -> datetime:
@@ -476,7 +497,8 @@ def _session_floor(dt: datetime) -> datetime:
     return cand
 
 
-def purge_recent_buckets(session: Session, days_back: int = 4) -> dict[str, int]:
+def purge_recent_buckets(session: Session, days_back: int = 4,
+                         scope: Scope | None = None) -> dict[str, int]:
     """删除「最近 days_back 天」的全部桶，供切换合成口径后清除旧网格残留。
 
     背景（2026-11-03，见 docs/V2样本外崩塌排查.md §36）
@@ -498,17 +520,31 @@ def purge_recent_buckets(session: Session, days_back: int = 4) -> dict[str, int]
     # 会话表必须把下界对齐到会话起点：任意时刻作下界会把「下界所在的那根桶」
     # 一起删掉，而重建只从下界之后读分钟 → 半截桶（§36.12 实测踩过）。
     cutoff_session = _session_floor(cutoff)
+
+    # ★ 2026-11-07（CL-20261107-01 S2）：删除范围必须与重建范围同口径。
+    #   重建已按品种口径收口，若 purge 仍删「全部 symbol 的最近 N 天」，
+    #   非白名单品种的历史会在每轮作业里被删掉一批却不再重建 ——
+    #   那就从「停派生」悄悄变成了「分批删除」，与 D1「只导出不删」的决策
+    #   直接冲突，且不可逆。所以这里跟着 scope 一起收窄。
+    if scope is None:
+        scope = load_scope(session)
+    wc = where_clause(scope)
+    extra = scope_params(scope)
     out: dict[str, int] = {}
     for t, _ in _BARS:
         c = cutoff_session if t in _SESSION_BARS else cutoff
-        r = session.execute(text(f"DELETE FROM {t} WHERE bucket >= :c"), {"c": c})
+        r = session.execute(
+            text(f"DELETE FROM {t} WHERE bucket >= :c{wc}"), {"c": c, **extra})
         out[t] = r.rowcount
-    logger.info(f"[synth] purge 最近 {days_back} 天旧桶（换口径前置，下界 {cutoff_session:%Y-%m-%d %H:%M}）: {out}")
+    log_scope(scope, f"purge {days_back}d")
+    logger.info(
+        f"[synth] purge 最近 {days_back} 天旧桶（换口径前置，下界 {cutoff_session:%Y-%m-%d %H:%M}）: {out}")
     return out
 
 
 def synthesize_bars_incremental(session: Session, days_back: int = 3,
-                                max_retries: int = 2) -> dict:
+                                max_retries: int = 2,
+                                scope: Scope | None = None) -> dict:
     """增量重算最近 days_back 天的桶（覆盖在途桶），成本极低。返回各表影响行数。
 
     边界处理：DELETE 按「桶对齐」阈值（含 since 所在的不完整桶），
@@ -528,6 +564,13 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
     """
     # P0-1：先 fail-loud 校验源登记，避免「新源静默进入」再次发生。
     assert_registered_srcs(session, lookback_days=max(days_back + 2, 7))
+
+    # CL-20261107-01 S2：品种口径。一次读取、全程复用 —— 若在循环里反复读，
+    # 中途持仓变化会让不同频率落到不同口径上，产出彼此不一致的 bar_*。
+    if scope is None:
+        scope = load_scope(session)
+    log_scope(scope, "incremental 合成")
+
     since = datetime.now(_SH_TZ) - timedelta(days=days_back)
     # ★ 会话式切分必须向前多看 1 天，并把起点**对齐到会话起点**：它按「连续分钟段」
     #   累计交易分钟计数，若 since 落在段的中间，前面的分钟没参与计数 → 该段所有 bar
@@ -539,7 +582,7 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
         stats[t] = _synth_one(
             session, t, iv,
             since_session if t in _SESSION_BARS else since,
-            _UPSERT_TAIL,
+            _UPSERT_TAIL, scope,
         )
     session.commit()
 
@@ -578,7 +621,7 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
             stats[t] = _synth_one(
                 session, t, iv,
                 since_session if t in _SESSION_BARS else since,
-                _UPSERT_TAIL,
+                _UPSERT_TAIL, scope,
             )
         session.commit()
 
@@ -591,7 +634,14 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
 
 
 def synthesize_bars_full(session: Session, work_mem: str = "2GB") -> dict:
-    """全量重算（一次性迁移/回填）。耗时随分钟数据量线性增长。"""
+    """全量重算（一次性迁移/回填）。耗时随分钟数据量线性增长。
+
+    ★ 有意**不做**品种口径过滤（CL-20261107-01 S2 的唯一例外）。
+      本函数会先 ``TRUNCATE`` 再重建；若只重建白名单品种，非白名单的
+      149.6 万行历史就在 TRUNCATE 那一步**永久消失**，与 D1「只导出不删」
+      的决策直接冲突。它是一次性回补/迁移工具，语义就是「全量」。
+      需要按口径重建请用 ``synthesize_bars_incremental``（增量，带过滤）。
+    """
     session.execute(text(f"SET LOCAL work_mem = '{work_mem}'"))
     stats: dict[str, int] = {}
     for t, _ in _BARS:
