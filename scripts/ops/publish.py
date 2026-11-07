@@ -91,13 +91,27 @@ def main() -> int:
 
     # ---- 2) 是否 fast-forward ----
     _banner("2/6 提交关系")
-    _run(["git", "-C", str(REPO), "fetch", "origin", "--quiet"])
+    # fetch 只是为了让 origin/<branch> 的引用是新的；SSH 抖动时
+    # `fetch-pack: unexpected disconnect / early EOF` 很常见。这里做成**尽力而为**：
+    # 拿不到就用上一次的 origin 引用，并明确告知「关系判定基于陈旧引用」——
+    # 因为「网络抖了一下」不该把整条发布流程卡死，而 push 本身会再校验一次。
+    fetched = True
+    for attempt in (1, 2):
+        try:
+            _run(["git", "-C", str(REPO), "fetch", "origin", "--quiet"])
+            break
+        except RuntimeError as e:
+            fetched = False
+            if attempt == 2:
+                print(f"⚠ fetch 失败（{str(e).splitlines()[-1] if str(e) else 'unknown'}）"
+                      f"，改用本地已有的 origin/{a.branch} 引用判断关系")
     behind = _run(["git", "-C", str(REPO), "rev-list", "--count",
                    f"HEAD..origin/{a.branch}"]).strip()
     if behind != "0":
         print(f"⚠ 本地落后 origin/{a.branch} {behind} 个提交，先 pull 再发布")
         return 1
-    print(f"origin/{a.branch} 是 HEAD 的祖先（可 fast-forward）")
+    print(f"origin/{a.branch} 是 HEAD 的祖先（可 fast-forward）"
+          f"{'' if fetched else '（⚠ 引用可能陈旧）'}")
 
     if a.check:
         print("\n--check：仅检查，未做任何改动")
