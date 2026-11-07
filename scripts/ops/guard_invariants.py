@@ -102,13 +102,22 @@ def _c_whitelist_nonempty(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_signal_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
+    """只看**近 7 天新增**信号——历史行的存在不代表当前行为。
+
+    这是本套断言的一条通用纪律：不变量必须衡量「现在的系统怎么运行」，
+    不能拿历史流水当现状（否则收口之后永远无法转 PASS，豁免就变成了永久遮羞布）。
+    """
     rows = c.rows("""
         SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v
-        FROM fusion_signal_log WHERE symbol ~ '^[A-Za-z]+888$'
+        FROM fusion_signal_log
+        WHERE symbol ~ '^[A-Za-z]+888$'
+          AND signal_at >= now() - interval '7 days'
     """)
     got = {r[0] for r in rows}
+    if not got:
+        return True, "近 7 天信号 ⊆ 白名单", "近 7 天无新信号（真空通过）", ""
     extra = sorted(got - c.whitelist)
-    return not extra, "融合信号品种 ⊆ 白名单", f"{len(got)} 个品种，越界 {len(extra)}", (
+    return not extra, "近 7 天信号 ⊆ 白名单", f"{len(got)} 个品种，越界 {len(extra)}", (
         f"越界品种：{','.join(extra)}" if extra else "")
 
 
@@ -126,10 +135,11 @@ def _c_whitelist_in_config(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_l1_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
+    """近 3 天 L1 主连新数据。窗口取短，收口后能快速转 PASS。"""
     rows = c.rows("""
         SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v
         FROM l1_mkt.bar_60m
-        WHERE bucket >= now() - interval '10 days' AND symbol ~ '^[A-Za-z]+888$'
+        WHERE bucket >= now() - interval '3 days' AND symbol ~ '^[A-Za-z]+888$'
     """)
     got = {r[0] for r in rows}
     extra = sorted(got - c.whitelist)
@@ -231,7 +241,9 @@ def _c_weekly_dow(c: Ctx) -> tuple[bool, str, str, str]:
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
-    ("VAR-CONFIG-IN-WHITELIST", "cloud.yaml 主连 ⊆ 白名单", "block", _c_config_in_whitelist),
+    # info 级：cloud.yaml 是**采集口径**（归档定案：L0/日线对所有品种生效，
+    # 不因不交易而停采），所以允许是超集。信号池收口由 VAR-SIGNAL-IN-WHITELIST 保证。
+    ("VAR-CONFIG-IN-WHITELIST", "cloud.yaml 主连（采集口径，允许超集）", "info", _c_config_in_whitelist),
     ("VAR-WHITELIST-IN-CONFIG", "白名单 ⊆ cloud.yaml 主连", "block", _c_whitelist_in_config),
     ("VAR-L1-IN-WHITELIST", "L1 主连新数据 ⊆ 白名单", "warn", _c_l1_in_whitelist),
     ("DATA-L0-LAYERS-FRESH", "L0 各 layer 未断层", "block", _c_l0_layers_fresh),

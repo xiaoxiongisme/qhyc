@@ -850,6 +850,65 @@ def _fusion_params(base, key: str = "fusion_v34"):
         return base
 
 
+def _tradable_scan_pool(specs):
+    """按交易白名单收口融合扫描池（CL-20261107-01）。
+
+    背景（2026-11-07 实测）：白名单 38 / cloud.yaml 50 / L1 主连 82 / 融合信号 41
+    四套口径并存，其中 12 个非白名单品种仍在产出信号、3 个白名单品种（BR/PF/PK）
+    因不在配置里永远扫不到。
+
+    三条安全设计
+    ------------
+    1. **fail-open**：开关关闭、表缺失、读取异常、白名单为空 → 一律返回原池并告警。
+       宁可多扫，也不能因为一张参考表读不到就零信号。
+    2. **已持仓豁免**：非白名单品种若当前有持仓（position <> 'FLAT'），继续纳入扫描，
+       否则它既不会产出平仓/止损信号，持仓会永久冻结。语义是「不再开新仓，
+       但存量持仓管理到平仓为止」。
+    3. **可秒回退**：`cfg_feature_switch.tradable_filter_enabled=f` 即恢复全池扫描。
+
+    Returns:
+        过滤后的 MainContractSpec 列表（顺序保持不变）。
+    """
+    if not _switch_on("tradable_filter_enabled", "QH_TRADABLE_FILTER", default=True):
+        logger.info("[scheduler] tradable_filter_enabled=off → 扫描池不做白名单收口")
+        return specs
+    try:
+        with get_engine().connect() as conn:
+            codes = {r[0] for r in conn.execute(text(
+                "SELECT variety_code FROM l3_ref.tradable_variety "
+                "WHERE effective_from <= CURRENT_DATE "
+                "AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)"))}
+            held = {r[0] for r in conn.execute(text(
+                "SELECT symbol FROM fusion_position "
+                "WHERE coalesce(position, 'FLAT') <> 'FLAT'"))}
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[scheduler] 白名单/持仓读取失败 → 本轮不收口（fail-open）: {e}")
+        return specs
+    if not codes:
+        logger.warning("[scheduler] 白名单为空 → 本轮不收口（fail-open，避免零信号）")
+        return specs
+
+    def _v(sym: str) -> str:
+        return sym[:-3] if sym.endswith("888") else sym
+
+    kept = [x for x in specs if _v(x.symbol) in codes or x.symbol in held]
+    dropped = sorted({_v(x.symbol) for x in specs
+                      if _v(x.symbol) not in codes and x.symbol not in held})
+    if dropped:
+        logger.info(
+            f"[scheduler] 白名单收口：{len(specs)} → {len(kept)}，"
+            f"跳过非白名单且无持仓的 {len(dropped)} 个：{dropped}")
+    orphans = sorted({_v(x.symbol) for x in specs
+                      if _v(x.symbol) not in codes and x.symbol in held})
+    if orphans:
+        logger.warning(
+            f"[scheduler] 非白名单但仍有持仓，继续管理至平仓（不再开新仓）：{orphans}")
+    missing = sorted(codes - {_v(x.symbol) for x in specs})
+    if missing:
+        logger.warning(f"[scheduler] 白名单品种不在主连配置（永远不产信号）：{missing}")
+    return kept
+
+
 def _fusion_scan_job() -> None:
     """融合策略扫描（每个整点后 :05/:35 触发，即小时线落盘后再生成信号/推送）。
 
@@ -912,7 +971,7 @@ def _fusion_scan_job() -> None:
                 logger.warning(
                     "[scheduler] 注册表存在已启用但**未接入信号链**的策略：%s"
                     "（仅登记，不产生任何信号——需显式接线）", _unwired)
-            results = evaluate_all(s, settings.main_contracts,
+            results = evaluate_all(s, _tradable_scan_pool(settings.main_contracts),
                                    _fusion_params(settings.fusion, "fusion_v34"))
 
             # 2.5) V5 组合回撤熔断（Phase 5）：把「期望手数」按当前回撤缩放后再落库。
