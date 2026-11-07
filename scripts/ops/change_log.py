@@ -94,13 +94,17 @@ def cmd_show(args) -> int:
 def cmd_add(args) -> int:
     with session_scope() as s:
         cid = args.change_id or _next_id(s)
+        # verified_at 必须一起写：ck_change_implemented_evidence 要求
+        # implemented ⇒ (commit_sha 或 migration_file) AND verified_at 非空。
+        # 原来的 INSERT 漏了这列，于是「登记一条已完成的改造」直接撞 CHECK 失败。
         s.execute(text("""
             INSERT INTO ops.change_log
                 (change_id, title, category, status, risk, rationale, change_summary,
                  impact_scope, invariant_keys, decision_note, commit_sha, migration_file,
-                 rollback, archive_ref)
+                 rollback, archive_ref, verified_at)
             VALUES (:cid, :title, :cat, :st, :risk, :why, :sum, :scope, :keys, :note,
-                    :commit, :mig, :rb, :ref)
+                    :commit, :mig, :rb, :ref,
+                    CASE WHEN :st = 'implemented' THEN now() ELSE NULL END)
         """), {"cid": cid, "title": args.title, "cat": args.category, "st": args.status,
                "risk": args.risk, "why": args.rationale, "sum": args.summary,
                "scope": args.scope, "keys": args.invariant_keys, "note": args.note,
@@ -124,11 +128,26 @@ def cmd_update(args) -> int:
         sets.append("verified_at = now()")
     if args.clear_verified:
         sets.append("verified_at = NULL")
-    if not sets:
+    if not sets and not args.items_json:
         print("没有要更新的字段")
         return 1
     sets.append("updated_at = now()")
+
     with session_scope() as s:
+        if args.items_json:
+            # items 是分阶段进度（S1/S2/...），按 key **合并**而非整体覆盖：
+            # 收口过程中会逐个完成子项，整体覆盖容易把前面已记的进度冲掉。
+            cur = s.execute(text(
+                "SELECT items FROM ops.change_log WHERE change_id = :cid"),
+                {"cid": args.change_id}).scalar()
+            merged = dict(cur or {})
+            try:
+                merged.update(json.loads(args.items_json))
+            except json.JSONDecodeError as exc:
+                print(f"--items-json 不是合法 JSON：{exc}")
+                return 1
+            sets.append("items = :items")
+            params["items"] = json.dumps(merged, ensure_ascii=False)
         n = s.execute(text(
             f"UPDATE ops.change_log SET {', '.join(sets)} WHERE change_id = :cid"
         ), params).rowcount
@@ -341,6 +360,8 @@ def main() -> int:
         p.add_argument("--" + f.replace("_", "-"), dest=f)
     p.add_argument("--verified", action="store_true")
     p.add_argument("--clear-verified", action="store_true")
+    p.add_argument("--items-json", dest="items_json",
+                   help='按 key 合并 items，如 \'{"S2":"done ..."}\'')
     p.set_defaults(fn=cmd_update)
 
     p = sub.add_parser("close", help="收口（置 implemented + 验收时间）")
