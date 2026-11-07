@@ -115,6 +115,17 @@ def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
       这类表**整项检查从未执行**，且失败被 ``except`` 吞成 ``continue``，
       上层只看到"0 工单"）。现在探测不到列时记 ``error`` 并跳过，
       使「检查未执行」与「检查通过」在日志上可区分。
+
+    ★ 2026-11-07（重开日检前修的**两处系统性误报**）
+      ------------------------------------------------
+      1) **期望值不能是全局硬编码**。原 ``cfg.expected_bars`` 对 bar_60m 统一期望 8 根，
+         但无夜盘品种（农产品/部分化工）60m 只有 4~6 根、夜盘到 02:30 的品种又有 10+ 根
+         ⇒ 前者**永远**被判缺失。现改为**该 symbol 近 20 个交易日 bar 数的中位数**做基线，
+         自动适配品种交易时段；无历史基线的新 symbol 跳过（首日无可比对象，不报）。
+      2) **非交易日必须跳过**。周五夜盘跨零点的 K 落在周六 00:00~02:30，
+         若把周六当交易日检查，bar_60m 仅 4 根 vs 期望 8 ⇒ 全市场 82 品种齐刷
+         「缺失」工单，首次开日检就会灌满 ``anomaly_ticket``，真缺失被噪音淹没。
+         （交易日判断由 run() 统一做，见 :func:`run`。）
     """
     n = 0
     skipped: list[str] = []
@@ -127,23 +138,40 @@ def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
                 f"（候选 {_TIME_COL_CANDIDATES}）—— 该表的 bar 缺失无人巡检")
             continue
         try:
+            # 自适应基线：过去 40 个自然日窗口内，该 symbol 各交易日的 bar 数中位数。
+            # 用「< 当日」的日期算中位数，避免当日异常值污染基线。
             rows = session.execute(text(f"""
-                SELECT symbol, count(*) AS c
-                FROM {table}
-                WHERE {tc}::date = :d
-                GROUP BY symbol
-            """), {"d": trade_date}).fetchall()
+                WITH daily AS (
+                    SELECT symbol, {tc}::date AS d, count(*) AS c
+                    FROM {table}
+                    WHERE {tc} >= :d0 AND {tc} < :d1
+                    GROUP BY 1, 2
+                ), med AS (
+                    SELECT symbol, percentile_cont(0.5) WITHIN GROUP (ORDER BY c) AS m
+                    FROM daily WHERE d < :d GROUP BY 1
+                )
+                SELECT t.symbol, t.c, med.m
+                FROM daily t LEFT JOIN med USING (symbol)
+                WHERE t.d = :d
+            """), {"d": trade_date,
+                   "d0": trade_date - timedelta(days=40),
+                   "d1": trade_date + timedelta(days=1)}).fetchall()
         except Exception as e:  # noqa: BLE001
             session.rollback()
             skipped.append(table)
             logger.error(f"[data_selfcheck] {table}（用列 {tc}）缺失检查**未执行**：{e}")
             continue
-        for sym, c in rows:
-            if c < expect * (1 - cfg.missing_pct_alarm):
+        for sym, c, m in rows:
+            if m is None or m <= 0:
+                # 新 symbol / 无历史基线：首日无可比对象，跳过并留痕（不报工单）
+                logger.info(
+                    f"[data_selfcheck] {table} {sym} 无历史基线（首个交易日？），跳过缺失判定")
+                continue
+            if c < float(m) * (1 - cfg.missing_pct_alarm):
                 _log_ticket(session, sym, trade_date, f"{table}.missing_bars",
-                            f"{table} {trade_date} 仅 {c} 根，预期 {expect} "
-                            f"（缺失 {1 - c/expect:.1%}）",
-                            diff=float(expect - c) / expect)
+                            f"{table} {trade_date} 仅 {c} 根，近 20 日中位 {float(m):.0f} "
+                            f"（缺失 {1 - c/float(m):.1%}）",
+                            diff=float(float(m) - c) / float(m))
                 n += 1
     if skipped:
         # fail-loud：让「有表没被检查」在结果里显式可见
@@ -279,12 +307,37 @@ def check_layer_freshness(session, cfg: SelfCheckConfig, trade_date: date) -> in
 
 def run(session, cfg: SelfCheckConfig | None = None,
         trade_date: date | None = None) -> dict:
-    """执行全部自检，返回 {检查项: 工单数}。cfg.enabled=False 时直接跳过。"""
+    """执行全部自检，返回 {检查项: 工单数}。cfg.enabled=False 时直接跳过。
+
+    ★ 2026-11-07：**非交易日只跑新鲜度检查**。周五夜盘跨零点的 K 落在周六，
+      若把周六当交易日查缺失，会全市场齐刷工单（见 :func:`check_missing` 注释）。
+      交易日判断由 ``trade_calendar.is_futures_trading_day`` 统一给出；日历不可用时
+      记 warning 并**保守地照常检查**（宁可多查，不可漏查）。
+    """
     cfg = cfg or SelfCheckConfig()
     if not cfg.enabled:
         logger.info("[data_selfcheck] 已关闭（data_selfcheck.enabled=false）")
         return {"skipped": True}
     trade_date = trade_date or date.today()
+
+    is_td = True
+    try:
+        from app.data.trade_calendar import is_futures_trading_day
+
+        is_td = bool(is_futures_trading_day(trade_date))
+    except Exception as e:  # noqa: BLE001 —— 日历故障不阻断自检，保守照查
+        logger.warning(f"[data_selfcheck] 交易日历不可用，按交易日处理（保守照查）：{e}")
+
+    if not is_td:
+        res = {
+            "skipped_nontrading": True,
+            # 新鲜度与交易日无关，必须照跑（它正是「周末也无人知」的那类盲区）
+            "layer_freshness": check_layer_freshness(session, cfg, trade_date),
+        }
+        res["total"] = sum(v for v in res.values() if isinstance(v, int) and v > 0)
+        logger.info(f"[data_selfcheck] {trade_date} 非交易日：跳过 bar 数检查，仅查层新鲜度 → {res}")
+        return res
+
     res = {
         "missing": check_missing(session, cfg, trade_date),
         "zero_volume": check_zero_volume(session, cfg, trade_date),
