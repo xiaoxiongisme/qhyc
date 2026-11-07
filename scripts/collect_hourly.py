@@ -21,6 +21,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
+
+# --- 2026-11-06 修：补仓库根到 sys.path，使 `python scripts/collect_hourly.py` 能 import app.*
+#     （app 导入位于 main() 内，此前缺引导 → ModuleNotFoundError: No module named 'app'）
+sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / 'app').is_dir())))
 
 
 def main() -> int:

@@ -182,8 +182,8 @@ def resolve_contract(contract_code: str) -> dict:
                     "delivery_month", "list_date", "last_trade_date", "main_symbol",
                     "is_main", "is_active")
             return dict(zip(cols, row))
-    except Exception:  # noqa: BLE001  dim_contract 未迁移 → 降级
-        pass
+    except Exception as exc:  # noqa: BLE001  dim_contract 未迁移 → 降级
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return {}
 
 
@@ -395,7 +395,12 @@ def _apply_adj(df: pd.DataFrame, adj: str, symbol: str, freq: str) -> pd.DataFra
 
     if df.empty:
         return df.assign(adj_offset=pd.Series(dtype=float))
-    f = {"5m": "min5", "15m": "min15", "30m": "min30", "60m": "min60"}.get(freq, freq)
+    # 2026-11-07 P0-2：hourly 与 60m 在 caliber.py 已统一到 l1_mkt.bar_60m，
+    # 但 public.roll_segment.freq 只有 min5/min15/min30/min60。旧写法把 "hourly"
+    # 原样传给 load_segments() → 查不到任何段 → adj_offset 全 0 → 后复权静默
+    # 退化成未复权（口径写着 back_adj，取到的其实是 raw），必须显式映射。
+    f = {"5m": "min5", "15m": "min15", "30m": "min30",
+         "60m": "min60", "hourly": "min60"}.get(freq, freq)
     with _engine().connect() as conn:
         adj_df = apply_back_adjust(df, symbol, f, session=conn, time_col="ts")
     # adj_offset 追加在最末：老代码用 df[list(BASE_COLS)] 或按名取列不受影响

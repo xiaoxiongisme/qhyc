@@ -126,7 +126,7 @@ def ingest_progress(db: Session = Depends(fastapi_db_dep)):
             """
             SELECT symbol, count(*) AS n, max(trade_date) AS maxd
             FROM daily_bar
-            WHERE symbol ~ '^[A-Za-z]+888$'
+            WHERE symbol LIKE '%888'
             GROUP BY symbol
             """
         )

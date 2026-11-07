@@ -123,6 +123,11 @@ def fetch_akshare_contract_daily(
 
     C9 去天勤：原为 天勤 get_kline_serial，现改用 akshare futures_zh_daily_sina(合约码)。
     ``symbol`` 入参为**标准码**（如 MA2601）；akshare 合约码格式与交易所一致。
+
+    ⚠ **已实现未接线（待接入）**（2026-11-06 巡检）：本函数当前**无任何调用方**
+      —— 日线补齐逻辑已就绪，但生产走的是别的采集入口，本函数长期空转。
+      新增合约日线来源时**优先接线到它**（别再写一份）。
+      可用 ``python scripts/check_dead_code.py`` 复查。
     """
     from datetime import date, datetime, timedelta as td
 

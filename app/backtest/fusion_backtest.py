@@ -71,7 +71,8 @@ class FusionBacktestParams:
     add_thr_atr: float = 1.0         # V3.4 加码浮盈门槛（lots × 该值 × ATR）
     add_guard_atr: float = 0.0       # V3.2 结构保本；V3.4 停用（保留兼容）
     # —— 回测专用 ——
-    src: str = "akshare"             # 单一源（杜绝双源混读，§14 #2）
+    src: str = "bar_60m"             # P0-3：唯一 K 线真源 l1_mkt.bar_60m；
+                                     # 可切 "bar_60m_ba" 取同一条线的后复权维度
     cost_bp: float = 1.3             # 双边成本（基点）；pnl 中扣 2×单边 = 整段 cost_bp
     max_positions: int = 1           # 单品种同时持仓数（1=单仓）
     seed: int = 0                    # 多 seed 鲁棒性：扰动止损用
@@ -93,8 +94,9 @@ def fusion_params_from_config(overrides: dict | None = None) -> FusionBacktestPa
         # 2026-10-31：回测改用规范化、全量、正确固定网格的 bar_60m 作为唯一真源。
         # 原 hourly_bar(src=akshare) 历史段被 agg_1m 主键占位导致覆盖空洞，且
         # agg_1m 自身仍为旧整点网格，回测读它必然口径错误。实盘信号(fusion_signal)
-        # 仍走 cfg.hourly_src=akshare（仅用近期数据，不受影响）。
-        src="bar_60m",
+        # P0-3（2026-11-07）：实盘已一并切到 l1_mkt.bar_60m（同一 kline_src、
+        # 同一 app.data.fusion_kline 取数入口）；本行旧注释作废，两端不再分叉。
+        src=getattr(cfg, "kline_src", "bar_60m"),
         # V3.1~V3.4 门控/加码全量映射（与线上引擎同一配置来源，保证信号层逐位一致）
         adx_n=cfg.adx_n, adx_min=cfg.adx_min, use_sbull=cfg.use_sbull,
         fib_confl=cfg.fib_confl, fib_ratios=tuple(cfg.fib_ratios),
@@ -122,23 +124,16 @@ def _read_hourly(session, symbol: str, src: str, start: date | None, end: date |
     ——覆盖存在空洞；且 agg_1m 自身仍是旧整点网格（11:00/12:00/14:00…）。故回测改用
     规范化、全量、正确固定网格的 l1_mkt.bar_60m 作为唯一真源（契合「单一真源」铁律）。
     """
-    if src == "bar_60m":
-        sql = "SELECT bucket, open, high, low, close FROM l1_mkt.bar_60m WHERE symbol=:sym"
-        params = {"sym": symbol}
-        if start:
-            sql += " AND bucket >= :s"
-            params["s"] = pd.Timestamp(start)
-        if end:
-            sql += " AND bucket <= :e"
-            params["e"] = pd.Timestamp(end)
-        sql += " ORDER BY bucket"
-        rows = session.execute(text(sql), params).all()
-        if not rows:
-            return None
-        df = pd.DataFrame(rows, columns=["dt", "open", "high", "low", "close"])
-        for col in ("open", "high", "low", "close"):
-            df[col] = df[col].astype(float)
-        return df
+    # 2026-11-07 P0-3：与实盘走完全相同的取数入口，只由 src（口径维度）区分。
+    #   bar_60m     -> l1_mkt.bar_60m          原始维度（唯一 K 线真源）
+    #   bar_60m_ba  -> l2_adj.bar_60m_ba       同一条 K 线的后复权维度
+    # 二者恒等式 ba.close - l1.close = adj_offset 已在 118,646 行验证零误差。
+    if src in ("bar_60m", "bar_60m_ba", "back_adj", "continuous"):
+        from app.data.fusion_kline import read_fusion_kline
+        return read_fusion_kline(session, symbol, None, src=src,
+                                 start=start, end=end, context="backtest")
+    logger.warning(
+        f"[backtest] src={src!r} 为已废弃直拉源，与实盘不是同一条 K 线（P0-3）")
     q = (
         select(
             HourlyBar.trade_datetime, HourlyBar.open, HourlyBar.high,

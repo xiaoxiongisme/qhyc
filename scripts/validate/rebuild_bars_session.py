@@ -23,8 +23,13 @@ bar 整体偏移 1 分钟，实测全库 ~7% 的 bar 因此偏离网格）：
 ## 多源分钟去重
 l0_raw.minute_bar 有 kqm_1m / wh9999_1m / tqsdk_1min / akshare_1min 多个 src，
 同一 (symbol, ts) 可能多行 → 按 --src-priority 取优先级最高的一行，避免重复计数。
-分钟时间戳约定：kqm_1m / tqsdk_1min 记分钟【起点】；akshare_1min / wh9999_1m
-记分钟【终点】（聚合前 -1min 归一）。
+分钟时间戳约定：kqm_1m / tqsdk_1min 记分钟【起点】；akshare_1min / wh9999_1m /
+akshare_1min_nov2026 记分钟【终点】（聚合前 -1min 归一）。
+# ⚠ 2026-11-07 P0-1：10-30 换源后的 akshare_1min_nov2026 未登记进
+#   DEFAULT_PRIORITY / END_LABELED_SRCS，113,189 行被 `src = ANY(:srcs)` 整段丢弃，
+#   四张 bar_* 系统性少聚合 1 根。现已登记；新增源必须两处同步登记 + 验证时间戳约定。
+# ⚠ M19 未决：local_csv_20261030（506 万行，2026 全年历史）约定尚未验证，
+#   重算 2026-10-30 之前的历史前须单独确认，本补丁只覆盖 10-30 21:00 之后。
 
 ## 用法（安全：默认 dry-run）
     set -a; . /home/ubuntu/qhyc_work/qhyc.env; set +a
@@ -38,6 +43,13 @@ import argparse
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text, event as _sa_event
+
+# --- 2026-11-06 修：补仓库根到 sys.path，使 `python scripts/xxx.py` 可直接 import app.*
+#     此前容器 Dockerfile 未设 PYTHONPATH、脚本自身也无引导 →
+#     ModuleNotFoundError: No module named 'app'（tests/ 由根 conftest.py 兜底，不受影响）。
+import sys
+from pathlib import Path
+sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / 'app').is_dir())))
 
 from app.core.db import session_scope, get_engine
 
@@ -75,7 +87,14 @@ def _patch_engine_guc() -> None:
     _sa_event.listen(eng, "connect", _on_connect)
     eng._qhyc_guc_patched = True  # type: ignore[attr-defined]
 
-DEFAULT_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
+# 2026-11-07 P0-1：全量重建用 `AND src = ANY(:srcs)` 做**硬白名单**，
+# 未登记的新源会被整段丢弃（113,189 行），比增量路径更危险。必须与
+# app/ingest/synthesizer.py 的 _SESSION_SRC_PRIORITY 保持同源。
+# ⚠ M19 未决：历史源 local_csv_20261030（506 万行）仍未登记，且其时间戳约定
+#   尚未验证；全量重建 2026-10-30 之前的历史前，必须先单独验证该源约定。
+#   本补丁只覆盖 10-30 21:00 之后的重算窗口，不触碰历史。
+DEFAULT_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min",
+                    "akshare_1min_nov2026"]
 
 # =============================================================================
 # ★ 正确做法：bar 边界锚定到「交易所固定的交易时段网格」，而非"数分钟"。
@@ -210,7 +229,7 @@ GROUP BY symbol, bucket_end
 
 
 #: 分钟时间戳约定登记（实测）：这些源把 ts 记为分钟的【终点】
-END_LABELED_SRCS = ["akshare_1min", "wh9999_1m"]
+END_LABELED_SRCS = ["akshare_1min", "wh9999_1m", "akshare_1min_nov2026"]
 
 
 def _agg_sql(symbols: list[str] | None, step: int = 60) -> str:

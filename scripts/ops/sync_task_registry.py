@@ -22,6 +22,12 @@ import sys
 
 from sqlalchemy import text
 
+# --- 2026-11-06 修：补仓库根到 sys.path，使 `python scripts/xxx.py` 可直接 import app.*
+#     此前容器 Dockerfile 未设 PYTHONPATH、脚本自身也无引导 →
+#     ModuleNotFoundError: No module named 'app'（tests/ 由根 conftest.py 兜底，不受影响）。
+from pathlib import Path
+sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / 'app').is_dir())))
+
 from app.core.db import session_scope
 from app.core.logging import logger
 
@@ -44,6 +50,10 @@ _PURPOSE_HINT = {
     "daily_futures_refresh": "期货日频刷新",
     "factor_v1v6": "因子日计算",
     "factor_ic_monitor": "因子 IC 监控",
+    "factor_value": "A 组因子日计算（compute_factor_value.py --groups A）",
+    "factor_value_b": "B/C 组因子日计算（compute_factor_value.py --groups B,C）",
+    "member_rank_summary": "会员持仓排名汇总（member_position_rank_summary）",
+    "factor_freshness": "因子级新鲜度巡检 + 断供自动补算（factor_freshness_check.py）",
     "data_selfcheck": "数据自检",
     "ops_backup": "运维备份",
     "ops_alert_check": "巡检告警",

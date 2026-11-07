@@ -12,6 +12,9 @@ import sys
 import time
 import pickle
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/tmp')
@@ -85,8 +88,8 @@ def _isolate_cost_connections():
             if hasattr(m, attr):
                 try:
                     setattr(m, attr, lambda: eng)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     cost_mod._engine = lambda: eng
     if hasattr(cost_mod, 'get_engine'):
         cost_mod.get_engine = lambda: eng

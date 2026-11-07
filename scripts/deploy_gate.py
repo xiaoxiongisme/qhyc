@@ -22,6 +22,15 @@ import urllib.request
 
 from sqlalchemy import text
 
+# --- 2026-11-06 修：补仓库根到 sys.path，使 `python scripts/xxx.py` 可直接 import app.*
+#     此前容器 Dockerfile 未设 PYTHONPATH、脚本自身也无引导 →
+#     ModuleNotFoundError: No module named 'app'（tests/ 由根 conftest.py 兜底，不受影响）。
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / 'app').is_dir())))
+
 from app.core.db import session_scope
 
 BAR = "=" * 72
@@ -51,8 +60,8 @@ def _brake_switch_on() -> bool:
             )).scalar()
         if v is not None:
             return bool(v)
-    except Exception:  # noqa: BLE001 —— 表缺失/无 DB 时回退 env
-        pass
+    except Exception as exc:  # noqa: BLE001 —— 表缺失/无 DB 时回退 env
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return os.getenv("PORTFOLIO_BRAKE_ENABLED") in ("1", "true", "True")
 
 

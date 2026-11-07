@@ -103,6 +103,12 @@ ROUTES: dict[tuple[str, str], Route] = {
     # 60m→bar_60m 是冗余平行源，易漂移。现统一到已验证正确网格的 l1_mkt.bar_60m。
     ("hourly", "continuous"): Route("bar_60m", time_col="bucket",
                                     note="小时线未复权主连（与 60m 同源 l1_mkt.bar_60m，避免双源漂移）"),
+    # 2026-11-07 P0-3：补齐「同一张表的后复权维度」。
+    # 回测/实盘统一真源 = l1_mkt.bar_60m；back_adj 是它叠加 roll_segment 偏移后的
+    # 同一条 K 线（物化表 l2_adj.bar_60m_ba，恒等式 ba.close - l1.close = adj_offset）。
+    # 严禁再引入 l0_raw.hourly_bar 这种独立采集链作为策略真源。
+    ("hourly", "back_adj"):   Route("bar_60m", time_col="bucket", adj="back",
+                                    note="小时线等差后复权（与 continuous 同一张 bar_60m）"),
     # ("hourly", "cont_adj"):   Route("fut_kline", where="freq='hourly' AND kind='cont_adj'",
     #                                 time_col="trade_datetime",
     #                                 note="已废弃：小时线前复权（不可达）"),
@@ -165,5 +171,11 @@ def get_route(freq: str, caliber: str) -> Route:
 
 
 def register_route(freq: str, caliber: str, route: Route) -> None:
-    """运行时扩展路由（新增数据源/新周期时使用）。"""
+    """运行时扩展路由（新增数据源/新周期时使用）。
+
+    ⚠ **已实现未接线（待接入）**（2026-11-06 巡检）：本函数当前**无任何调用方**
+      —— 路由表只能靠改代码新增（静态 ROUTES），"运行时扩展"这一能力名存实亡。
+      新增数据源时要么显式接线、要么删除该函数（避免"看起来支持扩展"）。
+      可用 ``python scripts/check_dead_code.py`` 复查。
+    """
     ROUTES[(freq, caliber)] = route

@@ -16,8 +16,9 @@
   python scripts/sync_bar15m_server.py --tables bar_15m,bar_30m,bar_60m
   python scripts/sync_bar15m_server.py --dry-run     # 只打印计划不写库
 """
-import os
 from __future__ import annotations
+
+import os
 import os, sys, argparse, io
 from datetime import timedelta
 from pathlib import Path

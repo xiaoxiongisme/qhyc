@@ -1,4 +1,7 @@
 import os, psycopg2
+import logging
+
+logger = logging.getLogger(__name__)
 
 def load_creds():
     c = dict(host="127.0.0.1", port=5432, user="futures", password="futures", dbname="futures")
@@ -14,8 +17,8 @@ def load_creds():
             elif k == "POSTGRES_USER": c["user"] = v
             elif k == "POSTGRES_DB": c["dbname"] = v
             elif k == "POSTGRES_PORT": c["port"] = int(v)
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as exc:
+        logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return c
 
 DB = load_creds()

@@ -43,11 +43,14 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-except Exception:
-    pass
+except Exception as exc:
+    logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -212,8 +215,8 @@ class CtpSession:
     def stop(self) -> None:
         try:
             self.api.Release()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
     def next_id(self) -> int:
         with self._id_lock:

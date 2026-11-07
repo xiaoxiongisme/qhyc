@@ -75,8 +75,8 @@ def fetch_market_price(session: Session, real_symbol: str, when) -> tuple[Option
         from pandas import Timestamp
         if isinstance(when, Timestamp):
             d = when.date()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     for form in contract_daily_keys(session, real_symbol):
         # ---- R10：优先**真实合约的分钟/小时级**价源（盘中防错，精度高）----
         # 库内当前 minute_bar/bar_5m/hourly_bar **全为 888 连续**、无真实合约行，

@@ -23,6 +23,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,6 +85,17 @@ REGISTRY: dict[str, StrategySpec] = {
     ),
 }
 
+#: 已接入**主信号链**的策略 key（2026-11-06 新增）。
+#:
+#: 为什么需要这张表：注册表里登记 ≠ 调度器会跑。历史上本模块只有
+#: :func:`enabled_keys`（且**生产无调用方**），于是"在注册表里加一条策略"这件事
+#: **没有任何后果** —— 又是一种「开关看似生效、实则静默空转」。本表把
+#: "是否真的接进信号链"显式化，:func:`unwired_keys` 用它对账告警。
+SIGNAL_WIRED_KEYS: frozenset[str] = frozenset({"fusion_v34"})
+
+#: 主信号扫描使用的主周期（小时线）—— 与 `settings.fusion` 的取数口径一致。
+SCAN_FREQ = "hourly"
+
 
 def register(spec: StrategySpec) -> None:
     """注册/覆盖一条策略（新增策略只需调用本函数）。"""
@@ -136,6 +150,34 @@ def params_for(key: str) -> dict:
         ov = cfg.get(key) if isinstance(cfg, dict) else None
         if isinstance(ov, dict) and isinstance(ov.get("params"), dict):
             p.update(ov["params"])
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return p
+
+
+# ---------------------------------------------------------------------------
+# ★ 2026-11-06 接线：让本模块真正参与生产调度（此前生产零调用方）
+# ---------------------------------------------------------------------------
+
+def scan_candidates(freq: str = SCAN_FREQ, cfg: Optional[dict] = None) -> list[StrategySpec]:
+    """返回参与**主信号扫描**的策略（已启用 + 主周期匹配）。
+
+    口径（与 :func:`enabled_keys` 严格一致）：
+      · 「已启用」= 注册表 ``enabled`` 且未被 config 显式关闭；
+      · 「主周期匹配」= ``spec.freq == freq``（主信号扫描走**小时线**）。
+
+    ⚠ ``magic_axis``（freq=15m）按设计**独立于融合并跑、不叠加进融合状态机**
+      （实测并联会稀释收益），故不在主信号扫描候选内 —— 这是**刻意**的，
+      不是遗漏。若将来要接入，必须先过回测闸门。
+    """
+    keys = set(enabled_keys(cfg))
+    return [s for s in all_specs() if s.freq == freq and s.key in keys]
+
+
+def unwired_keys(cfg: Optional[dict] = None) -> list[str]:
+    """已注册且已启用、但**未接入信号链**的策略 key（对账用）。
+
+    这类策略"看起来在跑、实际不产生任何信号"——属本项目重点缺陷类型
+    （开关看似生效、实则静默空转）。调用方应把它打进日志/告警。
+    """
+    return [k for k in enabled_keys(cfg) if k not in SIGNAL_WIRED_KEYS]

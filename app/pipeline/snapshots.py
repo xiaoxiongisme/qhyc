@@ -124,8 +124,8 @@ def needs_resync(src: str, dest: str) -> bool:
         if rp.exists() and _BASE_OLD in rp.read_text(encoding="utf-8", errors="replace"):
             logger.info("[pipeline] snapshot: 检测到 BASE 补丁未生效，重建快照")
             return True
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
 
     s, d = _file_index(src_p), _file_index(dest_p)
     if set(s) != set(d):
@@ -143,8 +143,8 @@ def needs_resync(src: str, dest: str) -> bool:
             if _md5_canonical_run_pipeline(rp_src) != _md5_canonical_run_pipeline(rp_dst):
                 logger.info("[pipeline] snapshot: run_pipeline.py 内容（剔除 BASE 补丁后）已变化，重建快照")
                 return True
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     return False
 
 

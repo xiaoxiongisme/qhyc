@@ -1,4 +1,4 @@
-﻿code,name,official,exchange,main_symbol,avg_oi_120d,avg_vol_120d,data_upto,mcm_src,active,archive,是否保留
+code,name,official,exchange,main_symbol,avg_oi_120d,avg_vol_120d,data_upto,mcm_src,active,archive,是否保留
 DCE.M,豆粕,豆粕,DCE,M888,4890743,1718689,2026/10/9,spot_basis,TRUE,FALSE,是
 DCE.C,玉米,黄玉米,DCE,C888,1922160,794961,2026/10/9,spot_basis,TRUE,FALSE,是
 DCE.V,PVC,聚氯乙烯,DCE,V888,1851496,1391406,2026/10/9,spot_basis,TRUE,FALSE,是

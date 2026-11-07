@@ -27,11 +27,15 @@ RUN npm run build
 # ---------- Stage 2: Python API ----------
 FROM python:3.11-slim
 
+# PYTHONPATH=/app：容器内以 `python scripts/xxx.py` 方式运行时，sys.path[0]
+#   是脚本所在目录而非仓库根，会导致 `import app` 失败
+#   （ModuleNotFoundError: No module named 'app'）。
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    TZ=Asia/Shanghai
+    TZ=Asia/Shanghai \
+    PYTHONPATH=/app
 
 # 时区与系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \

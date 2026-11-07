@@ -54,10 +54,7 @@ def load_daily_888(conn, start: date, end: date) -> dict[str, dict[date, dict]]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT symbol, trade_date, open, high, low, close, volume, oi "
-            # 2026-11-06：补入 8888 指数日线后，LIKE '%888' 会误匹配 'RB8888'
-            # （其末三位也是 888），进而生成 product='RB8' 的垃圾行。
-            # 用严格正则只取「字母 + 888」主连代码。
-            "FROM daily_bar WHERE symbol ~ '^[A-Za-z]+888$' AND trade_date BETWEEN %s AND %s ORDER BY symbol, trade_date",
+            "FROM daily_bar WHERE symbol LIKE '%%888' AND trade_date BETWEEN %s AND %s ORDER BY symbol, trade_date",
             (start, end),
         )
         for sym, td, o, h, l, c, v, oi in cur.fetchall():

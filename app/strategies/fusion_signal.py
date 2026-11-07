@@ -744,7 +744,24 @@ def _f(v) -> float | None:
 # 数据读取：从 hourly_bar 取最近 N 根小时线
 # -----------------------------------------------------
 def _read_src(session, symbol: str, limit: int, src: str) -> pd.DataFrame | None:
-    """按单一 src 读取某品种小时线，返回按时间升序的 DataFrame。"""
+    """按单一 src 读取某品种小时线，返回按时间升序的 DataFrame。
+
+    2026-11-07 P0-3：统一取数真源。策略 K 线**只能**来自 l1_mkt.bar_60m
+    或其后复权维度 l2_adj.bar_60m_ba（同一条 K 线 + 常量偏移），两端（回测 /
+    实盘）必须走同一入口 app.data.fusion_kline.read_fusion_kline。
+
+    保留 HourlyBar 分支仅为兼容历史 src 参数，生产配置不再指向它；
+    l0_raw.hourly_bar 是 akshare 独立直拉链，与 bar_60m 不是同一条 K 线，
+    已实测同桶 close 差 ±2 点、volume 差最高 100+ 倍，禁止作为策略真源。
+    """
+    from app.data.fusion_kline import read_fusion_kline
+
+    if src in ("bar_60m", "bar_60m_ba", "back_adj", "continuous"):
+        return read_fusion_kline(session, symbol, limit, src=src,
+                                 context="live")
+    logger.warning(
+        f"[fusion] src={src!r} 为已废弃的 l0_raw.hourly_bar 直拉源；"
+        f"策略真源应统一到 l1_mkt.bar_60m（见 P0-3）")
     rows = (
         session.execute(
             select(
@@ -778,21 +795,27 @@ def read_hourly_bars(session, symbol: str, limit: int) -> pd.DataFrame | None:
     不同的 K 同时喂进 EMA/ATR，导致周期参数被砍半、信号与回测/图表口径不一致
     （实测 09-14 单日读进 11 根 K，而真实只有 6 根）。
 
-    口径由 fusion.hourly_src 控制（默认 akshare，即 akshare 新浪主连分时 futures_zh_minute_sina，对应图表「收盘时刻」标签的 K）。
-    仅当主源根数不足 min_bars（数据源故障期）才回退到另一源，并在日志告警——
-    正常生产应恒为单源；故障期混用是无奈兜底，非预期状态。
+    P0-3（2026-11-07）：口径由 fusion.kline_src 控制，默认 "bar_60m"，
+    即 l1_mkt.bar_60m 原始维度；可选 "bar_60m_ba" 为同一条 K 线的后复权维度。
+    回测（app/backtest/fusion_backtest.py）读同一个配置、走同一个取数入口
+    app.data.fusion_kline.read_fusion_kline，两端桶集合与 OHLC 逐位一致。
+    旧的 akshare/csv 双源兜底已删除：l0_raw.hourly_bar 是独立采集链，
+    与 bar_60m 不是同一条 K，混用会造成实盘与回测分叉。
     """
     from app.core.config import get_settings
     cfg = get_settings().fusion
-    src = cfg.hourly_src
+    # 2026-11-07 P0-3：口径改由 fusion.kline_src 统一决定，回测与实盘同源同维度。
+    # 旧兜底回退 src="csv"：库中 l0_raw.hourly_bar 只有 akshare / agg_1m 两个 src，
+    # 根本没有 csv → 兜底恒返回 None，是死代码；且回退到另一套采集链会重新引入
+    # 「回测与实盘不是同一条 K 线」。同表另一维度由 LEFT JOIN 产生、行数恒相同，
+    # 回退同样无意义。故此处只告警、不混源，由上游按 bars<min 正常处理。
+    src = getattr(cfg, "kline_src", "bar_60m")
     df = _read_src(session, symbol, limit, src)
     if df is None or len(df) < cfg.min_bars:
-        other = "csv" if src == "akshare" else "akshare"
         logger.warning(
-            f"[fusion] 主源 src={src} 仅 {len(df) if df is not None else 0} 根"
-            f"(<{cfg.min_bars})，回退 src={other}（故障期兜底，正常应恒为单源）"
+            f"[fusion] 唯一真源 {src} 仅 {len(df) if df is not None else 0} 根"
+            f"(<{cfg.min_bars})；按 P0-3 单一真源铁律不回退其它源，上游将报 bars<min"
         )
-        df = _read_src(session, symbol, limit, other)
     return df
 
 

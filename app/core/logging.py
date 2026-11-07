@@ -28,8 +28,8 @@ def setup_logging() -> None:
         if hasattr(stream, "reconfigure"):
             try:
                 stream.reconfigure(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     settings = get_settings()
     level = settings.log_level.upper()
 

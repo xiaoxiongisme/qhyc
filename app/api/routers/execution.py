@@ -71,6 +71,19 @@ def submit_order(req: SubmitOrderReq) -> dict:
     """落订单（幂等）并可选下发到网关。
 
     幂等：同 idempotency_key 重复调用返回**同一 order id**，绝不产生第二单。
+
+    ★ 2026-11-06 新增**第二道幂等闸**（跨天场景）
+      ----------------------------------------------------
+      幂等键含**交易日**（`{signal_id}:{real_symbol}:{action}:{yyyymmdd}`），
+      故同一 signal_id **跨天**不再幂等 —— 而"同一个信号"跨天仍只应有一单
+      （例：止损单 signal_id 由品种+价格生成，同价跨天会再次平仓）。
+      现：调用方**显式**给了 ``signal_id`` 时，下单前按
+      ``(account, real_symbol, signal_id)`` 查一次**未终态**订单；命中即
+      **拒新单**并返回既有单（只查不改，绝不改动既有订单）。
+
+      ⚠ 仅对**显式** signal_id 生效：缺省 signal_id 是自动生成的
+        ``MANUAL:{real_symbol}``，那不是"调用方声明的同一个信号"，
+        若也拦跨天，运维第二天想再下一单会被误拒。
     """
     from datetime import date
 
@@ -78,8 +91,24 @@ def submit_order(req: SubmitOrderReq) -> dict:
 
     _require_enabled()
     cfg = get_settings().execution
+    account = req.account if req.account is not None else cfg.account
+    channel = req.channel or cfg.channel
     key = persistence.build_idempotency_key(
         req.signal_id or f"MANUAL:{req.real_symbol}", req.real_symbol, req.action, date.today())
+    if req.signal_id:
+        dup = persistence.find_order_by_signal(
+            account, req.real_symbol, req.signal_id, only_unsettled=True)
+        if dup is not None:
+            return {
+                "order_id": dup["id"],
+                "idempotency_key": dup["idempotency_key"],
+                "state": "DUPLICATE_BLOCKED",
+                "reason": (
+                    f"同 (account={account}, real_symbol={req.real_symbol}, "
+                    f"signal_id={req.signal_id}) 已有未终态订单 id={dup['id']} "
+                    f"status={dup['status']}（幂等键含交易日，跨天不再幂等）"
+                    f"→ 本次**未落新单**（既有订单未被修改）"),
+            }
     order = {
         "signal_id": req.signal_id or f"MANUAL:{req.real_symbol}",
         "symbol_continuous": req.symbol_continuous or f"{req.real_symbol[:-4]}888",
@@ -92,8 +121,8 @@ def submit_order(req: SubmitOrderReq) -> dict:
         "lots": req.lots,
         "multiplier": req.multiplier,
         "notional": (req.price * req.lots * req.multiplier) if req.multiplier else None,
-        "channel": req.channel or cfg.channel,
-        "account": req.account if req.account is not None else cfg.account,
+        "channel": channel,
+        "account": account,
         "idempotency_key": key,
     }
     order_id = persistence.save_order(order)
@@ -101,6 +130,37 @@ def submit_order(req: SubmitOrderReq) -> dict:
         return {"order_id": order_id, "state": "DRY_RUN", "idempotency_key": key}
     res = execution_runtime.submit_order(order_id)
     return {"order_id": order_id, "idempotency_key": key, **res}
+
+
+@router.get("/orders/by-key", tags=["execution"])
+def lookup_order_by_key(key: str) -> dict:
+    """按**幂等键**查单（只读）。
+
+    ★ 2026-11-06 接线：`persistence.find_order_by_key` 此前**无任何调用方**（死代码），
+      "按幂等键查单"这个排查重复下单/丢单的刚需实际不可用。现开放为只读端点。
+    """
+    from app.execution import persistence
+
+    row = persistence.find_order_by_key(key)
+    return {"found": row is not None, "order": row}
+
+
+@router.get("/orders/by-signal", tags=["execution"])
+def lookup_order_by_signal(
+    real_symbol: str,
+    signal_id: str,
+    account: Optional[str] = None,
+    unsettled_only: bool = False,
+) -> dict:
+    """按 ``(account, real_symbol, signal_id)`` 查最近一笔订单（只读）。
+
+    幂等键含交易日 → 跨天不再幂等；本端点给出**跨天**维度的查单能力。
+    """
+    from app.execution import persistence
+
+    row = persistence.find_order_by_signal(
+        account, real_symbol, signal_id, only_unsettled=unsettled_only)
+    return {"found": row is not None, "order": row}
 
 
 @router.get("/orders", tags=["execution"])

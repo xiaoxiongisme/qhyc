@@ -138,6 +138,6 @@ def recover_on_boot() -> int:
             logger.error(f"[exec] recover_on_boot 订单 {oid} 回查失败：{e!r}")
             try:
                 persistence.update_status(oid, "ERROR", error=f"重启回查失败：{e!r}")
-            except Exception:  # noqa: BLE001 —— 状态已终态，忽略
-                pass
+            except Exception as exc:  # noqa: BLE001 —— 状态已终态，忽略
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     return n

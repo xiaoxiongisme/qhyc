@@ -115,31 +115,39 @@ def symbol_ingest_lock(symbol: str):
         try:
             yield got
         finally:
-            if not got:
-                return
-            try:
-                ok = bool(lock_conn.execute(
-                    text("SELECT pg_advisory_unlock(hashtext(:s))"), {"s": key}
-                ).scalar())
-                if not ok:
-                    # 持锁连接上解锁返回 false 只可能是代码路径被改坏——fail-loud
+            # ★ 2026-11-06 修（静默吞异常）：原为 `if not got: return`。
+            #   finally 块内的 return 对 @contextmanager 是致命的：`gen.throw()`
+            #   会抛 StopIteration → `__exit__` 返回 True → **with 体内的异常被吞**。
+            #   影响链：orchestrator.ingest_symbol 在 got=False（锁被他人持有）时，
+            #   若 `ingest_lock_holder()` 抛错（DB 故障），异常被静默吞掉 →
+            #   函数隐式返回 None（而非 IngestReport）→ ingest_all 结果混入 None →
+            #   下游访问 r.error 变成误导性的 AttributeError: 'NoneType'，
+            #   **真正的 DB 根因完全消失**（同「静默失败」族教训）。
+            #   改为「未持锁则不做任何解锁动作」，异常正常向上抛。
+            if got:
+                try:
+                    ok = bool(lock_conn.execute(
+                        text("SELECT pg_advisory_unlock(hashtext(:s))"), {"s": key}
+                    ).scalar())
+                    if not ok:
+                        # 持锁连接上解锁返回 false 只可能是代码路径被改坏——fail-loud
+                        logger.error(
+                            f"[lock] {symbol} 显式解锁返回 false（持锁连接异常），"
+                            f"尝试 pg_advisory_unlock_all() 兜底"
+                        )
+                        lock_conn.execute(text("SELECT pg_advisory_unlock_all()"))
+                except Exception as e:  # noqa: BLE001 —— 吞异常会导致锁永久泄漏
                     logger.error(
-                        f"[lock] {symbol} 显式解锁返回 false（持锁连接异常），"
+                        f"[lock] {symbol} 显式解锁异常（{type(e).__name__}: {e}）；"
                         f"尝试 pg_advisory_unlock_all() 兜底"
                     )
-                    lock_conn.execute(text("SELECT pg_advisory_unlock_all()"))
-            except Exception as e:  # noqa: BLE001 —— 吞异常会导致锁永久泄漏
-                logger.error(
-                    f"[lock] {symbol} 显式解锁异常（{type(e).__name__}: {e}）；"
-                    f"尝试 pg_advisory_unlock_all() 兜底"
-                )
-                try:
-                    lock_conn.execute(text("SELECT pg_advisory_unlock_all()"))
-                except Exception as e2:  # noqa: BLE001
-                    logger.error(
-                        f"[lock] {symbol} unlock_all 亦失败（{e2}）；"
-                        f"连接关闭时 PG 将自动释放会话级锁"
-                    )
+                    try:
+                        lock_conn.execute(text("SELECT pg_advisory_unlock_all()"))
+                    except Exception as e2:  # noqa: BLE001
+                        logger.error(
+                            f"[lock] {symbol} unlock_all 亦失败（{e2}）；"
+                            f"连接关闭时 PG 将自动释放会话级锁"
+                        )
 
 
 def ingest_lock_holder(symbol: str) -> tuple[int, str, str] | None:

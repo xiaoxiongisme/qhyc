@@ -174,8 +174,8 @@ def pick_browser() -> str | None:
             hits = sorted(glob.glob(os.path.join(root, "chromium-*", "chrome-linux64", "chrome")))
             if hits:
                 return hits[-1]
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     return None
 
 
@@ -344,8 +344,8 @@ def _safe_goto(page, url: str, wait_ms: int = 3500, tries: int = 3):
         except Exception:  # noqa: BLE001
             try:
                 page.wait_for_timeout(1500)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     return None
 
 
@@ -362,8 +362,8 @@ def _safe_fetch(page, trade_date: str, tries: int = 3):
             # 典型：Execution context was destroyed（挑战页在自刷新）
             try:
                 page.wait_for_timeout(2000)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     return None, b""
 
 
@@ -402,8 +402,8 @@ def fetch_zips(dates: list[dt.date], *, headless: bool = True,
                 _log(f"  {ds} 第{attempt}次未通过（page={pst} api={status}），重试…")
                 try:
                     page.wait_for_timeout(1500)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
 
             if raw[:2] == b"PK":
                 got[ds] = raw

@@ -6,6 +6,9 @@ from decimal import Decimal
 from typing import Iterable
 
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 列名映射：akshare 原始列 -> 库内列
 AK_DAILY_COL_MAP = {
@@ -119,8 +122,8 @@ def _to_decimal(v) -> Decimal | None:
     try:
         if pd.isna(v):
             return None
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     try:
         return Decimal(str(v))
     except Exception:
@@ -133,8 +136,8 @@ def _to_int(v) -> int | None:
     try:
         if pd.isna(v):
             return None
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     try:
         return int(v)
     except Exception:

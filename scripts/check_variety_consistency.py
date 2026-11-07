@@ -50,8 +50,18 @@ def load_dim_variety() -> dict:
     return out
 
 
-def find_divergences(db: dict) -> list[str]:
+def find_divergences(db: dict) -> tuple[list[str], list[str]]:
+    """返回 (真分歧, 提示信息)。
+
+    ★ 2026-11-06 修（报警噪音淹没真信号）：
+      原实现把「封禁品种已不在 dim_variety」也计为分歧 → 实测 24 条。
+      但封禁清单的语义就是「这些品种已被排除」，它们**理应**不在 active
+      字典里。把正常状态报成分歧，会让真正的乘数/交易所分歧被噪音淹没。
+      修正后：不在字典 = 正常（记入提示）；在字典且 is_active=true = 真分歧。
+      同理，inventory em 代号缺失本就「厂商能力映射可缺」，改记入提示。
+    """
     divergences: list[str] = []
+    notes: list[str] = []
 
     # 1) config.main_contracts vs dim_variety
     for mc in get_settings().main_contracts:
@@ -80,8 +90,8 @@ def find_divergences(db: dict) -> list[str]:
     for code in sorted(BLOCKED_VARIETY_CODES):
         row = db.get(code)
         if row is None:
-            divergences.append(
-                f"[blocked] {code} 不在 dim_variety（封禁清单引用了库里没有的品种）")
+            # 正常状态：封禁品种已被移出 active 字典（不是分歧）
+            notes.append(f"[blocked] {code} 已不在 dim_variety（封禁生效，正常）")
         elif row["is_active"]:
             divergences.append(
                 f"[blocked] {code} 在封禁清单但 dim_variety.is_active=true"
@@ -90,9 +100,9 @@ def find_divergences(db: dict) -> list[str]:
     # 3) inventory em 代号 vs dim_variety（存在性；厂商能力映射本就可缺，仅提示缺失）
     for product in sorted(PRODUCT_TO_EM_SYM):
         if product.upper() not in db:
-            divergences.append(f"[inventory] em 代号 {product} 不在 dim_variety")
+            notes.append(f"[inventory] em 代号 {product} 不在 dim_variety（能力映射可缺）")
 
-    return divergences
+    return divergences, notes
 
 
 def main() -> int:
@@ -112,18 +122,23 @@ def main() -> int:
         print("[consistency] dim_variety 为空 —— 先播种品种字典")
         return 2
 
-    divergences = find_divergences(db)
+    divergences, notes = find_divergences(db)
     print(f"[consistency] dim_variety={len(db)} 品种；"
           f"config.main_contracts={len(get_settings().main_contracts)}；"
           f"blocked={len(BLOCKED_VARIETY_CODES)}；"
           f"inventory_em={len(PRODUCT_TO_EM_SYM)}")
-    if not divergences:
-        print("[consistency] ✅ 代码内来源与 dim_variety 一致，无分歧")
-        return 0
-    print(f"[consistency] ⚠️ 发现 {len(divergences)} 处分歧：")
-    for d in divergences:
-        print("   -", d)
-    return 1 if args.strict else 0
+    if divergences:
+        print(f"[consistency] ⚠️ 发现 {len(divergences)} 处真分歧：")
+        for d in divergences:
+            print("   -", d)
+    else:
+        print("[consistency] ✅ 代码内来源与 dim_variety 一致，无真分歧")
+    if notes:
+        # 提示不计入分歧、不影响退出码（仅供人工复查）
+        print(f"[consistency] ℹ️ {len(notes)} 条提示（不计分歧）：")
+        for n in notes:
+            print("   -", n)
+    return 1 if (divergences and args.strict) else 0
 
 
 if __name__ == "__main__":

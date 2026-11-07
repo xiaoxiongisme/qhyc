@@ -12,7 +12,13 @@
   P4 entry_gate_profile=off 时 evaluate_symbol 与旧路径终态一致（零影响）
 """
 import sys
-sys.path.insert(0, "/tmp/eg_run")
+from pathlib import Path
+
+# ★ 2026-11-06 修：原为 sys.path.insert(0, "/tmp/eg_run") —— 硬编码 Linux 临时路径。
+#   在本仓（qhyc-dev）运行时，会把 /tmp/eg_run 的**旧副本**置于 import 路径之前
+#   → 静默读到错误代码/数据（比直接报错更危险）；Windows 下该路径不存在直接失败。
+#   改为按脚本位置推导仓库根，保证「跑的永远是本仓代码」。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import pandas as pd

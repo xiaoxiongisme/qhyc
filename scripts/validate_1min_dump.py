@@ -37,6 +37,9 @@ import re
 import sys
 import zipfile
 from datetime import datetime, timedelta, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -192,8 +195,8 @@ def _db_creds():
                     creds["dbname"] = v
                 elif k == "POSTGRES_PORT":
                     creds["port"] = int(v)
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as exc:
+        logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return creds
 
 

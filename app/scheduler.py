@@ -81,8 +81,8 @@ def _switch_on(switch_key: str, env_name: str | None = None, default: bool = Fal
                 {"k": switch_key}).scalar()
             if row is not None:
                 return bool(row)
-    except Exception:  # noqa: BLE001  表不存在 / 连接失败 → 回退
-        pass
+    except Exception as exc:  # noqa: BLE001  表不存在 / 连接失败 → 回退
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     if env_name is not None:
         return os.getenv(env_name, "1" if default else "0") == "1"
     return default
@@ -236,48 +236,6 @@ def _fmt_num(x, nd: int = 1) -> str:
     except (TypeError, ValueError):
         return "-"
     return f"{v:,.{nd}f}"
-
-
-_MULT_CACHE: dict[str, float | None] = {}
-_MULT_WARNED: set[str] = set()
-
-
-def _multiplier(sym: str) -> float | None:
-    """合约乘数唯一真源=dim_variety；缺失返回 None，绝不用 1.0 估算盈亏。"""
-    code = str(sym or "").rstrip("0123456789").upper()
-    if not code:
-        return None
-    if code in _MULT_CACHE:
-        return _MULT_CACHE[code]
-    mult = None
-    try:
-        from app.data.barstore import variety_spec
-        mult = float(variety_spec(code)["multiplier"])
-    except Exception as e:  # noqa: BLE001  推送展示失败不阻断交易信号
-        if code not in _MULT_WARNED:
-            logger.warning("[scheduler] 取 {} 的合约乘数失败，盈亏金额不估算: {}", code, e)
-            _MULT_WARNED.add(code)
-    _MULT_CACHE[code] = mult
-    return mult
-
-
-def _pnl_yuan(sym: str, side: str, entry, px, lots) -> float | None:
-    """按信号价估算毛盈亏（元），未含手续费/滑点，不代表实际成交账户。"""
-    if side not in ("LONG", "SHORT") or entry is None or px is None:
-        return None
-    mult = _multiplier(sym)
-    if mult is None:
-        return None
-    try:
-        sign = 1.0 if side == "LONG" else -1.0
-        n = int(lots) if lots is not None else 1
-        return sign * (float(px) - float(entry)) * mult * n
-    except (TypeError, ValueError):
-        return None
-
-
-def _fmt_money(x) -> str:
-    return "-" if x is None else f"{float(x):+,.0f}元"
 
 
 def _px_of(sym: str, val) -> str:
@@ -581,8 +539,6 @@ def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
             "entry": entry,
             "px": px,
             "pnl": pnl,
-            "pnl_yuan": _pnl_yuan(sym, side, entry, px,
-                                  int(r["lots"]) if r.get("lots") is not None else 1),
             "stop": r.get("cur_stop"),
             "be_trigger": r.get("be_trigger"),
             "be_done": bool(r.get("be_done")),
@@ -609,8 +565,7 @@ def _row_line(r: dict, show_levels: bool) -> str:
     sym = r["symbol"]
     pnl = f"{r['pnl']:+.1%}" if r["pnl"] is not None else "-"
     line = (f"{r['icon']} {r['label']} "
-            f"{_px_of(sym, r['entry'])}→{_px_of(sym, r['px'])} "
-            f"{pnl} / {_fmt_money(r.get('pnl_yuan'))}")
+            f"{_px_of(sym, r['entry'])}→{_px_of(sym, r['px'])} {pnl}")
     # 同 C1：0 是有意义的「清仓」，不能被 `or 1` 吞掉
     if (int(r["lots"]) if r.get("lots") is not None else 1) > 1:
         line += f" ×{int(r['lots'])}手"          # P1 加码：标明已加到手数
@@ -649,11 +604,6 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
     lines = [f"## {head} {now:%m-%d %H:%M}", ""]
     if rows:
         seg = f"持仓 **{len(rows)}** 个（多{n_long} 空{n_short}）"
-        pnl_values = [r.get("pnl_yuan") for r in rows if r.get("pnl_yuan") is not None]
-        if pnl_values:
-            seg += f" ｜ 估算浮盈合计 **{_fmt_money(sum(pnl_values))}**"
-            if len(pnl_values) < len(rows):
-                seg += f"（{len(pnl_values)}/{len(rows)}个可估算）"
         if data_asof:
             seg += f" ｜ 数据截至 {data_asof}"
         lines.append(seg)
@@ -674,11 +624,6 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
                 entry_px = sig.get("new_entry") or sig.get("close")
                 line = f"{icon} {sig['label']}　{a} @ {_px_of(sym, entry_px)}"
                 lines.append(line)
-                if sig.get("pnl_yuan") is not None:
-                    pnl_pct = f"{sig['pnl']:+.1%}" if sig.get("pnl") is not None else "-"
-                    lines.append(
-                        f"　　平仓估算盈亏 **{_fmt_money(sig['pnl_yuan'])}**（{pnl_pct}，未含费用）"
-                    )
                 if sig.get("levels"):
                     lv = sig["levels"]
                     lines.append(
@@ -726,7 +671,6 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
             lines.append(f"…另有 {len(rows) - max_rows} 个未列")
         lines.append("")
         lines.append("> ⛔止损=入场∓2×ATR 与吊灯止损取更紧者；🎯触发保本后止损提到成本价。")
-        lines.append("> 金额按信号价×合约乘数×手数估算，未含手续费/滑点，非实际成交账户盈亏。")
     elif not signals and not changes:
         lines.append("当前无持仓、无信号。")
 
@@ -813,6 +757,10 @@ def _collect_hourly_settled(s, f) -> None:
     便于长期观测这个"数据源定稿漂移"的规模。
     """
     from app.ingest.hourly_collector import HourlyCollector
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    if not is_hourly_collection_allowed():
+        logger.info("[scheduler] B5 gate: 非交易日/非交易时段，跳过 hourly 定稿复核采集")
+        return
 
     hc = HourlyCollector(s)
     hc.collect_all(data_length=800)
@@ -853,8 +801,57 @@ def _collect_hourly_settled(s, f) -> None:
         logger.info(f"[fusion] 定稿复核通过：{mx:%Y-%m-%d %H:%M} 首采值即为定稿值")
 
 
+def _fusion_params(base, key: str = "fusion_v34"):
+    """把**策略注册表/config** 的 params 覆盖落到 FusionConfig 上。
+
+    ★ 2026-11-06 接线（此前 `params_for` 生产零调用方，注册表参数无处可施）。
+
+    口径（保证**默认逐位不变**）：
+      · `params_for(key)` 默认返回 ``{}``（注册表 default_params 为空 + config 无
+        `strategies` 段）→ 原样返回 `base`，生产行为与改动前**完全一致**；
+      · 只有当 config 显式写了 ``strategies.<key>.params`` 才会覆盖；
+      · 覆盖项必须是 FusionConfig **已有字段**（未知字段丢弃并记 error，
+        避免 pydantic 静默接受拼错的参数名）；
+      · 任何**非默认值**的覆盖都记 warning：融合参数是回测定稿口径，
+        线上偏离必须由人确认已过回测闸门（"改配置即调参"≠"可以随便改"）。
+    """
+    from app.strategies.registry import params_for
+
+    overrides = params_for(key)
+    if not overrides:
+        return base
+    known = set()
+    try:
+        known = set(type(base).model_fields.keys())  # pydantic v2
+    except Exception:  # noqa: BLE001 —— 非 pydantic 对象则退回 dir()
+        known = {a for a in dir(base) if not a.startswith("_")}
+    unknown = sorted(k for k in overrides if k not in known)
+    if unknown:
+        logger.error(
+            "[scheduler] strategies.%s.params 含 FusionConfig **不存在**的字段 %s"
+            " → 已丢弃（防拼错参数名被静默忽略）", key, unknown)
+        overrides = {k: v for k, v in overrides.items() if k in known}
+    if not overrides:
+        return base
+    changed = {k: {"now": getattr(base, k, None), "new": v}
+               for k, v in overrides.items() if getattr(base, k, None) != v}
+    if changed:
+        logger.warning(
+            "[scheduler] 融合参数被 config 覆盖：%s —— **已偏离回测定稿口径**，"
+            "须自行确认已过回测闸门", changed)
+    try:
+        return base.model_copy(update=overrides)
+    except Exception:  # noqa: BLE001 —— 非 pydantic 对象则逐属性兜底
+        for k, v in overrides.items():
+            try:
+                setattr(base, k, v)
+            except Exception:  # noqa: BLE001
+                logger.warning("[scheduler] 参数 %s 覆盖失败（不可写）", k)
+        return base
+
+
 def _fusion_scan_job() -> None:
-    """融合策略扫描（每个整点后 :01/:31 触发，即小时线落盘后再生成信号/推送）。
+    """融合策略扫描（每个整点后 :05/:35 触发，即小时线落盘后再生成信号/推送）。
 
     推送形态（2026-09-15 定稿）：
       - 🚨 新信号：开仓 / 平仓 / 反手即时推，附 ⛔止损位 / 🎯保本触发价
@@ -893,7 +890,30 @@ def _fusion_scan_job() -> None:
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[scheduler] hourly collect failed (沿用已有数据): {e}")
             # 2) 评估全部品种（含入场价/入场ATR/止损位等明细）
-            results = evaluate_all(s, settings.main_contracts, f)
+            #    ★ 2026-11-06：改为**策略注册表驱动**。此前这里硬编码调 evaluate_all，
+            #      注册表里的策略与"实际跑的东西"毫无关联 —— all_specs/params_for/
+            #      enabled_keys 三个函数**生产零调用方**，注册表形同虚设。
+            #      现由注册表决定"本轮跑哪些策略 + 用什么参数"：
+            #        · fusion_v34 不在候选 → 本轮**不产出融合信号**（明写日志，不静默）；
+            #        · 有"已启用但未接入信号链"的策略 → 记 warning 点名（不静默空转）；
+            #        · 参数默认逐位不变（params_for 默认返回空 dict），仅当 config 显式
+            #          写了 strategies.<key>.params 才会覆盖，并**必须**自行确认已过回测闸门。
+            from app.strategies import registry as _registry
+
+            _scan_specs = _registry.scan_candidates()
+            _scan_keys = [s.key for s in _scan_specs]
+            if "fusion_v34" not in _scan_keys:
+                logger.warning(
+                    "[scheduler] fusion scan 跳过：注册表未启用/未匹配主周期的 fusion_v34"
+                    "（候选=%s）→ 本轮不产出融合信号", _scan_keys)
+                return
+            _unwired = _registry.unwired_keys()
+            if _unwired:
+                logger.warning(
+                    "[scheduler] 注册表存在已启用但**未接入信号链**的策略：%s"
+                    "（仅登记，不产生任何信号——需显式接线）", _unwired)
+            results = evaluate_all(s, settings.main_contracts,
+                                   _fusion_params(settings.fusion, "fusion_v34"))
 
             # 2.5) V5 组合回撤熔断（Phase 5）：把「期望手数」按当前回撤缩放后再落库。
             #      enabled=False 时恒等变换（双向等价），无 portfolio_equity 时亦恒等 —— 不阻断决策链。
@@ -972,9 +992,6 @@ def _fusion_scan_job() -> None:
                         elif db == "SHORT":
                             pnl = (db_entry - px) / db_entry
                     new_entry = r.get("entry_px") if eng != "FLAT" else None
-                    old_lots = int(old.lots) if (old is not None and old.lots is not None) else 1
-                    pnl_yuan = (_pnl_yuan(sym, db, db_entry, px, old_lots)
-                                if db != "FLAT" else None)
                     upsert_position(s, sym, eng, entry_price=new_entry or px, entry_at=now,
                                     lots=r.get("lots"))
                     sig = {
@@ -986,8 +1003,6 @@ def _fusion_scan_job() -> None:
                         "entry": db_entry,
                         "new_entry": new_entry,
                         "pnl": pnl,
-                        "pnl_yuan": pnl_yuan,
-                        "lots": old_lots,
                         "to": eng,
                     }
                     if (f.push_stop_levels and eng != "FLAT"
@@ -1033,10 +1048,6 @@ def _fusion_scan_job() -> None:
                                     "old": lots_prev, "new": lots_now,
                                     "avg": (float(r["entry_px"]) if r.get("entry_px") else None),
                                     "stop": (float(cur) if cur is not None else None)})
-                    # 同步保存加码后的加权均价，后续平仓金额才与引擎成本口径一致；
-                    # entry_at 保持原值，避免影响 max_hold_days 持仓时长。
-                    upsert_position(s, sym, eng, entry_price=r.get("entry_px"),
-                                    entry_at=old.entry_at, lots=lots_now)
                     set_push_state(s, sym,
                                    last_stop=(float(cur) if cur is not None else prev_stop),
                                    last_be_done=be_now, lots=lots_now, pushed_at=now_utc)
@@ -1121,7 +1132,7 @@ def _fusion_scan_job() -> None:
             if last_push is not None:
                 lp = last_push if last_push.tzinfo else last_push.replace(tzinfo=timezone.utc)
                 gap_ok = (now_utc - lp).total_seconds() >= f.heartbeat_interval_min * 60
-            # 作业已固定在整点后 :01/:31 触发，心跳每次扫描均可触发，
+            # 作业已固定在整点后 :05/:35 触发，心跳每次扫描均可触发，
             # 由 heartbeat_interval_min 控制最小间隔（gap_ok）。
             due_heartbeat = bool(f.heartbeat and rows and gap_ok)
             if signals:
@@ -1546,18 +1557,18 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info("[scheduler] registered cron day1 06:30 (weights_monthly_update)")
 
-    # 融合策略实时信号扫描：每个整点后 :01/:31 触发（小时线落盘后再生成信号/推送，
+    # 融合策略实时信号扫描：每个整点后 :05/:35 触发（小时线落盘后再生成信号/推送，
     # 与每小时 :00 的 hourly_collect 错开，避免重叠；与每日三次 ingest 并行，互不影响）
     if settings.fusion.enabled:
         sched.add_job(
             _fusion_scan_job,
-            trigger=CronTrigger(minute="1,31", timezone=settings.env.TZ),
+            trigger=CronTrigger(minute="5,35", timezone=settings.env.TZ),
             id="fusion_scan",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
         )
-        logger.info("[scheduler] registered fusion_scan at :01/:31 (post hourly collect)")
+        logger.info("[scheduler] registered fusion_scan at :05/:35 (post hourly collect)")
 
     # 复权主连每日重算（adjust_cont_adj）已于 2026-10-04 随 fdf 模块退役停用：
     # cont_adj 不再由定时作业生成（fdf 为唯一生产者，已删）。保留 minute_bar（L0 原始）。
@@ -1724,6 +1735,71 @@ def _build_scheduler() -> BlockingScheduler:
             misfire_grace_time=3600,
         )
         logger.info("[scheduler] registered cron 16:45 (factor_ic_monitor_daily)")
+
+    # ★ 2026-11-06 新增（接线批次）：A/B/C 组因子日计算 + 会员持仓汇总。
+    #   此前 scripts/compute_factor_value.py 与 scripts/collect_member_rank_summary.py
+    #   **从未被调度** → 22 个已注册因子实测全部停在 2026-09-30。
+    #   顺序（依赖链，硬约束）：
+    #     16:20 factor_v1v6_daily（既有）
+    #     16:35 factor_value_daily   （A 组 11 因子；依赖 bar_15m，16:20 已就绪）
+    #     16:45 factor_ic_monitor_daily（既有；能看到 16:35 的 A 组产出）
+    #     17:30 rank_position（既有）
+    #     17:45 collect_member_rank_summary_daily（依赖 rank_position）
+    #     18:00 factor_value_b_daily （B 组 11 + C 组 2；依赖 17:45 的 summary）
+    if _switch_on("factor_value_enabled", "FACTOR_VALUE_ENABLED", default=True):
+        sched.add_job(
+            _factor_value_job,
+            trigger=CronTrigger(hour=16, minute=35, timezone=settings.env.TZ),
+            id="factor_value_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("[scheduler] registered cron 16:35 (factor_value_daily / A 组)")
+
+    if _switch_on("member_rank_summary_enabled", "MEMBER_RANK_SUMMARY_ENABLED",
+                  default=True):
+        sched.add_job(
+            _collect_member_rank_summary_job,
+            trigger=CronTrigger(hour=17, minute=45, timezone=settings.env.TZ),
+            id="collect_member_rank_summary_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=1800,
+        )
+        logger.info("[scheduler] registered cron 17:45 "
+                    "(collect_member_rank_summary_daily)")
+
+    if _switch_on("factor_value_enabled", "FACTOR_VALUE_ENABLED", default=True):
+        sched.add_job(
+            _factor_value_b_job,
+            trigger=CronTrigger(hour=18, minute=0, timezone=settings.env.TZ),
+            id="factor_value_b_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("[scheduler] registered cron 18:00 (factor_value_b_daily / B+C 组)")
+
+    # ★ 2026-11-07 新增：因子级新鲜度巡检 + 自动补算（依赖链末端）。
+    #   排在 19:10 collect_roll_yield 之后、20:00 pre_night 之前。
+    if _switch_on("factor_freshness_enabled", "FACTOR_FRESHNESS_ENABLED", default=True):
+        _ffh = int(os.getenv("FACTOR_FRESHNESS_CRON_HOUR", "19"))
+        _ffm = int(os.getenv("FACTOR_FRESHNESS_CRON_MINUTE", "30"))
+        sched.add_job(
+            _factor_freshness_job,
+            trigger=CronTrigger(hour=_ffh, minute=_ffm, timezone=settings.env.TZ),
+            id="factor_freshness_daily",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(f"[scheduler] registered cron {_ffh:02d}:{_ffm:02d} "
+                    f"(factor_freshness_daily / 因子级巡检+自动补算)")
 
     # ---- 数据自检（Phase 5 / 新 PRD T19，V4）--------------------------------
     # 默认关闭（SelfCheckConfig.enabled=False），由 DATA_SELFCHECK_ENABLED=1 开启；
@@ -2054,6 +2130,172 @@ def _factor_ic_monitor_job() -> None:
         logger.exception(f"[scheduler] factor_ic_monitor failed: {e}")
 
 
+def _factor_value_job() -> None:
+    """A 组因子日计算（scripts/compute_factor_value.py --groups A）。
+
+    ★ 2026-11-06 接线（此前该脚本**从未被调度**）
+      ------------------------------------------------
+      实测（2026-11-06 云端库）：factor_value 里 26 个因子中，**11 个 A 组**
+      （f_vwap_dev / f_close_loc / f_close_loc14 / f_mom_1h / f_mom_4h /
+      f_gap / f_atr_pct / f_vol_surge / f_oi_dir / f_range_comp / f_amt_conc）
+      全部停在 **2026-09-30** —— 「注册了、作业报 success、但没人算」，
+      属本项目重点缺陷类型（开关看似生效、实则静默空转）。
+
+      另一处根因：该脚本原先用 ``load_creds()``（内部硬编码 127.0.0.1），
+      在**调度容器内必然连不上库** —— 本批已改走 scripts/pgconn.py。
+
+    增量口径：默认回溯 ``FACTOR_VALUE_LOOKBACK_DAYS``（默认 30）天，UPSERT 幂等。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "compute_factor_value.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到脚本 {script}")
+        return
+    lookback = os.getenv("FACTOR_VALUE_LOOKBACK_DAYS", "45")
+    since = os.getenv("FACTOR_VALUE_SINCE") or (
+        datetime.now() - timedelta(days=int(lookback))).date().isoformat()
+    # ★ 2026-11-06 部署修正：脚本的 --until 默认值是 "2026"，而 factor_ic_scan._ymd
+    #   会把「年」展开成 2026-01-01 → SQL 变成 bucket >= <since> AND bucket < 2026-01-01
+    #   → **恒空**（A 组自 2026 年起永远 0 行，这就是它从没被调度过的第二重根因）。
+    #   显式传「明天」（含当日），不改脚本默认值（避免影响其他按「年」语义调用它的脚本）。
+    until = os.getenv("FACTOR_VALUE_UNTIL") or (
+        datetime.now() + timedelta(days=1)).date().isoformat()
+    cmd = [_sys.executable, str(script), "--groups", "A", "--since", since,
+           "--until", until]
+    logger.info(f"[scheduler] factor_value(A) start since={since}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        logger.info(f"[scheduler] factor_value(A) exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-400:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] factor_value(A) stderr={(proc.stderr or '')[-600:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] factor_value(A) timeout>3600s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] factor_value(A) failed: {e}")
+
+
+def _factor_value_b_job() -> None:
+    """B 组（基本面）+ C 组（基差时序）因子日计算。
+
+    ★ 2026-11-06 接线：B 组 11 个因子（basis_rate_z / member_net_z /
+      member_ls_z / member_trend_z / vol_concentration_z / inventory_z /
+      warehouse_receipt_z / roll_yield_z / spot_mom_z / structure_slope_z /
+      cross_rank_z）实测同样停在 2026-09-30 —— 与 A 组同因（脚本未被调度）。
+      其中 member_* / vol_concentration_* 的**唯一上游** member_position_rank_summary
+      也停在 09-30（其生产者 collect_member_rank_summary.py 从未被调度），
+      故本作业排在 17:45 的汇总作业**之后**（18:00）。
+
+    C 组为 §18.5 M6a ``basis_factors`` 派生的两个新因子（迁移 049 注册）。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "compute_factor_value.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到脚本 {script}")
+        return
+    lookback = os.getenv("FACTOR_VALUE_LOOKBACK_DAYS", "45")
+    since = os.getenv("FACTOR_VALUE_SINCE") or (
+        datetime.now() - timedelta(days=int(lookback))).date().isoformat()
+    until = os.getenv("FACTOR_VALUE_UNTIL") or (
+        datetime.now() + timedelta(days=1)).date().isoformat()
+    cmd = [_sys.executable, str(script), "--groups", "B,C", "--since", since,
+           "--until", until]
+    logger.info(f"[scheduler] factor_value(B,C) start since={since}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        logger.info(f"[scheduler] factor_value(B,C) exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-400:]}")
+        if proc.returncode != 0:
+            logger.warning(f"[scheduler] factor_value(B,C) stderr={(proc.stderr or '')[-600:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] factor_value(B,C) timeout>3600s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] factor_value(B,C) failed: {e}")
+
+
+def _collect_member_rank_summary_job() -> None:
+    """会员持仓排名汇总（member_position_rank_summary）。
+
+    ★ 2026-11-06 接线：此前**从未被调度** → 上游 summary 停更到 2026-09-30
+      （82245 行），连带 B 组 member_net_z / member_ls_z / member_trend_z /
+      vol_concentration_z 四个因子全部停更。
+
+    依赖链：rank_position（17:30，产出 member_position_rank）→ 本作业（17:45）
+      → factor_value(B,C)（18:00）。**排在上游之后**是硬约束：提前跑只会
+      拿旧数据重算一遍（幂等但无意义）。
+
+    另一处根因：该脚本原先 ``os.environ["PGPASSWORD"]``（下标取值）在容器内
+    **必然 KeyError** → 本批已改走 scripts/pgconn.py。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "collect_member_rank_summary.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到脚本 {script}")
+        return
+    cmd = [_sys.executable, str(script)]
+    logger.info("[scheduler] collect_member_rank_summary start")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        logger.info(f"[scheduler] collect_member_rank_summary exit={proc.returncode} "
+                    f"tail={(proc.stdout or '')[-400:]}")
+        if proc.returncode != 0:
+            logger.warning(
+                f"[scheduler] collect_member_rank_summary stderr={(proc.stderr or '')[-600:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] collect_member_rank_summary timeout>1800s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] collect_member_rank_summary failed: {e}")
+
+
+def _factor_freshness_job() -> None:
+    """因子级新鲜度巡检 + **自动补算**（每日 19:30）。
+
+    ★ 2026-11-07 新增（用户诉求：因子数据每天采集/调用）
+      ----------------------------------------------------
+      事故背景：`app/ops/alerting.py::_check_freshness` 是**表级**检查（只看
+      ``factor_value`` 整表的 max(trade_date)）⇒ **发现不了「某个因子停更」**。
+      实测：22 个已注册因子里 16 个停在 **2026-09-30**，而整表 max 是 11-06
+      （v1v6 的 4 个新因子在更新）⇒ **表级巡检一直显示「正常」，断更 40 天无人发现**。
+      这正是本项目「开关看似生效、实则静默空转」的又一例。
+
+    本作业做三件事：①**因子级**新鲜度（逐个 factor_registry.factor_id 查 max）
+      ②断供则**按组自动补算**（幂等 UPSERT；`f_atr_pctile` 需要 250 交易日历史，
+      补算时自动放宽到 420 自然日）③补后仍断供 → **硬告警**。
+      排在 19:10 collect_roll_yield 之后、20:00 pre_night 之前（依赖链末端）。
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "factor_freshness_check.py"
+    if not script.exists():
+        logger.error(f"[scheduler] 找不到脚本 {script}")
+        return
+    cmd = [_sys.executable, str(script)]
+    logger.info("[scheduler] factor_freshness start")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5400)
+        out = (proc.stdout or "")[-2500:]
+        logger.info(f"[scheduler] factor_freshness exit={proc.returncode}\n{out}")
+        if proc.returncode != 0:
+            # exit=1 表示「有因子仍断供」→ 脚本内部已发硬告警，这里只记日志
+            logger.warning(f"[scheduler] factor_freshness 有因子仍断供（已告警）: "
+                           f"{(proc.stderr or '')[-400:]}")
+    except subprocess.TimeoutExpired:
+        logger.warning("[scheduler] factor_freshness timeout>5400s")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] factor_freshness failed: {e}")
+
+
 def _data_selfcheck_job() -> None:
     """数据自检（T19/V4）：缺失 / 零成交 / 尾部回退 → anomaly_ticket 工单。"""
     try:
@@ -2164,20 +2406,23 @@ def _apply_portfolio_brake(session, results: list[dict]) -> list[dict]:
       "清仓"只由 dd_stop 的 scalar=0.0 触发，语义必须唯一）；
     * 任何异常都只记录并恒等返回 —— 熔断失效可以，误杀不行。
     """
-    if not _switch_on("portfolio_brake_enabled", "PORTFOLIO_BRAKE_ENABLED", default=False) or not results:
+    if not results:
         return results
     try:
         import math
 
         from app.risk.portfolio_brake import (
-            BrakeConfig, apply as _brake_apply, brake_scalar, load_equity_curve,
+            brake_scalar, load_brake_config, load_equity_curve,
         )
-        cfg = BrakeConfig(
-            enabled=True,
-            dd_warn=float(os.getenv("PORTFOLIO_BRAKE_DD_WARN", "0.15")),
-            dd_stop=float(os.getenv("PORTFOLIO_BRAKE_DD_STOP", "0.25")),
-            lookback=int(os.getenv("PORTFOLIO_BRAKE_LOOKBACK", "250")),
-        )
+        # ★ 2026-11-06 接线：改用 load_brake_config()（库内 cfg_feature_switch 优先，
+        #   env 兜底保留在函数内部），**不再**在此处自行拼 BrakeConfig。
+        #   旧写法让库内 `portfolio_brake_enabled` 的 JSON（dd_warn/dd_stop/lookback）
+        #   永远不生效 ——「配置显示可调、实际不生效」，属静默失效。
+        #   口径等价性：库内无该行 → 走 env（与旧 _switch_on 的回退分支一致）；
+        #   库内有该行 → 以库内 enabled 为准，阈值库内未给则回退 env。
+        cfg = load_brake_config(env_fallback=True)
+        if not cfg.enabled:
+            return results
         equity = load_equity_curve(session=session, lookback=cfg.lookback)
         if not equity:
             # ⚠ fail-loud：熔断已开启但**无权益曲线** → 恒等放行等于熔断失效。
@@ -2413,6 +2658,12 @@ def _hourly_job() -> None:
 
     与主连日线三档调度解耦；融合信号扫描在交易时段内另有 15 分钟尾部刷新兜底。
     """
+    # B5 (2026-11-07): 非交易日日盘 akshare 仍会返回 09:30 幽灵 K，
+    # 此处在调度入口拦截；手动补采脚本不经过本函数，不受影响。
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    if not is_hourly_collection_allowed():
+        logger.info("[scheduler] B5 gate: 非交易日/非交易时段，跳过 hourly_bar 直拉采集")
+        return
     logger.info("[scheduler] hourly collect start")
     try:
         with session_scope() as s:
@@ -2656,8 +2907,8 @@ def main() -> None:
         logger.info("[scheduler] shutdown signal received")
         try:
             sched.shutdown(wait=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _shutdown)

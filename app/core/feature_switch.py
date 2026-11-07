@@ -100,5 +100,10 @@ def list_switches(switch_group: Optional[str] = None) -> list[dict]:
 
 
 def clear_cache() -> None:
-    """测试 / 运维手动刷新缓存。"""
+    """测试 / 运维手动刷新缓存。
+
+    ⚠ **已实现未接线（待接入）**（2026-11-06 巡检）：本函数当前**无任何调用方**
+      —— 运维改库内开关后，最多仍要等 60s TTL 才生效，且**无强制刷新入口**
+      （改库 → 立即生效做不到）。可用 ``python scripts/check_dead_code.py`` 复查。
+    """
     _cache.clear()

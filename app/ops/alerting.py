@@ -139,16 +139,16 @@ def _cgroup_mem() -> tuple[int, int]:
             lim = 0
         if used:
             return used, lim
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     try:                                    # cgroup v1
         with open("/sys/fs/cgroup/memory/memory.usage_in_bytes") as f:
             used = int(f.read().strip())
         with open("/sys/fs/cgroup/memory/memory.limit_in_bytes") as f:
             lim = int(f.read().strip())
         return used, lim
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     # 回退：读取宿主机 /proc/meminfo（容器内看到的通常是宿主机内存）
     try:
         info = {}
@@ -205,8 +205,8 @@ def _check_load(cfg: AlertConfig) -> list[dict]:
             out.append({"key": "load", "level": "WARN",
                         "msg": "负载1min/核心数 = {0:.2f}（阈值 {1}）".format(
                             ratio, cfg.load_ratio)})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     return out
 
 
@@ -392,8 +392,8 @@ def check_all(session=None, cfg: AlertConfig | None = None) -> dict:
         if owns:
             try:
                 ctx.__exit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
 
     alerts = []
     for f in findings:

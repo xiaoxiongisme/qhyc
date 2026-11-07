@@ -18,9 +18,44 @@ from typing import Any
 from sqlalchemy import text
 
 from app.core.db import session_scope
+from app.core.logging import logger
 
 #: 幂等键格式：同一信号 + 同一真实合约 + 同一动作 + 同一交易日 = 只允许一单
 IDEMPOTENCY_FMT = "{signal_id}:{real_symbol}:{action}:{yyyymmdd}"
+
+#: 撞键时的**作用域扩展键**（仅在同键分属不同账户/通道时启用）。
+#:
+#: ★ 2026-11-06 新增。根因：:data:`IDEMPOTENCY_FMT` **不含 account/channel**，
+#:   而 UNIQUE(idempotency_key) 是全局唯一 → 同一 signal_id 在**不同账户**
+#:   （如 SIM 模拟盘 + REAL 实盘）下会撞成同一把键。于是第二个账户的单
+#:   **根本没落库**，却返回了第一个账户的 order_id，调用方随后把它提交给网关
+#:   ——第二个账户的仓位永远不动，且**无任何报错**（真实资金事故型缺陷）。
+#:
+#: 处置：命中同键但账户/通道不同 → **不复用旧单**（那会让新账户丢单），
+#:   改用带作用域后缀的键落库，并记 error（撞键是异常，必须留痕）。
+_SCOPED_KEY_FMT = "{key}@{channel}:{account}"
+
+#: 终态集合（幂等/去重判定：终态单允许同信号重新下单）。
+TERMINAL_STATUSES = ("FILLED", "CANCELED", "REJECTED", "ERROR")
+
+
+def _scope_value(v: Any) -> str:
+    """把 account/channel 归一成稳定的键片段（None → '-'）。"""
+    s = "" if v is None else str(v).strip()
+    return s if s else "-"
+
+
+def _same_scope(row: dict[str, Any], order: dict[str, Any]) -> bool:
+    """幂等键命中时，判断旧单与新单是否属**同一账户 + 同一通道**。"""
+    return (
+        _scope_value(row.get("account")) == _scope_value(order.get("account"))
+        and _scope_value(row.get("channel")) == _scope_value(order.get("channel"))
+    )
+
+
+def _scoped_key(key: str, channel: Any, account: Any) -> str:
+    return _SCOPED_KEY_FMT.format(
+        key=key, channel=_scope_value(channel), account=_scope_value(account))
 
 #: 状态机允许迁移（DB CHECK 固化第一层，这里做第二层应用侧断言）
 _TRANSITIONS: dict[str, set[str]] = {
@@ -61,14 +96,37 @@ def save_order(order: dict[str, Any]) -> int:
 
     order 需含：signal_id, symbol_continuous, real_symbol, exchange, action, direction,
     price, price_space, lots, multiplier, notional, channel, account, idempotency_key。
+
+    ★ 2026-11-06 修正（撞键丢单缺陷）
+      ------------------------------------------------
+      幂等键**不含 account/channel**，而 UNIQUE(idempotency_key) 全局唯一 →
+      同一 signal_id 在不同账户（SIM 模拟盘 vs REAL 实盘）下撞成同一把键。
+      旧实现命中即返回旧 id ⇒ **第二个账户的单根本没落库**，却返回了第一个
+      账户的 order_id，调用方随后把它提交给网关 ⇒ 第二个账户仓位永远不动，
+      且**全程无报错**（静默丢单）。
+
+      现行处置：
+        · 命中且**同账户同通道** → 真幂等命中，返回旧 id（既有行为不变）；
+        · 命中但**账户/通道不同** → 判定为撞键，**不复用旧单**（复用=新账户丢单），
+          改用带作用域后缀的键落库，并记 error 留痕。
     """
     key = order["idempotency_key"]
     with session_scope() as s:
-        rid = s.execute(
-            text("SELECT id FROM execution_order WHERE idempotency_key = :k"), {"k": key}
-        ).scalar()
-        if rid:
-            return int(rid)
+        hit = _find_by_key(s, key)
+        if hit is not None:
+            if _same_scope(hit, order):
+                return int(hit["id"])
+            # 撞键：同键、不同账户/通道 → 不能复用旧单
+            key = _scoped_key(key, order.get("channel"), order.get("account"))
+            hit2 = _find_by_key(s, key)
+            if hit2 is not None:
+                return int(hit2["id"])
+            logger.error(
+                "[exec] 幂等键撞车：key={} 已存在但账户/通道不同"
+                "（旧单 id={} account={} channel={}；新单 account={} channel={}）"
+                "→ 已改用作用域键落库，**未复用旧单**（复用会导致该账户丢单）".format(
+                    order["idempotency_key"], hit["id"], hit.get("account"),
+                    hit.get("channel"), order.get("account"), order.get("channel")))
         return int(
             s.execute(
                 text(
@@ -110,11 +168,62 @@ def get_order(order_id: int) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def _find_by_key(s, key: str) -> dict[str, Any] | None:
+    """在**给定 session** 内按幂等键查订单行（内部复用，避免嵌套 session）。
+
+    ★ 2026-11-06：原先 :func:`find_order_by_key` 独立开 session 且无调用方（死代码），
+      幂等命中判定在 :func:`save_order` 里另写了一份裸 SELECT。两处口径必须一致，
+      故抽出本函数作为**唯一**的按键查询实现。
+    """
+    row = s.execute(
+        text("SELECT * FROM execution_order WHERE idempotency_key = :k"), {"k": key}
+    ).mappings().first()
+    return dict(row) if row else None
+
+
 def find_order_by_key(key: str) -> dict[str, Any] | None:
+    """按**幂等键**查订单（只读，不改库）。
+
+    ★ 2026-11-06 接线：此前本函数**无任何调用方**（死代码）——「能按幂等键查单」
+      这个运维刚需（排查重复下单/丢单）实际上不可用。现：
+        · :func:`save_order` 的幂等命中判定复用同口径查询（见 :func:`_find_by_key`）；
+        · API ``GET /execution/orders/by-key`` 暴露为只读查询端点。
+    """
     with session_scope() as s:
-        row = s.execute(
-            text("SELECT * FROM execution_order WHERE idempotency_key = :k"), {"k": key}
-        ).mappings().first()
+        return _find_by_key(s, key)
+
+
+def find_order_by_signal(
+    account: str | None,
+    real_symbol: str,
+    signal_id: str,
+    *,
+    only_unsettled: bool = False,
+) -> dict[str, Any] | None:
+    """按 ``(account, real_symbol, signal_id)`` 查最近一笔订单（只读，不改库）。
+
+    为什么需要它（2026-11-06）
+    --------------------------
+    幂等键含**交易日**（:data:`IDEMPOTENCY_FMT`）→ 同一 signal_id **跨天**就不再幂等，
+    而"同一个信号"在跨天场景下仍然只应有一单（例：止损单 signal_id 由品种+价格生成，
+    同价跨天会再次平仓）。本函数提供该维度上的**只读**查重能力，
+    由 API 层在下单前调用（命中未终态订单则**拒新单**，绝不改既有订单）。
+
+    ⚠ 本函数**不做任何写操作**，也**不**替代幂等键 —— 它是幂等键之外的**第二道**
+      人工/自动复核闸门，命中与否由调用方决策。
+    """
+    sql = (
+        "SELECT * FROM execution_order "
+        "WHERE real_symbol = :sym AND signal_id = :sid "
+        "AND account IS NOT DISTINCT FROM :acc "
+    )
+    params = {"sym": real_symbol, "sid": signal_id, "acc": account}
+    if only_unsettled:
+        sql += "AND status <> ALL(:term) "
+        params["term"] = list(TERMINAL_STATUSES)
+    sql += "ORDER BY created_at DESC, id DESC LIMIT 1"
+    with session_scope() as s:
+        row = s.execute(text(sql), params).mappings().first()
         return dict(row) if row else None
 
 

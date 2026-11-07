@@ -129,6 +129,18 @@ def build_job_registry() -> list[JobSpec]:
         JobSpec("rebuild_dict_dryrun", "rebuild_dict_dryrun", "weekly", _GAP_WEEKLY, True, False),
         JobSpec("factor_v1v6_daily", "factor_v1v6", "daily", _GAP_DAILY, True, False),
         JobSpec("factor_ic_monitor_daily", "factor_ic_monitor", "daily", _GAP_DAILY, True, False),
+        # 2026-11-06 新增（接线批次）：此前 compute_factor_value.py 与
+        # collect_member_rank_summary.py **从未被调度** → 22 个已注册因子实测
+        # 全部停在 2026-09-30（"注册了却没人算"）。均不写 task_run，
+        # 故 task_run_based=False，存活由调度器事件监听 + 数据新鲜度兜底。
+        JobSpec("factor_value_daily", "factor_value", "daily", _GAP_DAILY, True, False),
+        JobSpec("collect_member_rank_summary_daily", "member_rank_summary", "daily",
+                _GAP_DAILY, True, False),
+        JobSpec("factor_value_b_daily", "factor_value_b", "daily", _GAP_DAILY, True, False),
+        # 2026-11-07 新增：因子级新鲜度巡检 + 自动补算。表级巡检（alerting 的
+        # _check_freshness）只看 factor_value 整表 max ⇒ 16 个因子停在 09-30 而
+        # 整表 max 是 11-06 ⇒ 断更 40 天无人发现。本作业做因子级检查 + 断供自动补算。
+        JobSpec("factor_freshness_daily", "factor_freshness", "daily", _GAP_DAILY, True, False),
         JobSpec("data_selfcheck_daily", "data_selfcheck", "daily", _GAP_DAILY, False, False),
         JobSpec("ops_backup_daily", "ops_backup", "daily", _GAP_DAILY, True, False),
     ])

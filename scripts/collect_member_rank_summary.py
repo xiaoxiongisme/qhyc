@@ -37,12 +37,21 @@ from psycopg2.extras import execute_batch  # noqa: E402
 SRC = "scrapling:member_rank_summary"
 VERSION = "v1.0"
 
-PG = dict(
-    host=os.environ.get("PGHOST", "localhost"),
-    port=int(os.environ.get("PGPORT", "5432")),
-    dbname=os.environ.get("PGDATABASE", "futures"),
-    user=os.environ.get("PGUSER", "futures"),
-    password=os.environ["PGPASSWORD"],
+# ★ 2026-11-06 接线前提修正：原先的 PG* 变量在**容器内根本不存在**
+#   （docker-compose 只给 POSTGRES_HOST/POSTGRES_PASSWORD 等），且
+#   `os.environ["PGPASSWORD"]` 是**下标取值 → 缺失即 KeyError** ⇒
+#   本脚本在调度容器内**必然崩溃**（这正是它从未被调度、上游 summary
+#   停更到 2026-09-30 的根因之一）。
+#   改走 scripts/pgconn.py 统一入口（POSTGRES_* 优先，缺失口令即 fail-fast），
+#   同时保留原 PG* 作为**回退**（本地手工跑仍可用）。
+from pgconn import resolve_conn  # noqa: E402
+
+PG = resolve_conn(
+    host=os.environ.get("PGHOST") or None,
+    port=os.environ.get("PGPORT") or None,
+    db=os.environ.get("PGDATABASE") or None,
+    user=os.environ.get("PGUSER") or None,
+    pw=os.environ.get("PGPASSWORD") or None,
 )
 
 # 24 个数值列：4 档(5/10/15/20) × 6 指标

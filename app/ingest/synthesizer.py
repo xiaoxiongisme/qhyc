@@ -63,7 +63,11 @@ _BARS = [
 _SESSION_MAX_GAP_MIN = 150
 
 #: 多源分钟去重优先级（同一 (symbol, ts) 被多个 src 写入时取优先级最高的）
-_SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
+# 2026-11-07 P0-1：登记 10-30 换源后的新实时源。
+# 该源 ts 记为【终点】(首根 09:01 / 末根 15:00)，实测覆盖 2026-10-30 21:01~11-06 11:30。
+# 未登记时 _session_insert_sql 不会减 1 分钟归一，导致四张 bar_* 全部系统性少聚合 1 根。
+_SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min",
+                         "akshare_1min_nov2026"]
 
 #: 「分钟时间戳约定」登记：这批源把 ts 记为该分钟的【终点】(HH:01…HH:00)，
 #: 需要先减 1 分钟归一到【起点】约定，再统一落边界。
@@ -72,7 +76,13 @@ _SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min"]
 #:   akshare_1min first=09:01 last=15:00 → 终点（已验证 ZN888/SC888 2026-10-27）
 #:   wh9999_1m first=09:01 last=15:00    → 终点（已验证 A888 2015-01-05）
 #: ⚠ 若将来接入新的分钟源，务必先到这里登记它的约定，否则整段 bar 会偏 1 分钟。
-_SESSION_END_LABELED_SRCS = ["akshare_1min", "wh9999_1m"]
+_SESSION_END_LABELED_SRCS = ["akshare_1min", "wh9999_1m",
+                             "akshare_1min_nov2026"]
+
+#: 已知但**不参与当前增量窗口**的历史源。仅用于 fail-loud 白名单，
+#: 不加入 _SESSION_END_LABELED_SRCS —— 其时间戳约定尚未验证（见报告 M19），
+#: 贸然归一会改动 2026 全年 500 万行历史 L1，风险高于收益。
+_KNOWN_HISTORICAL_SRCS = frozenset({"local_csv_20261030"})
 
 #: 日盘固定边界（相对 09:00 的分钟偏移）：跳过 10:15-10:30 与 11:30-13:30 两段休市。
 #:   60m → 10:00 / 11:15 / 14:15 / 15:00
@@ -105,15 +115,11 @@ def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
     bounds = _SESSION_DAY_BOUNDS[step]
     day_when = " ".join(f"WHEN rel_end <= {b} THEN {b}" for b in bounds)
     day_case = f"CASE {day_when} ELSE {bounds[-1]} END"
-    # 2026-11-06：全合约采集会在 minute_bar 写入大量 layer='contract' 行。
-    # L1 四张表只应包含 888 主连，否则 670+ 合约会被合成进来（上轮审计 H1 风险）。
-    layer_filter = "layer = 'continuous'"
-    where_sql = (where + " AND " + layer_filter) if where else ("WHERE " + layer_filter)
     return (
         "WITH m AS (\n"
         "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
-        "    FROM l0_raw.minute_bar\n"
-        f"    {where_sql}\n"
+        "    FROM minute_bar\n"
+        f"    {where}\n"
         "), norm AS (\n"
         "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
         "                        THEN interval '1 minute' ELSE interval '0 minute' END AS ts_n\n"
@@ -200,7 +206,7 @@ _INSERT_HEAD = (
     "       time_bucket(INTERVAL '{iv}', ts, 'Asia/Shanghai') AS bucket,\n"
     "       first(open, ts), max(high), min(low), last(close, ts),\n"
     "       sum(volume)::bigint, sum(amount), last(open_interest, ts)\n"
-    "FROM l0_raw.minute_bar\n"
+    "FROM minute_bar\n"
 )
 #: ⚠ 已停用（2026-10-31）：自然整点桶口径与同花顺网格互斥，5m/15m 一旦走到
 #: 这条分支就会产出 13:30/10:30 等错误标签。保留仅为追溯，勿重新启用。
@@ -404,12 +410,31 @@ def _max_bucket(session: Session, table: str) -> datetime | None:
     return session.execute(text(f"SELECT max(bucket) FROM {table}")).scalar()
 
 
+def assert_registered_srcs(session: Session, lookback_days: int = 7) -> list[str]:
+    """P0-1 防复发硬断言：近 N 天 continuous 层出现的 src 必须全部登记。
+
+    这次故障的根因不是算法错，而是「新源静默进入、无人登记」。故在任何合成
+    动作之前先查库，发现未登记 src 直接抛错（fail loud），不许静默产出错位 bar。
+    白名单 = 去重优先级 ∪ 终点标签源 ∪ 已知历史源。
+    """
+    rows = session.execute(text(
+        "SELECT DISTINCT src FROM l0_raw.minute_bar "
+        "WHERE layer = 'continuous' AND src IS NOT NULL "
+        "  AND ts >= now() - (:d || ' days')::interval"
+    ), {"d": lookback_days}).scalars().all()
+    known = (set(_SESSION_SRC_PRIORITY) | set(_SESSION_END_LABELED_SRCS)
+             | set(_KNOWN_HISTORICAL_SRCS))
+    unknown = sorted(set(rows) - known)
+    if unknown:
+        raise RuntimeError(
+            f"[synth] 检测到未登记的分钟源 {unknown}；请先在 "
+            f"_SESSION_SRC_PRIORITY / _SESSION_END_LABELED_SRCS 登记其时间戳约定"
+            f"（起点 or 终点）后再合成，拒绝静默产出错位 bar")
+    return sorted(set(rows))
+
+
 def _max_minute_ts(session: Session) -> datetime | None:
-    # 2026-11-06：全合约采集后 contract 层可能比 continuous 层更新，
-    # 若用全表 max(ts) 做「L1 是否追平」校验会永远判 lag 并触发假告警/无谓重试。
-    return session.execute(text(
-        "SELECT max(ts) FROM l0_raw.minute_bar WHERE layer = 'continuous'"
-    )).scalar()
+    return session.execute(text("SELECT max(ts) FROM minute_bar")).scalar()
 
 
 def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
@@ -417,11 +442,8 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
     """单表合成：自动在「自然整点桶」与「交易分钟会话桶」之间选择正确口径。"""
     step = _SESSION_BARS.get(t)
     if step is None:
-        # 2026-11-06：与 _session_insert_sql 同口径，只合成 continuous 层。
-        layer_where = ("WHERE ts >= :since AND layer = 'continuous'\n"
-                       if since is not None else "WHERE layer = 'continuous'\n")
         sql = _INSERT_HEAD.format(t=t, iv=iv) + \
-              layer_where + \
+              ("WHERE ts >= :since\n" if since is not None else "") + \
               "GROUP BY symbol, bucket\n" + tail
         return _run(session, sql, {"since": since} if since is not None else None)
     sql = _session_insert_sql(
@@ -504,6 +526,8 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
     所在桶」，未追平则重跑（最多 ``max_retries`` 次）。仍不追平则 **warning 明示**，
     绝不静默返回成功——调用方与告警都能看见。
     """
+    # P0-1：先 fail-loud 校验源登记，避免「新源静默进入」再次发生。
+    assert_registered_srcs(session, lookback_days=max(days_back + 2, 7))
     since = datetime.now(_SH_TZ) - timedelta(days=days_back)
     # ★ 会话式切分必须向前多看 1 天，并把起点**对齐到会话起点**：它按「连续分钟段」
     #   累计交易分钟计数，若 since 落在段的中间，前面的分钟没参与计数 → 该段所有 bar

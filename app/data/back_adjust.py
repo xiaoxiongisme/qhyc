@@ -124,7 +124,9 @@ def check_negative(session, freq: str = 'min15',
     tbl = TABLE.get(freq)
     if tbl is None:
         raise ValueError(f"freq={freq!r} 无对应 bar_* 表，可选 {sorted(TABLE)}")
-    sql = (f"SELECT symbol, MIN(m.minp + r.cum_offset) AS min_adj "
+    # 2026-11-07 P0-2：price_shift 是整序列常量抬升，判负价时必须一并计入，
+    # 否则一旦启用 apply_positivity，已抬升为正的品种会被误报成负价品种。
+    sql = (f"SELECT symbol, MIN(m.minp + r.cum_offset + COALESCE(r.price_shift, 0)) AS min_adj "
            f"FROM roll_segment r JOIN LATERAL ("
            # 判负价必须用 **low**（最低价），不能用 close：实测按 close 会漏判
            # （84 品种里 close 口径只检出 4 个，low 口径才是 7 个）

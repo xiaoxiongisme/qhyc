@@ -162,28 +162,33 @@ def selfcheck() -> list[str]:
 
         # 1) raw 空间：偏移恒 0，real = adj_px
         r, c = reverse_price(None, "RB888", 3112.0, pd.Timestamp("2024-06-01"), "raw")
-        assert (r, c) == (3112.0, 0.0), f"raw 分支失败: {(r, c)}"
+        if not ((r, c) == (3112.0, 0.0)):
+            raise AssertionError(f"raw 分支失败: {(r, c)}")
         log.append("✓ raw 空间：real=adj_px, offset=0")
 
         # 2) adj 空间 as-of：2024-06-01 落在 seg1(cum_offset=2400)
         r, c = reverse_price(None, "RB888", 5500.0, pd.Timestamp("2024-06-01"), "adj")
-        assert (r, c) == (3100.0, 2400.0), f"adj seg1 失败: {(r, c)}"
+        if not ((r, c) == (3100.0, 2400.0)):
+            raise AssertionError(f"adj seg1 失败: {(r, c)}")
         log.append("✓ adj 空间 as-of：2024-06-01 → offset=2400, real=3100")
 
         # 3) adj 空间 tie-break：时点恰好 = seg_start(2023-01-01) 取该段(2400)
         r, c = reverse_price(None, "RB888", 5500.0, pd.Timestamp("2023-01-01"), "adj")
-        assert (r, c) == (3100.0, 2400.0), f"tie-break 失败: {(r, c)}"
+        if not ((r, c) == (3100.0, 2400.0)):
+            raise AssertionError(f"tie-break 失败: {(r, c)}")
         log.append("✓ adj 空间 tie-break：when==seg_start 取该段")
 
         # 4) adj 空间早于首段：偏移 0
         r, c = reverse_price(None, "RB888", 5500.0, pd.Timestamp("2019-01-01"), "adj")
-        assert (r, c) == (5500.0, 0.0), f"早于首段失败: {(r, c)}"
+        if not ((r, c) == (5500.0, 0.0)):
+            raise AssertionError(f"早于首段失败: {(r, c)}")
         log.append("✓ adj 空间早于首段：offset=0")
 
         # 5) 缺段表（load_segments 返回空）→ 偏移 0，adj 安全降级
         g["load_segments"] = empty_load
         r, c = reverse_price(None, "RB888", 3112.0, pd.Timestamp("2024-06-01"), "adj")
-        assert (r, c) == (3112.0, 0.0), f"空段表降级失败: {(r, c)}"
+        if not ((r, c) == (3112.0, 0.0)):
+            raise AssertionError(f"空段表降级失败: {(r, c)}")
         log.append("✓ adj 空间缺段表：安全降级 offset=0（不抛异常）")
 
         # 6) reverse_bar 批量：整根 K 共享同一 offset
@@ -191,7 +196,8 @@ def selfcheck() -> list[str]:
         bar = reverse_bar(None, "RB888",
                           {"open": 5400.0, "high": 5600.0, "low": 5300.0, "close": 5500.0},
                           pd.Timestamp("2024-06-01"), "adj")
-        assert bar["close"] == 3100.0 and bar["open"] == 3000.0 and bar["_offset"] == 2400.0, f"reverse_bar 失败: {bar}"
+        if not (bar["close"] == 3100.0 and bar["open"] == 3000.0 and bar["_offset"] == 2400.0):
+            raise AssertionError(f"reverse_bar 失败: {bar}")
         log.append("✓ reverse_bar 批量：OHLC 共享 offset=2400")
     except AssertionError as e:
         log.append(f"❌ 断言失败: {e}")

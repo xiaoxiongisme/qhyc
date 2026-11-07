@@ -412,6 +412,14 @@ class FusionConfig(BaseModel):
     # - "akshare" = 同花顺口径（K线按收盘时刻标：日盘 10:00/11:15/14:15/15:00），与用户盘面一致（推荐）
     # 历史 CSV 回测为起点标签口径，与 akshare 时间戳不同，不可混入实时引擎；本字段强制
     # 引擎只读取单一 src，杜绝"同一段行情数两遍"。
+    # 2026-11-07 P0-3：回测与实盘共用的唯一 K 线真源。
+    #   "bar_60m"    = l1_mkt.bar_60m（原始维度，默认；无物化延迟依赖）
+    #   "bar_60m_ba" = l2_adj.bar_60m_ba（同一条 K 线 + 后复权偏移）
+    # 严禁再填 "akshare" / "csv"（l0_raw.hourly_bar 独立采集链，与回测分叉）。
+    kline_src: str = "bar_60m"
+    # ↓ 历史字段，已废弃保留（config/local.example.yaml 里仍有显式值）。
+    #   P0-3 后全仓无任何代码读取它，仅为兼容旧 yaml 不报校验错；
+    #   修改它不会改变引擎行为，请一律改 kline_src。
     hourly_src: str = "akshare"
     # ---- 部署侧隐患修复（2026-11-01）：持仓上限（天）----
     # 在线引擎每轮只重算最近 max_bars(800) 根；若行情持续同向，eng 在滚动窗口内恒为同向、

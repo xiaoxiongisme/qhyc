@@ -69,7 +69,7 @@ def build_pooled_panel(
         rows = session.execute(
             text(
                 "SELECT symbol, trade_date, close FROM daily_bar "
-                "WHERE symbol ~ '^[A-Za-z]+888$' AND close IS NOT NULL ORDER BY symbol, trade_date"
+                "WHERE symbol LIKE '%%888' AND close IS NOT NULL ORDER BY symbol, trade_date"
             )
         ).all()
 

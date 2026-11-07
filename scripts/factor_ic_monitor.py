@@ -29,6 +29,7 @@ window 日均值，写入 ``factor_ic_roll``（migrations/004），并输出告�
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import date, timedelta
@@ -39,6 +40,11 @@ from scipy import stats
 from sqlalchemy import create_engine, text
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# --- 2026-11-06：补仓库根到 sys.path，使本脚本能 import app.analytics.cross_section
+#     （脚本目录引导只覆盖 scripts/ 内的模块，app.* 必须仓库根）。
+from pathlib import Path
+sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / "app").is_dir())))
+
 from pgconn import add_conn_args, conn_from_args  # noqa: E402
 
 DEFAULT_FACTORS = ""   # 空 = 库内全部有数据的因子
@@ -150,6 +156,67 @@ def rolling_ic(ic: pd.Series, win: int) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------
+# 截面相对强弱（§18.8 M6c）—— 研究侧跟踪
+# ---------------------------------------------------------------------------
+# ★ 2026-11-06 接线：app/analytics/cross_section.py 的 build_cross_section /
+#   cross_section_ic / top_bottom 此前**无任何调用方**（死代码）。
+#
+#   ⚠ **定位边界（不得越界）**：该模块 docstring 明写「不计入 v1 主信号——仅研究
+#   跟踪与看板展示」「IC/IR 按 TRAIN/TEST 划分供 §18.11② 准入判定」。
+#   故本函数**只做研究侧统计与展示**：
+#     · **不写** factor_value（截面反转不是已注册因子，不进因子真源）；
+#     · **不进**信号链（不参与任何下单/仓位判定）；
+#     · **不写** factor_ic_roll（那是「已注册因子」的滚动 IC 落库表）。
+#   若将来要把它变成真因子，必须先走 factor_registry 注册 + 回测闸门 + 准入流程。
+
+def load_cross_section_panel(eng, since: str) -> pd.DataFrame:
+    """构造截面面板 [trade_date, symbol, ret_close]（全品种日线）。
+
+    只取 **888 主力连续**（与 factor_value 的 symbol 命名空间一致），
+    否则同一品种的多个合约会同时进入截面排名 → 排名失真。
+    """
+    q = text(
+        "SELECT symbol, trade_date, close FROM daily_bar "
+        "WHERE trade_date >= :s AND close IS NOT NULL AND symbol LIKE '%888' "
+        "ORDER BY symbol, trade_date"
+    )
+    df = pd.read_sql(q, eng, params={"s": since})
+    if df.empty:
+        return pd.DataFrame(columns=["trade_date", "symbol", "ret_close"])
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df = df.dropna(subset=["close"])
+    df["ret_close"] = df.groupby("symbol")["close"].pct_change()
+    return df[["trade_date", "symbol", "ret_close"]].dropna()
+
+
+def cross_section_reversal_report(eng, since: str, min_names: int = 20,
+                                   topk: int = 5) -> dict:
+    """截面反转因子的 IC/IR 汇总 + 当日最强/最弱清单（研究侧）。"""
+    from app.analytics.cross_section import (
+        build_cross_section, cross_section_ic, top_bottom,
+    )
+
+    panel = load_cross_section_panel(eng, since)
+    if panel.empty:
+        return {"ok": False, "reason": "daily_bar 无 888 主力连续数据"}
+    cs = build_cross_section(panel)
+    if cs.empty:
+        return {"ok": False, "reason": "截面面板为空"}
+    ic = cross_section_ic(panel, min_names=min_names)
+    last_day = cs["trade_date"].max()
+    day_df = cs[cs["trade_date"] == last_day]
+    tb = top_bottom(day_df, k=topk)
+    return {
+        "ok": True,
+        "n_symbols": int(day_df["symbol"].nunique()),
+        "n_days": int(panel["trade_date"].nunique()),
+        "last_trade_date": str(pd.Timestamp(last_day).date()),
+        "ic": ic,
+        "top_bottom": tb,
+    }
+
+
+# ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--factors", default=DEFAULT_FACTORS, help="逗号分隔；空=全部")
@@ -162,6 +229,10 @@ def main():
     ap.add_argument("--stale-days", type=int, default=5, help="断更告警阈值（自然日）")
     ap.add_argument("--apply", action="store_true", help="写入 factor_ic_roll")
     ap.add_argument("--json", default="", help="可选：结果 JSON 落盘路径")
+    ap.add_argument("--cs-min-names", type=int, default=20,
+                    help="截面反转：每日最少品种数（cross_section_ic 默认 20）")
+    ap.add_argument("--no-cross-section", action="store_true",
+                    help="跳过截面反转（研究侧）统计")
     add_conn_args(ap)
     a = ap.parse_args()
 
@@ -246,9 +317,56 @@ def main():
         print(f"\n[ic] ⚠ 需复核 {len(bad)} 个因子：")
         for r in bad.itertuples(index=False):
             print(f"     {r.factor_id:<24} {r.flags}")
+
+    # ---- 截面反转（研究侧·§18.8 M6c）------------------------------------
+    # 不写 factor_value / 不写 factor_ic_roll / 不进信号链：模块定位是
+    # 「研究跟踪与看板展示」，准入判定走 §18.11② 流程。
+    cs_rep: dict = {}
+    if not a.no_cross_section:
+        print("\n[ic] 截面反转（研究侧·不计入 v1 主信号）")
+        try:
+            cs_rep = cross_section_reversal_report(
+                eng, a.since, min_names=a.cs_min_names)
+            if not cs_rep.get("ok"):
+                print("     跳过：{0}".format(cs_rep.get("reason")))
+            else:
+                icd = cs_rep.get("ic") or {}
+                print("     品种数={0}  交易日={1}  最新={2}".format(
+                    cs_rep.get("n_symbols"), cs_rep.get("n_days"),
+                    cs_rep.get("last_trade_date")))
+                if icd.get("ic_mean") is not None:
+                    print("     IC={0:+.4f}  ICIR={1}  t={2}  n_days={3}".format(
+                        icd["ic_mean"], icd.get("icir"), icd.get("t_stat"),
+                        icd.get("n_days")))
+                else:
+                    print("     IC 样本不足（n_days={0}；需每日品种数≥{1} 且天数≥5）".format(
+                        icd.get("n_days"), a.cs_min_names))
+                tb = cs_rep.get("top_bottom") or {}
+                if tb.get("strongest"):
+                    print("     最强: " + ", ".join(
+                        "{0}({1:+.2%})".format(x["symbol"], x["ret"])
+                        for x in tb["strongest"]))
+                if tb.get("weakest"):
+                    print("     最弱: " + ", ".join(
+                        "{0}({1:+.2%})".format(x["symbol"], x["ret"])
+                        for x in tb["weakest"]))
+        except Exception as exc:  # noqa: BLE001 —— 研究侧统计失败不影响主流程
+            print("     截面统计失败（已忽略，不影响因子 IC 监控）：{0}".format(exc))
+
     if a.json:
         df.to_json(a.json, orient="records", force_ascii=False, indent=2)
         print(f"[ic] JSON → {a.json}")
+        if cs_rep:
+            try:
+                with open(a.json, "r", encoding="utf-8") as fi:
+                    payload = json.load(fi)
+                payload = payload if isinstance(payload, list) else [payload]
+                with open(a.json, "w", encoding="utf-8") as fo:
+                    json.dump({"factors": payload, "cross_section": cs_rep},
+                              fo, ensure_ascii=False, indent=2, default=str)
+                print(f"[ic] 截面结果已并入 {a.json}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ic] 截面结果并入 JSON 失败（已忽略）：{exc}")
 
 
 if __name__ == "__main__":

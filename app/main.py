@@ -43,6 +43,14 @@ async def lifespan(app: FastAPI):
             sync_symbols(s)
     except Exception as e:
         logger.error(f"[main] DB connection failed: {e}")
+    # ★ 2026-11-06 接线：网关模式 fail-loud（此前 log_mode_once 无任何调用方
+    #   → 启动时不打印网关模式，"误把仿真当实盘"无从发现）。
+    try:
+        from app.execution.broker import log_mode_once
+
+        log_mode_once()
+    except Exception as exc:  # noqa: BLE001 —— 打印失败不阻断启动
+        logger.warning(f"[main] 网关模式打印失败（已忽略，不阻断启动）: {exc}")
     yield
     logger.info("[main] shutdown")
 

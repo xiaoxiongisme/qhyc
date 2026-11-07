@@ -67,11 +67,14 @@ import sys
 import threading
 import time
 from typing import Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-except Exception:
-    pass
+except Exception as exc:
+    logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
 try:
     from openctp_ctp import mdapi, tdapi
@@ -673,8 +676,8 @@ def run_probe(args: argparse.Namespace) -> int:
 
     try:
         td_api.Release()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return 0 if ok else 1
 
 

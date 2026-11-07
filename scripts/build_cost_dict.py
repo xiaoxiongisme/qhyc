@@ -29,6 +29,12 @@ import pandas as pd
 
 sys.stdout.reconfigure(encoding="utf-8")
 
+# --- 2026-11-06 修：补仓库根到 sys.path，使 `python scripts/build_cost_dict.py` 能 import app.*
+#     此前缺引导时 `from app.core.db import ...` 抛 ModuleNotFoundError，
+#     会被下面的 `except Exception` 吞掉 → _HAS_DB=False → 脚本**静默降级**为
+#     「纯 CSV 构建」，DB 同步被无声跳过（静默失败族）。
+sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / 'app').is_dir())))
+
 # ---- 配合 anomaly_ticket：未知/缺失费率落异常工单留痕（best-effort） ----
 # build_cost_dict 仍以「宁可失败」为第一原则（unknown_errs 触发 RuntimeError 中止）；
 # 此处仅在失败前把未识别费率写入 anomaly_ticket，供人工复查，绝不因此吞掉 fail-loud。

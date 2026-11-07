@@ -151,8 +151,8 @@ def rebind_engine(
             f"(pool_size={eff_pool}, max_overflow={eff_over}, "
             f"dispose_old={dispose_old}, fee_cache_cleared={clear_fee_cache})"
         )
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
     return new_engine
 
 

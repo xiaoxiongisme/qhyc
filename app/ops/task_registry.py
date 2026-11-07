@@ -589,8 +589,8 @@ def install_run_recorder(sched: Any) -> bool:
         if sched_times:
             try:
                 payload["scheduled_run_time"] = sched_times[0].isoformat()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
         run_id = record_start(job_id, trigger="auto", payload=payload)
         if run_id is not None:
             pending[job_id] = run_id

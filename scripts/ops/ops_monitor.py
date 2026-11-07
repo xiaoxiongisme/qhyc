@@ -27,6 +27,9 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+import logging
+
+logger = logging.getLogger(__name__)
 
 SH = ZoneInfo("Asia/Shanghai")
 STATE_DIR = "/opt/qhyc-ops/state"
@@ -65,8 +68,8 @@ def load_token() -> str:
                 line = line.strip()
                 if line.startswith("PUSHPLUS_TOKEN="):
                     return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as exc:
+        logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return ""
 
 
@@ -106,8 +109,8 @@ def cooldown_ok(key: str, level: str) -> bool:
     st[key] = time.time()
     try:
         json.dump(st, open(STATE_FILE, "w", encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return True
 
 
@@ -134,8 +137,8 @@ def sample_system() -> dict:
         for line in open("/proc/meminfo", encoding="utf-8"):
             k, v = line.split(":", 1)
             meminfo[k.strip()] = int(v.split()[0])
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     mem_total = meminfo.get("MemTotal", 1)
     mem_avail = meminfo.get("MemAvailable", mem_total)
     mem_pct = (mem_total - mem_avail) / mem_total * 100
@@ -235,8 +238,8 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
             m["data_lag_days"] = lag
             if lag > DATA_LAG_WARN:
                 issues.append(("warn", "data_lag", f"日线数据滞后 {lag} 天（最新 {m['latest_data_date']}）"))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
     # 5. 推送活性（仅交易日/有数据时检查：无数据时本就静默）
     ok, out = psql_fn(
@@ -250,8 +253,8 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
             if silence_h > PUSH_SILENCE_WARN:
                 issues.append(("warn", "push_silence",
                                f"已 {silence_h:.0f} 小时无成功推送（信号链路可能停摆）"))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
     return {"metrics": m, "issues": issues}
 

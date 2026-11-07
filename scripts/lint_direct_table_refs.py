@@ -20,6 +20,9 @@ import argparse
 import re
 import sys
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,8 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+    except (AttributeError, ValueError) as exc:
+        logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
 # 受管行情/复权表（必须经 barstore.load / caliber 路由）
 GUARDED_TABLES = [

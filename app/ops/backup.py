@@ -198,8 +198,8 @@ def run_backup(session=None, cfg: BackupConfig | None = None,
         if owns_session:
             try:
                 ctx.__exit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
 
     report["remote"] = _remote_copy(
         dest_dir, remote_dir,

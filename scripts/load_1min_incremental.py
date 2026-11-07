@@ -9,6 +9,9 @@ import os, re, io, time, argparse
 import numpy as np
 import pandas as pd
 import psycopg2
+import logging
+
+logger = logging.getLogger(__name__)
 
 SH_FMT = "%Y-%m-%d %H:%M:%S%z"
 
@@ -45,8 +48,8 @@ def _load_db_creds():
                     creds["dbname"] = v
                 elif k == "POSTGRES_PORT":
                     creds["port"] = int(v)
-    except FileNotFoundError:
-        pass
+    except FileNotFoundError as exc:
+        logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     return creds
 
 

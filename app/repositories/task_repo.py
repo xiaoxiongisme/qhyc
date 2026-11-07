@@ -65,8 +65,8 @@ class TaskRepository:
             run.message = message
             self.session.commit()
             return
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
         self._record_terminal_fresh(run_id, status, message, finished)
 
     def _record_terminal_fresh(

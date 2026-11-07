@@ -1,4 +1,4 @@
-﻿exchange,variety_code,instrument_kind,action,scope_kind,scope_months,scope_contracts,fee_type,fee_value,broker_markup_type,broker_markup_value,effective_from,source,note
+exchange,variety_code,instrument_kind,action,scope_kind,scope_months,scope_contracts,fee_type,fee_value,broker_markup_type,broker_markup_value,effective_from,source,note
 CZCE,AP,FUTURE,OPEN,ALL,,,FIXED,5.0,FIXED,0.01,2026-03-11,exchange_notice_20260311,5
 CZCE,AP,FUTURE,CLOSE_YEST,ALL,,,FIXED,5.0,FIXED,0.01,2026-03-11,exchange_notice_20260311,5
 CZCE,AP,FUTURE,CLOSE_TODAY,ALL,,,FIXED,20.0,FIXED,0.01,2026-03-11,exchange_notice_20260311,平今仓20

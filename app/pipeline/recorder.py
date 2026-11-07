@@ -59,6 +59,13 @@ def finish_run(run_id: int, status: str, *, steps: list[dict] | None = None,
 
 
 def log_push(run_id: int, channel: str, ok: bool, title: str, resp: str) -> None:
+    """记录一次推送结果（pipeline_push_log）。
+
+    ⚠ **已实现未接线（待接入）**（2026-11-06 巡检）：本函数当前**无任何调用方**
+      —— 推送流水表存在、写入函数存在，但生产推送路径**不写这张表**
+      ⇒ 推送失败/成功事后无从追查（表恒空）。要么接线、要么删表。
+      可用 ``python scripts/check_dead_code.py`` 复查。
+    """
     with session_scope() as s:
         s.add(PipelinePushLog(run_id=run_id, channel=channel, ok=ok,
                               title=title, resp=(resp or "")[:2000]))

@@ -70,8 +70,8 @@ ingest:
     - { symbol: "Y888",  exchange: "DCE", product: "Y",  name: "豆油", unit: "吨", multiplier: 10 }
     - { symbol: "P888",  exchange: "DCE", product: "P",  name: "棕榈油", unit: "吨", multiplier: 10 }
     - { symbol: "C888",  exchange: "DCE", product: "C",  name: "玉米", unit: "吨", multiplier: 10 }
-    - { symbol: "CS888", exchange: "DCE", product: "CS", name: "淀粉", unit: "吨", multiplier: 10 }
-    - { symbol: "JD888", exchange: "DCE", product: "JD", name: "鸡蛋", unit: "吨", multiplier: 5 }
+    - { symbol: "CS888", exchange: "DCE", product: "CS", name: "白糖", unit: "吨", multiplier: 10 }
+    - { symbol: "JD888", exchange: "DCE", product: "JD", name: "鸡蛋", unit: "吨", multiplier: 10 }
     - { symbol: "L888",  exchange: "DCE", product: "L",  name: "塑料", unit: "吨", multiplier: 5 }
     - { symbol: "V888",  exchange: "DCE", product: "V",  name: "PVC", unit: "吨", multiplier: 5 }
     - { symbol: "PP888", exchange: "DCE", product: "PP", name: "聚丙烯", unit: "吨", multiplier: 5 }

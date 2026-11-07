@@ -85,3 +85,35 @@ def describe(now: datetime | None = None) -> str:
         now = now.replace(tzinfo=_SH_TZ)
     n = now.astimezone(_SH_TZ)
     return f"{n:%F %T %a} window={is_collection_window(n)}"
+
+
+def is_hourly_collection_allowed(now: datetime | None = None) -> bool:
+    """B5 (2026-11-07): gate for the akshare ``hourly_bar`` direct-pull chain.
+
+    Combines two independent checks:
+
+    1. :func:`is_collection_window` -- session window; this already handles the
+       Friday-night carry into Saturday 00:00-02:40 and the Sunday shutdown.
+    2. During the **day session only**, the authoritative futures calendar via
+       :func:`app.data.trade_calendar.is_futures_trading_day` (G4 source =
+       ``futures_rule`` + ``cfg_calendar_seed_meta.seeded_through``).
+
+    Night-session bars are deliberately NOT calendar-gated: a Fri 21:00 or
+    Sat 01:00 bar belongs to the *next* trading day, so its calendar date is
+    not its trade date.  Gating those by ``date()`` would silently drop all
+    night bars (a correctness regression far worse than a ghost bar).
+
+    ``strict=False`` is intentional: dates beyond ``seeded_through`` are
+    "unknown", and the calendar module logs a warning then falls back to
+    weekday.  ``seed_futures_rule.py`` advances the boundary daily.
+    """
+    if not is_collection_window(now):
+        return False
+    n = now or datetime.now(_SH_TZ)
+    if n.tzinfo is None:
+        n = n.replace(tzinfo=_SH_TZ)
+    n = n.astimezone(_SH_TZ)
+    if DAY_START <= n.time() <= DAY_END:
+        from app.data.trade_calendar import is_futures_trading_day
+        return bool(is_futures_trading_day(n.date(), strict=False))
+    return True

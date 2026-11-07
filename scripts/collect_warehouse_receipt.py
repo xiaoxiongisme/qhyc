@@ -34,6 +34,9 @@ from datetime import date as _date
 
 import psycopg2  # noqa: E402
 from psycopg2.extras import execute_batch  # noqa: E402
+import logging
+
+logger = logging.getLogger(__name__)
 
 SRC = "scrapling:warehouse_receipt"
 VERSION = "v1.0"
@@ -338,8 +341,8 @@ def fetch_shfe(d: _date) -> list[dict]:
             cur = (r.json() or {}).get("o_cursor") or []
             if cur:
                 return _parse_shfe_dat(cur, d)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
     try:
         r = Fetcher.get(SHFE_HTML_URL.format(d=ds), stealthy_headers=True, timeout=30000)
         if r.status == 200 and len(r.body) > 2000:

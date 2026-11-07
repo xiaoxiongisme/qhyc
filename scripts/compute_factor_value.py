@@ -18,6 +18,7 @@ symbol 统一归一到 888 主力连续代码（与 factor_ic_scan._to_main 一�
 """
 from __future__ import annotations
 import os, sys, argparse
+import datetime
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +30,12 @@ import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
 
-from factor_ic_scan import load_creds, pick_symbols, load_symbol_bars, build_factors, _to_main
+from factor_ic_scan import pick_symbols, load_symbol_bars, build_factors, _to_main
+# ★ 2026-11-06 接线前提修正：原先用 `load_creds()`（内部硬编码 127.0.0.1），
+#   在**容器内**必然连不上库（scheduler 容器无本地 DB）→ 该脚本**根本无法在
+#   生产调度环境运行**（这也是它从未被调度、22 个因子停在 09-30 的根因之一）。
+#   改走 pgconn（环境变量优先，与 compute_factor_v1v6.py 一致）。
+from pgconn import add_conn_args, conn_from_args
 
 VERSION = "1.0"
 A_FACTORS = ["f_vwap_dev", "f_close_loc", "f_close_loc14", "f_mom_1h", "f_mom_4h",
@@ -175,6 +181,69 @@ def compute_b(cur):
     return rows
 
 
+# ---------------------------------------------------------------- C 组
+def compute_c(cur, since):
+    """基差时序因子（C 组）：由 ``app.features.position_factors.basis_factors`` 派生。
+
+    ★ 2026-11-06 接线：``basis_factors`` 此前**无任何调用方**（死代码）。本函数
+      用它把 ``spot_basis`` 的基差率时序转成两个**逐日逐品种**的因子：
+
+        · ``f_basis_mean60_z`` —— ``dom_basis_rate`` 的 60 日均值（横截面 z）
+        · ``f_basis_chg5_z``   —— ``dom_basis_rate`` 的 5 日变化（横截面 z）
+
+    防前视（§18.7① 红线）：每个交易日 d 只传入 **report_date <= d** 的窗口
+      （``basis_factors`` 内部对传入时序取尾部聚合 ⇒ 天然无前视）。
+
+    ⚠ 因子身份已由迁移 049 注册（``factor_registry``），且 enabled=false
+      （注册即中性）—— 真正启用须过回测闸门 + 准入流程。
+    """
+    from app.features.position_factors import basis_factors
+
+    cur.execute(
+        "SELECT report_date, symbol, dom_basis_rate, dom_basis, near_basis "
+        "FROM spot_basis WHERE report_date >= %s AND dom_basis_rate IS NOT NULL",
+        (since,))
+    df = pd.DataFrame(cur.fetchall(), columns=[
+        "report_date", "symbol", "dom_basis_rate", "dom_basis", "near_basis"])
+    if df.empty:
+        return []
+    df["symbol"] = df["symbol"].map(_to_main)
+    df["dom_basis_rate"] = pd.to_numeric(df["dom_basis_rate"], errors="coerce")
+    df = df.dropna(subset=["symbol", "dom_basis_rate"])
+    if df.empty:
+        return []
+
+    raw_rows = []
+    for sym, g in df.groupby("symbol"):
+        g = g.sort_values("report_date").reset_index(drop=True)
+        # i>=5：窗口至少 6 行，basis_factors 才有 basis_change_5d
+        for i in range(5, len(g)):
+            win = g.iloc[max(0, i - 59):i + 1]
+            out = basis_factors(win)
+            if not out:
+                continue
+            d = g["report_date"].iloc[i]
+            m60 = out.get("dom_basis_rate_mean_60")
+            c5 = out.get("basis_change_5d")
+            if m60 is not None:
+                raw_rows.append(("f_basis_mean60_z", d, sym, float(m60)))
+            if c5 is not None:
+                raw_rows.append(("f_basis_chg5_z", d, sym, float(c5)))
+    if not raw_rows:
+        return []
+
+    tmp = pd.DataFrame(raw_rows, columns=["factor_id", "trade_date", "symbol", "raw"])
+    rows: list = []
+    for fid, sub in tmp.groupby("factor_id"):
+        zz = _zscore(sub, "raw")
+        for (sym, date), raw, z in zip(zip(zz["symbol"], zz["trade_date"]),
+                                      zz["raw"], zz["z"]):
+            if pd.isna(z):
+                continue
+            rows.append((fid, date, sym, float(raw), float(z)))
+    return rows
+
+
 # ---------------------------------------------------------------- 落库
 def upsert(cur, rows):
     # 实际表列：factor_id, trade_date, symbol, raw_value, z_value, available_at,
@@ -196,12 +265,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", default="2015")
     ap.add_argument("--until", default="2026")
-    ap.add_argument("--groups", default="A,B", help="逗号分隔，默认 A,B")
+    ap.add_argument("--groups", default="A,B", help="逗号分隔，默认 A,B（A=日内价量 B=基本面 C=基差时序）")
     ap.add_argument("--dry-run", action="store_true")
+    add_conn_args(ap)
     a = ap.parse_args()
+    # ★ 2026-11-06 部署兜底：--until 默认值 "2026" 会被 factor_ic_scan._ymd 展开成
+    #   2026-01-01（"年"语义）→ A 组 SQL 变成 bucket >= <since> AND bucket < 2026-01-01
+    #   → **恒空**（A 组 11 个因子自 2026 年起从未产出过）。
+    #   调度器已显式传 --until；但**进程未重启时旧调度器不传**，此处再兜一层：
+    #   仅当「since 是完整日期（增量模式）」且 until 仍是默认的 "2026" 时，
+    #   把 until 兜底为「今天+1」。手工 `--since 2024`（4 位年）**不触发**，
+    #   保持原有全历史语义（避免 A 组一次拉 2 年数据打爆小实例）。
+    if a.until == "2026" and a.since and len(a.since) == 10:
+        a.until = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        print(f"[until] 未显式传入且为增量模式 → 兜底 until={a.until}")
     groups = {g.strip() for g in a.groups.split(",") if g.strip()}
 
-    conn = psycopg2.connect(**load_creds())
+    conn = psycopg2.connect(**conn_from_args(a))
     try:
         cur = conn.cursor()
         all_rows = []
@@ -213,8 +293,23 @@ def main():
         if "B" in groups:
             print("[B 组] 从基本面表计算横截面因子 ...")
             br = compute_b(cur)
+            # ★ 2026-11-06 部署修正：B 组各 SQL 是**全历史**扫描（compute_b 不接
+            #   since），实测 --since 2026-10-20 仍产出 751,361 行（≈全历史 5.5 年）
+            #   → 每日作业会把 75 万行 UPSERT 打进生产 factor_value（现 261 万行）。
+            #   z 值按「当日横截面」算，与历史窗口无关 ⇒ **只写增量窗口是等价且幂等的**。
+            #   这里做最小改动（不在 compute_b 的 6 处 SQL 里逐个加 WHERE，避免口径风险）。
+            _sd = datetime.date.fromisoformat(a.since) if a.since else None
+            if _sd is not None:
+                _n0 = len(br)
+                br = [r for r in br if r[1] >= _sd]
+                print(f"      [增量过滤] {_n0:,} -> {len(br):,} 行（trade_date >= {_sd}）")
             print(f"      B 组 {len(br):,} 行")
             all_rows += br
+        if "C" in groups:
+            print("[C 组] 从 spot_basis 计算基差时序因子（basis_factors）...")
+            cr = compute_c(cur, a.since)
+            print(f"      C 组 {len(cr):,} 行")
+            all_rows += cr
         conn.commit()
 
         # 统计

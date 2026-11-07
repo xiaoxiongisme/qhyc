@@ -26,8 +26,9 @@ load_1min_2026dump.py — D:/学习资料 dump（2026.zip 布局A / GFEX 布局B
   python load_1min_2026dump.py --zip "D:/学习资料/GFEX_广州期货交易所.zip" --gfex --targets local --apply
   python load_1min_2026dump.py --zip "D:/学习资料/2026.zip" --targets cloud --apply
 """
-import os
 from __future__ import annotations
+
+import os
 
 import argparse
 import csv

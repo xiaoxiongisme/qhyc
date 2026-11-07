@@ -515,7 +515,7 @@ def backtest_symbols(
             logger.warning(f"[backtest] {sym} 失败: {e}")
             try:
                 session.rollback()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
             results.append({"symbol": sym, "error": str(e)})
     return results

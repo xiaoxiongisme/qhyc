@@ -59,35 +59,126 @@ class BrakeConfig:
     lookback: int = 250        # 峰值回看窗口（交易日）
 
 
-def load_brake_config() -> BrakeConfig:
-    """从 cfg_feature_switch（迁移 008）读取熔断配置；表缺失/异常时退回默认（关闭）。
+#: 阈值字段 → env 变量名（env 作为库内配置缺失时的**部署兜底**）。
+#:
+#: ⚠ 这些 env 是既有部署实际在用的调参入口（PORTFOLIO_BRAKE_DD_WARN 等），
+#:   接线时**必须保留**：直接换成"只读库内 JSON"会让线上失去 env 兜底。
+_ENV_THRESHOLDS: dict[str, str] = {
+    "dd_warn": "PORTFOLIO_BRAKE_DD_WARN",
+    "dd_stop": "PORTFOLIO_BRAKE_DD_STOP",
+    "lookback": "PORTFOLIO_BRAKE_LOOKBACK",
+}
 
-    ⚠ 当前**无生产调用方**（2026-10-08 核查）：`scheduler._apply_portfolio_brake`
-      并**不**调用本函数，而是
-        · 开关走 `_switch_on("portfolio_brake_enabled", "PORTFOLIO_BRAKE_ENABLED")`
-          （优先读 DB，表缺失才回退 env）；
-        · 阈值一律 `os.getenv(PORTFOLIO_BRAKE_DD_WARN / _DD_STOP / _LOOKBACK)`。
+#: 开关的 env 兜底（与 scheduler._switch_on 的判定口径一致：'1'/'0'）。
+_ENV_ENABLED = "PORTFOLIO_BRAKE_ENABLED"
 
-      故本函数解析的 ``cfg_feature_switch.portfolio_brake_enabled`` 里那个 JSON
-      （``{"dd_warn":0.15,...}``）**不会生效**。原 docstring 声称"改库内 JSON 即可调阈值"
-      是错的——照做会得到"配置显示可调、实际不生效"，与本次事故同构
-      （开关显示开启、实际空转）。若要真正做到库内可调，需先改 scheduler 改用本函数。
+
+def _read_switch_row(switch_key: str = "portfolio_brake_enabled"):
+    """直读 ``cfg_feature_switch`` 一行，返回 ``(enabled, value)``；无行/异常返回 None。
+
+    ⚠ **不走** :func:`app.core.feature_switch.is_enabled` / :func:`get_value`：
+      那两个**无法区分**「库内明确 ``enabled=false``」与「库里根本没这一行」——
+      而这正是 env 兜底该不该生效的分界：
+
+        · 库内**有**这一行 → 以库内为准（运维显式关了就该关，env 不该翻案）；
+        · 库内**没有**这一行（表缺失 / 未迁移） → 沿用 env 部署口径（保持既有行为）。
+
+      若统一用 ``is_enabled(key, default=False)``，第二种情况会被当成
+      「库内明确关闭」→ env 兜底永久失效 → 线上熔断再也开不起来（静默失效）。
     """
-    from app.core.feature_switch import is_enabled, get_value
+    from sqlalchemy import text
 
-    enabled = is_enabled("portfolio_brake_enabled", default=False)
-    cfg = BrakeConfig(enabled=enabled)
-    raw = get_value("portfolio_brake_enabled")
-    if raw:
-        try:
-            import json
-            kv = json.loads(raw) if raw.strip().startswith("{") else {}
-            cfg.dd_warn = float(kv.get("dd_warn", cfg.dd_warn))
-            cfg.dd_stop = float(kv.get("dd_stop", cfg.dd_stop))
-            cfg.lookback = int(kv.get("lookback", cfg.lookback))
-        except (ValueError, TypeError):
-            logger.warning("[portfolio_brake] value 解析失败，用默认值")
-    return cfg
+    try:
+        from app.core.db import get_engine
+
+        with get_engine().connect() as conn:
+            row = conn.execute(
+                text("SELECT enabled, value FROM cfg_feature_switch WHERE switch_key = :k"),
+                {"k": switch_key},
+            ).first()
+        if row is None:
+            return None
+        return bool(row[0]), row[1]
+    except Exception as exc:  # noqa: BLE001 —— 表缺失/连接失败 → 交由调用方回退 env
+        logger.opt(exception=True).warning(
+            f"[portfolio_brake] 读 cfg_feature_switch 失败（回退 env/默认）：{exc}")
+        return None
+
+
+def load_brake_config(*, env_fallback: bool = True) -> BrakeConfig:
+    """读取组合熔断配置（库内 ``cfg_feature_switch`` 优先，env 兜底）。
+
+    ★ 2026-11-06 接线（此前本函数**无生产调用方**）
+      ------------------------------------------------
+      旧实现在 :func:`scheduler._apply_portfolio_brake` 里**不被调用**：
+      scheduler 自己用 ``_switch_on(...)`` 拼 ``BrakeConfig``，阈值一律取 env。
+      于是本函数解析的 ``cfg_feature_switch.portfolio_brake_enabled`` 里那个
+      JSON（``{"dd_warn":0.15,...}``）**永远不生效** —— 即"配置显示可调、
+      实际不生效"，与本次体检同构的静默失效。现已由 scheduler 调用。
+
+    取值优先级（**每项独立**，库内显式值 > env > 内置默认）：
+
+    ==============  ==========================================================
+    字段             优先级
+    ==============  ==========================================================
+    ``enabled``      库内 ``enabled`` 列（行存在时）→ 否则 env ``PORTFOLIO_BRAKE_ENABLED``
+    ``dd_warn``      库内 JSON ``dd_warn`` → env ``PORTFOLIO_BRAKE_DD_WARN`` → 0.15
+    ``dd_stop``      库内 JSON ``dd_stop`` → env ``PORTFOLIO_BRAKE_DD_STOP`` → 0.25
+    ``lookback``     库内 JSON ``lookback`` → env ``PORTFOLIO_BRAKE_LOOKBACK`` → 250
+    ==============  ==========================================================
+
+    ⚠ env 兜底**不可省**：既有部署用这几个 env 调参；只读库会让线上失去兜底。
+    ⚠ 库内 JSON 解析失败**不抛错**：熔断失效可以，误杀不行（记 warning 后继续）。
+    """
+    import json
+    import os
+
+    defaults = BrakeConfig()
+
+    row = _read_switch_row()
+    if row is None:
+        # 库里没有这一行（表缺失/未迁移）→ 沿用 env 部署口径（保持既有行为）。
+        enabled = False
+        if env_fallback:
+            enabled = os.getenv(_ENV_ENABLED, "0") == "1"
+        kv: dict = {}
+    else:
+        enabled, raw = row
+        kv = {}
+        if raw:
+            try:
+                parsed = json.loads(raw) if str(raw).strip().startswith("{") else {}
+                if isinstance(parsed, dict):
+                    kv = parsed
+            except (ValueError, TypeError):
+                logger.warning(
+                    "[portfolio_brake] cfg_feature_switch.value 不是合法 JSON，"
+                    "本轮阈值改用 env/默认值")
+
+    def _num(field: str, cast):
+        v = kv.get(field)
+        if v is not None:
+            try:
+                return cast(v)
+            except (ValueError, TypeError):
+                logger.warning(
+                    f"[portfolio_brake] 库内 {field}={v!r} 类型非法，改用 env/默认值")
+        if env_fallback:
+            ev = os.getenv(_ENV_THRESHOLDS[field])
+            if ev is not None and str(ev).strip() != "":
+                try:
+                    return cast(ev)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        f"[portfolio_brake] env {_ENV_THRESHOLDS[field]}={ev!r} 非法，改用默认值")
+        return getattr(defaults, field)
+
+    return BrakeConfig(
+        enabled=enabled,
+        dd_warn=_num("dd_warn", float),
+        dd_stop=_num("dd_stop", float),
+        lookback=_num("lookback", int),
+    )
 
 
 def max_drawdown(equity: list[float]) -> float:
@@ -286,8 +377,8 @@ def load_equity_curve(session, symbol: str | None = None,
         _mark(False, f"query_error:{type(e).__name__}")
         try:
             session.rollback()
-        except Exception:  # noqa: BLE001 —— rollback 自身失败也别掩盖上面的诊断
-            pass
+        except Exception as exc:  # noqa: BLE001 —— rollback 自身失败也别掩盖上面的诊断
+            logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
         logger.error(
             "[portfolio_brake] 权益曲线查询失败（{}），无法计算回撤。"
             "**熔断实际未生效**（恒等放行）。这是**数据库/查询故障**，"

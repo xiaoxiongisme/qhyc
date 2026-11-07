@@ -25,6 +25,9 @@ import os
 import sys
 
 import psycopg2
+import logging
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pgconn import add_conn_args, conn_from_args  # noqa: E402
@@ -111,8 +114,8 @@ def main():
     hypertables = set()
     try:
         hypertables = {r[0] for r in q(cur, "SELECT hypertable_name FROM timescaledb_information.hypertables")}
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
     # 3) 现有约束/索引
     cons = {}

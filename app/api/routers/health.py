@@ -33,7 +33,7 @@ def _readiness() -> dict:
                     FROM (
                         SELECT symbol, max(trade_date) AS maxd
                         FROM daily_bar
-                        WHERE symbol ~ '^[A-Za-z]+888$'
+                        WHERE symbol LIKE '%888'
                         GROUP BY symbol
                     ) t
                     """
