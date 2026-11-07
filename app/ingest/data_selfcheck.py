@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -39,7 +40,9 @@ class SelfCheckConfig:
     enabled: bool = False
     missing_pct_alarm: float = 0.05
     zero_volume_days: int = 3
-    #: 参与检查的周期（表 → 该表一个交易日的预期 bar 数）
+    #: 缺失判定的基线窗口（**最近 N 个有数据的交易日**，不是自然日）
+    baseline_days: int = 5
+    #: 参与检查的周期（表 → 该表一个交易日的预期 bar 数；仅作兜底，实际用自适应基线）
     expected_bars: dict = field(default_factory=lambda: {
         "bar_15m": 32,    # 15m：日盘+夜盘约 32 根
         "bar_30m": 16,
@@ -108,6 +111,48 @@ def _time_col(session, table: str) -> str | None:
     return None
 
 
+def _tradable_scope_vars(session) -> tuple[bool, list[str]]:
+    """品种口径（CL-20261107-01）→ ``(是否过滤, 品种代码列表)``。
+
+    * 开关关闭 / 视图为空 / 查询失败 → ``(False, [])``，即**不过滤**（fail-open）。
+      与 ``app/data/tradable_scope.py`` 完全同一语义：口径读不到时按「全部品种」处理，
+      不能因为口径表缺失就让日检整体静默停摆。
+    * 口径里存的是 ``RB888`` 这类符号，判定时用 ``regexp_replace(symbol,'8888?$','')``
+      归一到品种代码，这样 ``bar_*``（RB888）与 ``daily_bar``（RB）两种命名都能匹配。
+    """
+    try:
+        arr = session.execute(
+            text("SELECT l3_ref.tradable_scope_array()")).scalar()
+    except Exception as e:  # noqa: BLE001
+        session.rollback()
+        logger.info(f"[data_selfcheck] 读取品种口径失败（按不过滤处理）：{e}")
+        return False, []
+    if not arr:
+        return False, []
+    codes = sorted({re.sub(r"8888?$", "", s) for s in arr if s})
+    return (True, codes) if codes else (False, [])
+
+
+def _ref_trading_days(session, before: date, n: int) -> list[date]:
+    """参考交易日 = ``daily_bar`` 里 before 之前最近 n 个交易日。
+
+    为什么不能直接用目标表里出现过的日期：周五夜盘的 K 落在**周六** 00:00~02:30，
+    ``bar_60m`` 因此有 10-31 这样的「残日」（只有 4 根）。把它算进基线会把中位数
+    拉低、并让 ``max > 1.4×min`` 的稳定性门把正常品种全部跳过。
+    ``daily_bar`` 是逐交易日的，天然没有残日，是现成的交易日历（5317 天）。
+    """
+    try:
+        rows = session.execute(text(
+            "SELECT DISTINCT trade_date FROM daily_bar "
+            "WHERE trade_date < :d ORDER BY 1 DESC LIMIT :n"
+        ), {"d": before, "n": n}).scalars().all()
+    except Exception as e:  # noqa: BLE001
+        session.rollback()
+        logger.info(f"[data_selfcheck] 读取交易日历失败（退回按表内日期取基线）：{e}")
+        return []
+    return sorted({r for r in rows if r is not None})
+
+
 def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
     """检查各周期表当日 bar 数缺失比例。返回写入工单数。
 
@@ -126,9 +171,34 @@ def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
          若把周六当交易日检查，bar_60m 仅 4 根 vs 期望 8 ⇒ 全市场 82 品种齐刷
          「缺失」工单，首次开日检就会灌满 ``anomaly_ticket``，真缺失被噪音淹没。
          （交易日判断由 run() 统一做，见 :func:`run`。）
+
+    ★ 2026-11-07 晚（**第三处系统性误报：基线窗口跨口径切换**）
+      ------------------------------------------------------------
+      上一版把基线取成「过去 40 个自然日内该 symbol 各日 bar 数的中位数」。
+      60m 桶在 2026-10-30 从「自然整点」切成「交易分钟会话」（旧网格一天 12 根，
+      其中 3 根是 11:15/14:15/23:01 这类碎片；新网格一天 6 根且无碎片）。
+      40 天窗口里旧网格占多数 ⇒ 中位数停在 9，而 11-06 的**正确值**是 6
+      ⇒ 38 个白名单品种 + 39 个非白名单品种**全部**被判「缺失 33%」。
+      实测 11-06 白名单 38 品种的原始分钟数 12483 / 12507 / 12508（11-04/05/06），
+      逐品种平均差 0.0 分钟 —— 数据是完整的，**工单是假的**。
+
+      两处改动：
+
+      * **窗口改短且按「有数据的交易日」取**（``baseline_days``，默认 5）。
+        口径切换后 5 天就自适应完，不会像 40 天那样被旧网格长期污染。
+      * **基线不稳定则不判定**：窗口内 ``max > 1.4 × min`` 说明样本横跨口径切换、
+        或含半日市/长假前后 —— 此时中位数没有代表性，跳过并留痕（info），
+        **宁可当天不判，也不许拿错基线刷工单**。真缺口由 ``check_layer_freshness``
+        与 ``check_tail_regression`` 兜底，不会因为这条而失守。
+      * **只检查口径内品种**：非白名单品种自 CL-20261107-01 起停止派生，
+        它们的 bar 数不再增长属于设计行为，不该天天报缺失。口径为空（开关关闭）
+        时不过滤（fail-open），与 ``app/data/tradable_scope.py`` 同一语义。
     """
     n = 0
     skipped: list[str] = []
+    scope_on, vscope = _tradable_scope_vars(session)
+    nb = max(3, int(cfg.baseline_days))
+    ref_days = _ref_trading_days(session, trade_date, nb)
     for table, expect in cfg.expected_bars.items():
         tc = _time_col(session, table)
         if tc is None:
@@ -137,42 +207,75 @@ def check_missing(session, cfg: SelfCheckConfig, trade_date: date) -> int:
                 f"[data_selfcheck] {table} **缺失检查未执行**：找不到可识别的时间列"
                 f"（候选 {_TIME_COL_CANDIDATES}）—— 该表的 bar 缺失无人巡检")
             continue
+        days = ref_days
+        if not days:
+            # 交易日历不可用（daily_bar 还没铺到该日期）：退回该表自身的日期
+            try:
+                days = sorted(session.execute(text(
+                    f"SELECT DISTINCT {tc}::date FROM {table} "
+                    f"WHERE {tc} >= :d0 AND {tc} < :d "
+                    f"ORDER BY 1 DESC LIMIT :nb"
+                ), {"d": trade_date, "d0": trade_date - timedelta(days=40),
+                    "nb": nb}).scalars().all())
+            except Exception as e:  # noqa: BLE001
+                session.rollback()
+                logger.error(f"[data_selfcheck] {table} 取基线日期失败：{e}")
+                continue
         try:
-            # 自适应基线：过去 40 个自然日窗口内，该 symbol 各交易日的 bar 数中位数。
-            # 用「< 当日」的日期算中位数，避免当日异常值污染基线。
             rows = session.execute(text(f"""
                 WITH daily AS (
                     SELECT symbol, {tc}::date AS d, count(*) AS c
                     FROM {table}
                     WHERE {tc} >= :d0 AND {tc} < :d1
+                      AND (:scope_on = false
+                           OR regexp_replace(symbol, '8888?$', '') = ANY(CAST(:vscope AS text[])))
                     GROUP BY 1, 2
-                ), med AS (
-                    SELECT symbol, percentile_cont(0.5) WITHIN GROUP (ORDER BY c) AS m
-                    FROM daily WHERE d < :d GROUP BY 1
+                ), agg AS (
+                    SELECT symbol,
+                           percentile_cont(0.5) WITHIN GROUP (ORDER BY c) AS m,
+                           min(c) AS lo, max(c) AS hi, count(*) AS ndays
+                    FROM daily WHERE d = ANY(CAST(:ref_days AS date[]))
+                    GROUP BY 1
                 )
-                SELECT t.symbol, t.c, med.m
-                FROM daily t LEFT JOIN med USING (symbol)
+                SELECT t.symbol, t.c, agg.m, agg.lo, agg.hi, agg.ndays
+                FROM daily t LEFT JOIN agg USING (symbol)
                 WHERE t.d = :d
             """), {"d": trade_date,
                    "d0": trade_date - timedelta(days=40),
-                   "d1": trade_date + timedelta(days=1)}).fetchall()
+                   "d1": trade_date + timedelta(days=1),
+                   "scope_on": scope_on,
+                   "vscope": vscope,
+                   "ref_days": days}).fetchall()
         except Exception as e:  # noqa: BLE001
             session.rollback()
             skipped.append(table)
             logger.error(f"[data_selfcheck] {table}（用列 {tc}）缺失检查**未执行**：{e}")
             continue
-        for sym, c, m in rows:
+        unstable = 0
+        for sym, c, m, lo, hi, ndays in rows:
             if m is None or m <= 0:
                 # 新 symbol / 无历史基线：首日无可比对象，跳过并留痕（不报工单）
                 logger.info(
                     f"[data_selfcheck] {table} {sym} 无历史基线（首个交易日？），跳过缺失判定")
                 continue
+            if ndays is not None and ndays < 3:
+                logger.info(
+                    f"[data_selfcheck] {table} {sym} 基线样本仅 {ndays} 天（<3），跳过判定")
+                continue
+            if lo is not None and hi is not None and float(hi) > float(lo) * 1.4:
+                # 横跨口径切换 / 含半日市：中位数无代表性
+                unstable += 1
+                continue
             if c < float(m) * (1 - cfg.missing_pct_alarm):
                 _log_ticket(session, sym, trade_date, f"{table}.missing_bars",
-                            f"{table} {trade_date} 仅 {c} 根，近 20 日中位 {float(m):.0f} "
+                            f"{table} {trade_date} 仅 {c} 根，近 {nb} 个交易日中位 {float(m):.0f} "
                             f"（缺失 {1 - c/float(m):.1%}）",
                             diff=float(float(m) - c) / float(m))
                 n += 1
+        if unstable:
+            logger.info(
+                f"[data_selfcheck] {table} 有 {unstable} 个品种基线不稳定"
+                f"（窗口内 max>1.4×min，疑似跨口径切换/半日市），本轮不判定")
     if skipped:
         # fail-loud：让「有表没被检查」在结果里显式可见
         logger.error(f"[data_selfcheck] 本轮有 {len(skipped)} 张表**未被检查**：{skipped}")
