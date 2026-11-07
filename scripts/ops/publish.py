@@ -178,8 +178,10 @@ def main() -> int:
         msg = str(e)
         if "untracked working tree files would be overwritten" not in msg:
             raise
-        blockers = [ln.split("\t")[-1].strip() for ln in msg.splitlines()
-                    if ln.strip().startswith("\t") or ln.strip().startswith("    ")]
+        # ⚠ 必须用**未 strip** 的行判断缩进：git 的清单行是 "\tscripts/..."，
+        #   strip 之后就变成 "scripts/..."，条件永远不成立 → blockers 恒空。
+        blockers = [ln.strip() for ln in msg.splitlines()
+                    if ln.startswith("\t") or ln.startswith("    ")]
         blockers = [b for b in blockers if b]
         if not blockers:
             raise
