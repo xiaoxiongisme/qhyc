@@ -120,10 +120,11 @@ _SESSION_DAY_BOUNDS = {
 #: 使 ``_session_insert_sql`` 里各 CTE 的列引用一字不改。
 _INDEX_FROM = ("(SELECT * FROM l0_raw.minute_bar WHERE layer = 'index') AS minute_bar")
 
-#: 指数层符号谓词（CL-20261107-13）。品种口径只含 ``*888``，指数层 ``*8888`` 不在其中，
-#: 所以 purge 时无法用口径条件删到它们，必须单独一条 DELETE；否则 L1 里的 8888
-#: 永远留着上一轮的旧桶（实测 2026-11-02 的伪造平线一直没被清掉）。
-_INDEX_SYM_PRED = "symbol ~ '^[A-Za-z]+8888$'"
+#: 指数层符号谓词（CL-20261107-13）。品种口径 80 个符号里只有 **38** 个是 ``*8888``，
+#: 而指数层实际有 82 个符号 —— 另外 **44 个在口径外**（FB/WR/TL/CS/CY/LU/NR/OP/PL/PG/PR/SN/SP…）。
+#: 若 purge 与合成都按口径走，这 44 条指数连既不会被删也不会被重建：口径外品种一旦
+#: 进入指数层，它的旧桶就永久冻结在那里，再没人校正。
+_INDEX_SYM_PRED = "symbol LIKE '%8888'"
 
 
 def _session_insert_sql(step: int, where: str, tail: str, t: str = "",
@@ -486,11 +487,15 @@ def _max_minute_ts(session: Session,
 def _index_layer_stale(session: Session, since: datetime) -> dict[str, list[str]]:
     """指数层 ``bar_*`` 落后于 L0 指数分钟的符号（按**日期**比较，口径无关）。
 
-    CL-20261107-13：合成后的「追平」校验只取 ``scope.symbols``（80 个全是 ``*888``），
-    指数层 ``*8888`` 整批在视野之外。实测 ``FU8888`` 的 ``bar_15m``/``bar_60m`` 停在
-    2026-11-02 23:00 而 L0 已到 11-06 23:00，主连 ``FU888`` 却是最新的 —— 连续 4 天
-    无人发现。而 8888 是换月 ratio 门 ``coalesce(idx_delta,1e9) < 0.40*|cc|`` 的**唯一**
-    输入：它停更 ⇒ ``idx_delta`` 为 NULL ⇒ 门恒不成立 ⇒ 换月静默不再追加。
+    CL-20261107-13：原有的「追平」校验是**层次盲**的 —— 它取 ``_max_minute_ts(scope_syms)``
+    与 ``_max_bucket(t, scope_syms)`` 相比，而这两个值跨 ``continuous`` / ``index`` 两层、
+    且只看口径符号。实测 ``FU8888`` 的 ``bar_15m``/``bar_60m`` 停在 2026-11-02 23:00，
+    主连 ``FU888`` 是最新的，于是校验一路「通过」，指数层停更 4 天无人发现。
+    而 8888 是换月 ratio 门 ``coalesce(idx_delta,1e9) < 0.40*|cc|`` 的**唯一**输入：
+    它停更 ⇒ ``idx_delta`` 为 NULL ⇒ 门恒不成立 ⇒ 换月静默不再追加。
+
+    这里逐符号比对「同一符号」的 L0 指数分钟与 L1 桶日期，不做跨层、不做跨符号，
+    才能真正看见指数层自己停在哪里。
 
     按日期而非桶比较，是为了不依赖「自然整点 / 会话分钟」两套网格的差异；
     并留 1 天容忍，避免「当天只剩一根不完整分钟、被 maxgap 门丢掉」这种正常情形
@@ -530,13 +535,12 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
     指数连，改从基表读 ``layer='index'``。两条链路符号不相交（``RB888`` / ``RB8888``），
     同一张 ``bar_*`` 表里互不覆盖。
 
-    ``layer='index'`` **不过品种口径**（CL-20261107-13）：口径是「可交易品种池」，
-    ``l3_ref.tradable_scope_array()`` 实测 80 个符号**全是以 888 结尾**，一个 8888
-    都没有。若指数层也套 ``symbol = ANY(scope)``，读取侧直接 0 行 —— 实测表现为
-    ``FU8888`` 的 ``bar_15m``/``bar_60m`` 停在 2026-11-02 23:00 而 L0 已到 11-06
-    23:00，主连（``FU888``）却是最新的。而 8888 是换月检测 ratio 门的**唯一**输入，
-    它停更就等于「换月检测停更」，且全程不报错。
-    指数层本就只包含「有主连的品种」的派生，品种范围由 L0 内容决定，不需要再收口。
+    ``layer='index'`` **不过品种口径**（CL-20261107-13）：品种口径是「可交易品种池」，
+    80 个符号里只有 38 个是 ``*8888``，而指数层实际有 82 个符号 —— 另外 44 个在口径外
+    （FB/WR/TL/CS/CY/LU/NR/OP/PL/PG/PR/SN/SP…）。指数层是 L2 换月检测 ratio 门的
+    **唯一**输入，属于派生基础设施而不是池成员：若也套口径，这 44 条指数连永远不刷新，
+    且 ``purge`` 同样删不到它们 → 旧桶永久冻结、无人校正。
+    指数层的符号范围应当由 L0 里「有哪些品种的合约分钟」决定，不需要再按池收口。
     """
     step = _SESSION_BARS.get(t)
     # 「WHERE TRUE」打底：这样 since / 口径两个条件都能无条件以 AND 追加，
@@ -626,9 +630,8 @@ def purge_recent_buckets(session: Session, days_back: int = 4,
         r = session.execute(
             text(f"DELETE FROM {t} WHERE bucket >= :c{wc}"), {"c": c, **extra})
         # ★ 2026-11-07（CL-20261107-13）：指数层单独删。
-        #   品种口径 80 个符号全是 *888，*8888 一个都不在 `wc` 里 —— 只按口径删，
-        #   8888 的旧桶会永远留着（实测 11-02 的伪造常数平线一直没被清掉，
-        #   而它正好是换月 ratio 门的输入）。
+        #   品种口径 80 个符号里只有 38 个是 *8888，指数层实际 82 个符号 ——
+        #   另外 44 个在口径外，只按口径删就永远删不到它们，旧桶会永久冻结。
         #   删除范围 ⊆ 重建范围：`_synth_one(layer='index')` 不过口径，会在同一窗口
         #   按 L0 全量重建这些符号，所以不会「删了不补」。
         r2 = session.execute(
