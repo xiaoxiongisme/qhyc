@@ -421,80 +421,40 @@ COMMENT ON PROCEDURE l2_adj.sp_build_l2_back_adjusted(text, text, boolean) IS
 --      （app/data/caliber.py 的路由就写的是裸名）→ 收口必须落在视图上，
 --      否则「品种池」在读取层永远是 82。
 --    ★ 原始全量数据保留在 l1_mkt.bar_*，研究/回补需要时显式限定 schema 即可。
---    ★ 用 MATERIALIZED 单行 CTE 承载开关与两个小数组：每行只做一次
---      = ANY(array) 线性扫描（76 元），不做逐行 regexp 或标量函数。
+--    ★ 性能（2026-11-07 实测，321 万行）与为什么这样写：
+--      开关用 initplan：`NOT (SELECT ...)` 只求值一次；
+--      成员判断用 `IN (子查询)` 走 hashed SubPlan，每行一次 hash 探测。
+--      首版写成 MATERIALIZED CTE + `= ANY(array)`，76 元数组逐行线性扫描，
+--      321 万行 = 2.4 亿次比较：count(*) 4660ms → 现在 679ms（6.9x）；
+--      带时间窗聚合 58ms → 7ms（8x）。**不要改回 = ANY(array)**。
 -- ===========================================================================
 CREATE OR REPLACE VIEW public.bar_5m AS
-WITH cfg AS MATERIALIZED (
-    SELECT l3_ref.tradable_filter_on() AS on_,
-           (SELECT array_agg(v.variety_code || x.sfx)
-              FROM l3_ref.tradable_variety v
-              CROSS JOIN (VALUES ('888'), ('8888')) AS x(sfx)
-             WHERE v.effective_from <= CURRENT_DATE
-               AND (v.effective_to IS NULL OR v.effective_to >= CURRENT_DATE)) AS wl,
-           (SELECT array_agg(p.symbol) FROM public.fusion_position p
-             WHERE COALESCE(p.position, 'FLAT') <> 'FLAT') AS held
-)
 SELECT b.symbol, b.bucket, b.open, b.high, b.low, b.close,
        b.volume, b.amount, b.open_interest
-FROM l1_mkt.bar_5m b, cfg
-WHERE NOT cfg.on_
-   OR b.symbol = ANY(COALESCE(cfg.wl, ARRAY[]::text[]))
-   OR b.symbol = ANY(COALESCE(cfg.held, ARRAY[]::text[]));
+FROM l1_mkt.bar_5m b
+WHERE NOT (SELECT l3_ref.tradable_filter_on())
+   OR b.symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope);
 
 CREATE OR REPLACE VIEW public.bar_15m AS
-WITH cfg AS MATERIALIZED (
-    SELECT l3_ref.tradable_filter_on() AS on_,
-           (SELECT array_agg(v.variety_code || x.sfx)
-              FROM l3_ref.tradable_variety v
-              CROSS JOIN (VALUES ('888'), ('8888')) AS x(sfx)
-             WHERE v.effective_from <= CURRENT_DATE
-               AND (v.effective_to IS NULL OR v.effective_to >= CURRENT_DATE)) AS wl,
-           (SELECT array_agg(p.symbol) FROM public.fusion_position p
-             WHERE COALESCE(p.position, 'FLAT') <> 'FLAT') AS held
-)
 SELECT b.symbol, b.bucket, b.open, b.high, b.low, b.close,
        b.volume, b.amount, b.open_interest
-FROM l1_mkt.bar_15m b, cfg
-WHERE NOT cfg.on_
-   OR b.symbol = ANY(COALESCE(cfg.wl, ARRAY[]::text[]))
-   OR b.symbol = ANY(COALESCE(cfg.held, ARRAY[]::text[]));
+FROM l1_mkt.bar_15m b
+WHERE NOT (SELECT l3_ref.tradable_filter_on())
+   OR b.symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope);
 
 CREATE OR REPLACE VIEW public.bar_30m AS
-WITH cfg AS MATERIALIZED (
-    SELECT l3_ref.tradable_filter_on() AS on_,
-           (SELECT array_agg(v.variety_code || x.sfx)
-              FROM l3_ref.tradable_variety v
-              CROSS JOIN (VALUES ('888'), ('8888')) AS x(sfx)
-             WHERE v.effective_from <= CURRENT_DATE
-               AND (v.effective_to IS NULL OR v.effective_to >= CURRENT_DATE)) AS wl,
-           (SELECT array_agg(p.symbol) FROM public.fusion_position p
-             WHERE COALESCE(p.position, 'FLAT') <> 'FLAT') AS held
-)
 SELECT b.symbol, b.bucket, b.open, b.high, b.low, b.close,
        b.volume, b.amount, b.open_interest
-FROM l1_mkt.bar_30m b, cfg
-WHERE NOT cfg.on_
-   OR b.symbol = ANY(COALESCE(cfg.wl, ARRAY[]::text[]))
-   OR b.symbol = ANY(COALESCE(cfg.held, ARRAY[]::text[]));
+FROM l1_mkt.bar_30m b
+WHERE NOT (SELECT l3_ref.tradable_filter_on())
+   OR b.symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope);
 
 CREATE OR REPLACE VIEW public.bar_60m AS
-WITH cfg AS MATERIALIZED (
-    SELECT l3_ref.tradable_filter_on() AS on_,
-           (SELECT array_agg(v.variety_code || x.sfx)
-              FROM l3_ref.tradable_variety v
-              CROSS JOIN (VALUES ('888'), ('8888')) AS x(sfx)
-             WHERE v.effective_from <= CURRENT_DATE
-               AND (v.effective_to IS NULL OR v.effective_to >= CURRENT_DATE)) AS wl,
-           (SELECT array_agg(p.symbol) FROM public.fusion_position p
-             WHERE COALESCE(p.position, 'FLAT') <> 'FLAT') AS held
-)
 SELECT b.symbol, b.bucket, b.open, b.high, b.low, b.close,
        b.volume, b.amount, b.open_interest
-FROM l1_mkt.bar_60m b, cfg
-WHERE NOT cfg.on_
-   OR b.symbol = ANY(COALESCE(cfg.wl, ARRAY[]::text[]))
-   OR b.symbol = ANY(COALESCE(cfg.held, ARRAY[]::text[]));
+FROM l1_mkt.bar_60m b
+WHERE NOT (SELECT l3_ref.tradable_filter_on())
+   OR b.symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope);
 
 COMMENT ON VIEW public.bar_60m IS
     '60m 未复权主连兼容视图（CL-20261107-01 S4 起按品种口径过滤）。'
@@ -503,22 +463,11 @@ COMMENT ON VIEW public.bar_60m IS
 
 -- access 层同口径（供 BI/外部只读账号）
 CREATE OR REPLACE VIEW access.v_bar_60m_main AS
-WITH cfg AS MATERIALIZED (
-    SELECT l3_ref.tradable_filter_on() AS on_,
-           (SELECT array_agg(v.variety_code || x.sfx)
-              FROM l3_ref.tradable_variety v
-              CROSS JOIN (VALUES ('888'), ('8888')) AS x(sfx)
-             WHERE v.effective_from <= CURRENT_DATE
-               AND (v.effective_to IS NULL OR v.effective_to >= CURRENT_DATE)) AS wl,
-           (SELECT array_agg(p.symbol) FROM public.fusion_position p
-             WHERE COALESCE(p.position, 'FLAT') <> 'FLAT') AS held
-)
 SELECT b.symbol, b.bucket, b.open, b.high, b.low, b.close,
        b.volume, b.amount, b.open_interest
-FROM l1_mkt.bar_60m b, cfg
-WHERE NOT cfg.on_
-   OR b.symbol = ANY(COALESCE(cfg.wl, ARRAY[]::text[]))
-   OR b.symbol = ANY(COALESCE(cfg.held, ARRAY[]::text[]));
+FROM l1_mkt.bar_60m b
+WHERE NOT (SELECT l3_ref.tradable_filter_on())
+   OR b.symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope);
 
 -- ===========================================================================
 -- 5) S5：月度归档水位线表
