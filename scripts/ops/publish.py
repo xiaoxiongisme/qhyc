@@ -115,15 +115,20 @@ def main() -> int:
     prod_dirty = _ssh(f"cd {PROD_REPO} && git status --porcelain -uno").strip()
     if prod_dirty:
         dirty_files = [ln[3:].strip() for ln in prod_dirty.splitlines() if ln.strip()]
-        # 只有一种情况可以自动收拾：脏文件的内容**与要拉取的提交逐字节相同**
-        # （典型来历：有人 scp 了同一份内容过去）。这时 checkout 不丢任何东西。
+        # 只有一种情况可以自动收拾：脏文件的内容**与要拉取的提交相同**。
+        # 两次判定：先逐字节；再忽略行尾 CR（本地 core.autocrlf 会把 LF 检出成 CRLF，
+        # 一旦用 scp 把「工作副本文本」搬过去，生产看到的就是纯行尾差异）。
+        # 忽略 CR 后仍不同 = 内容真的不一样，必须人看。
+        flist = " ".join(dirty_files)
         same = _ssh(
-            f"cd {PROD_REPO} && git diff --quiet origin/{a.branch} -- "
-            + " ".join(dirty_files) + " && echo SAME || echo DIFF").strip()
-        if same.endswith("SAME"):
-            print(f"⚠ 生产有 {len(dirty_files)} 个文件被绕过通道改动，但内容与 "
-                  f"origin/{a.branch} 完全一致（scp 同一份内容）→ 自动 checkout 归位")
-            _ssh(f"cd {PROD_REPO} && git checkout -- " + " ".join(dirty_files))
+            f"cd {PROD_REPO} && git diff --quiet origin/{a.branch} -- {flist} "
+            f"&& echo SAME || (git diff --quiet --ignore-cr-at-eol origin/{a.branch} "
+            f"-- {flist} && echo SAME_CRLF || echo DIFF)").strip()
+        if same.endswith(("SAME", "SAME_CRLF")):
+            why = "（差异仅为 CRLF 行尾，scp 工作副本所致）" if "CRLF" in same else ""
+            print(f"⚠ 生产有 {len(dirty_files)} 个文件被绕过通道改动，"
+                  f"内容与 origin/{a.branch} 一致{why} → 自动 checkout 归位")
+            _ssh(f"cd {PROD_REPO} && git checkout -- {flist}")
         else:
             print("✗ 生产存在已跟踪文件的改动，且内容与 origin/%s **不同** —— 拒绝 pull。"
                   % a.branch)
