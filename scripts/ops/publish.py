@@ -130,7 +130,15 @@ def main() -> int:
     _ssh(f"cd {PROD_REPO} && git fetch --quiet")
     prod_dirty = _ssh(f"cd {PROD_REPO} && git status --porcelain -uno").strip()
     if prod_dirty:
-        dirty_files = [ln[3:].strip() for ln in prod_dirty.splitlines() if ln.strip()]
+        # 文件名用 `git diff --name-only` 取，**不要**去切 porcelain 的前缀：
+        # porcelain 的状态位宽度（" M "/"M  "/"MM"）不是固定的，切 3 个字符会把
+        # 首字母吃掉（实测把 app/ingest/... 变成 pp/ingest/...）。
+        dirty_files = [x for x in _ssh(
+            f"cd {PROD_REPO} && git diff --name-only").splitlines() if x.strip()]
+        if not dirty_files:
+            print("✗ 生产工作树脏，但 diff --name-only 为空（可能有未完成的操作），人工检查")
+            print(prod_dirty)
+            return 1
         # 只有一种情况可以自动收拾：脏文件的内容**与要拉取的提交相同**。
         # 两次判定：先逐字节；再忽略行尾 CR（本地 core.autocrlf 会把 LF 检出成 CRLF，
         # 一旦用 scp 把「工作副本文本」搬过去，生产看到的就是纯行尾差异）。
