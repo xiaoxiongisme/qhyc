@@ -236,6 +236,16 @@ def check_tail_regression(session, cfg: SelfCheckConfig, trade_date: date) -> in
     return n
 
 
+#: L0 的 layer 数据契约（三层）。显式列出而非 `SELECT DISTINCT layer`——
+#: 后者是全表扫描（6145 万行），2026-11-07 实测直接把 PostgreSQL 打到 OOM:
+#: ``Memory cgroup out of memory: Killed process (postgres) anon-rss:2.0GB``。
+_LAYERS = ("continuous", "contract", "index")
+
+#: 分层新鲜度检查的回看窗口（天）。只扫窗口内的 chunk（Timescale 剪枝），
+#: 不做全表聚合；某层窗口内**完全无数据**按"长期断更"报（比"落后 N 小时"更重）。
+_LAYER_WINDOW_DAYS = 60
+
+
 def check_layer_freshness(session, cfg: SelfCheckConfig, trade_date: date) -> int:
     """L0 各 layer / L1 / L2 的新鲜度断层检查（2026-11-07 新增）。
 
@@ -247,7 +257,19 @@ def check_layer_freshness(session, cfg: SelfCheckConfig, trade_date: date) -> in
     **2026-10-30 15:00 停更**，到 11-07 已 6 个交易日无数据，而全套日检/告警
     全程无任何提示（增量采集只采 ``*888``，8888 的合成步骤从未接入增量链路）。
 
-    判定基准用 **L0 全局 ``max(ts)``** 而非 ``now()``：周末/长假期间所有层一起"旧"，
+    ⚠ 查询写法是**安全性要求**，不是风格问题
+    ----------------------------------------
+    本函数初版用 ``SELECT layer, max(ts), count(DISTINCT symbol) FROM
+    l0_raw.minute_bar GROUP BY 1`` —— 全表聚合，2026-11-07 21:58 在生产把
+    PostgreSQL 打成 OOM（容器内存触顶，内核 kill postgres，DB 进入 recovery ~10 秒，
+    ``dmesg`` 有 ``Memory cgroup out of memory: Killed process (postgres)
+    anon-rss:2.0GB``；该系统 11-06 16:54 / 11-07 00:47 已各发生一次同类 OOM）。
+    故现在：
+      · 基准取 **L1 主连 max(bucket)**（小表、走索引），不碰 L0 全表；
+      · 分层查询**限定 ts 窗口**（``_LAYER_WINDOW_DAYS``），靠 Timescale chunk 剪枝；
+      · **不做** ``count(DISTINCT symbol)``（hash/sort 吃内存且非必需）。
+
+    判定基准用「L1 主连最新」而非 ``now()``：周末/长假期间所有层一起"旧"，
     用 now() 会集体误报；以最新落盘时间为基准，只抓**层间相对落后**。
 
     阈值 36 小时：覆盖「夜盘跨零点 + 次日上午无夜盘品种」的正常错位，同时能在
@@ -256,48 +278,54 @@ def check_layer_freshness(session, cfg: SelfCheckConfig, trade_date: date) -> in
     Returns:
         异常层数（0 = 全部新鲜）。异常只记 error 并返回计数，由调度器侧决定告警口径
         ——本函数**不**写 ``anomaly_ticket``（该表 symbol 语义是"品种"，层名塞进去会
-        污染工单列表与下游按品种的查询）。
+        污染工单列表与下游按品种的查询）。返回 -1 表示检查本身未执行。
     """
     bad = 0
     try:
-        gmax = session.execute(text(
-            "SELECT max(ts) FROM l0_raw.minute_bar")).scalar()
-        if gmax is None:
-            logger.warning("[data_selfcheck] L0 全表为空，跳过新鲜度检查")
+        ref = session.execute(text(
+            "SELECT max(bucket) FROM l1_mkt.bar_60m WHERE symbol LIKE '%888'")).scalar()
+        if ref is None:
+            logger.warning("[data_selfcheck] L1 无主连数据，跳过新鲜度检查（无法确定基准）")
             return 0
-        rows = session.execute(text(
-            "SELECT layer, max(ts) AS mx, count(DISTINCT symbol) AS syms "
-            "FROM l0_raw.minute_bar GROUP BY 1")).fetchall()
-        for layer, mx, syms in rows:
+        lo = ref - timedelta(days=_LAYER_WINDOW_DAYS)
+
+        for layer in _LAYERS:
+            mx = session.execute(text(
+                "SELECT max(ts) FROM l0_raw.minute_bar "
+                "WHERE layer = :L AND ts >= :lo"), {"L": layer, "lo": lo}).scalar()
             if mx is None:
+                logger.error(
+                    f"[data_selfcheck] L0 layer={layer} **长时间无数据**："
+                    f"近 {_LAYER_WINDOW_DAYS} 天窗口内零行（基准 {ref}）"
+                    f" —— 该层已停止产出，依赖它的下游（换月检测/复权/因子）静默退化")
+                bad += 1
                 continue
-            lag_h = (gmax - mx).total_seconds() / 3600.0
+            lag_h = (ref - mx).total_seconds() / 3600.0
             if lag_h > 36.0:
                 logger.error(
                     f"[data_selfcheck] L0 layer={layer} 断更：最新 {mx}"
-                    f"（落后全库最新 {gmax} 共 {lag_h:.0f} 小时，{syms} 个品种）"
-                    f" —— 该层已停止产出，依赖它的下游（换月检测/复权/因子）会静默退化")
+                    f"（落后 L1 主连 {ref} 共 {lag_h:.0f} 小时）"
+                    f" —— 该层已停止产出，依赖它的下游（换月检测/复权/因子）静默退化")
                 bad += 1
-        # L1/L2 相对 L0 continuous 的断层（aggregation 断链）
-        l0c = session.execute(text(
-            "SELECT max(ts) FROM l0_raw.minute_bar WHERE layer='continuous'")).scalar()
-        if l0c is not None:
-            for tbl, tc in (("l1_mkt.bar_60m", "bucket"),
-                            ("l2_adj.bar_60m_ba", "bucket"),
-                            ("l1_mkt.bar_15m", "bucket")):
-                try:
-                    mx = session.execute(text(f"SELECT max({tc}) FROM {tbl}")).scalar()
-                except Exception:  # noqa: BLE001 —— 表不存在属迁移未到位，另行处理
-                    session.rollback()
-                    continue
-                if mx is None:
-                    continue
-                lag_h = (l0c - mx).total_seconds() / 3600.0
-                if lag_h > 36.0:
-                    logger.error(
-                        f"[data_selfcheck] {tbl} 断层：最新 {mx} 落后 L0 continuous"
-                        f" {l0c} 共 {lag_h:.0f} 小时 —— 聚合/物化链已断")
-                    bad += 1
+
+        # L1/L2 相对 L0 continuous 的断层（聚合/物化断链）。
+        # 基准同样用小表的 max(bucket)，不用 L0 全表聚合。
+        for tbl, tc in (("l1_mkt.bar_60m", "bucket"),
+                        ("l2_adj.bar_60m_ba", "bucket"),
+                        ("l1_mkt.bar_15m", "bucket")):
+            try:
+                mx = session.execute(text(f"SELECT max({tc}) FROM {tbl}")).scalar()
+            except Exception:  # noqa: BLE001 —— 表不存在属迁移未到位，另行处理
+                session.rollback()
+                continue
+            if mx is None:
+                continue
+            lag_h = (ref - mx).total_seconds() / 3600.0
+            if lag_h > 36.0:
+                logger.error(
+                    f"[data_selfcheck] {tbl} 断层：最新 {mx} 落后 L1 主连"
+                    f" {ref} 共 {lag_h:.0f} 小时 —— 聚合/物化链已断")
+                bad += 1
     except Exception as e:  # noqa: BLE001
         session.rollback()
         logger.error(f"[data_selfcheck] 新鲜度检查**未执行**：{e}")
