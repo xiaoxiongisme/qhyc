@@ -86,7 +86,7 @@ def _show_status(s) -> None:
     print(f"[开关] portfolio_brake_enabled={cfg.enabled} "
           f"dd_warn={cfg.dd_warn} dd_stop={cfg.dd_stop} lookback={cfg.lookback}")
     print(f"[表] portfolio_equity {n} 行；最新: "
-          f"{last[0]} equity={last[1] if last else '-'}")
+          f"{f'{last[0]} equity={last[1]}' if last else '（空）'}")
 
     if not last:
         print(f"[状态] ❌ 表为空 → 熔断无输入（{equity_curve_status()['reason']}）。"
