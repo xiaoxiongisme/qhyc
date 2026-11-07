@@ -41,6 +41,8 @@ ingest:
     - { symbol: "PX888", exchange: "CZCE", product: "PX", name: "对二甲苯", unit: "吨", multiplier: 5 }
     - { symbol: "SF888", exchange: "CZCE", product: "SF", name: "硅铁", unit: "吨", multiplier: 5 }
     - { symbol: "SM888", exchange: "CZCE", product: "SM", name: "锰硅", unit: "吨", multiplier: 5 }
+    - { symbol: "PF888", exchange: "CZCE", product: "PF", name: "短纤", unit: "吨", multiplier: 5 }
+    - { symbol: "PK888", exchange: "CZCE", product: "PK", name: "花生", unit: "吨", multiplier: 5 }
     # ---- SHFE 上期所 ----
     - { symbol: "CU888", exchange: "SHFE", product: "CU", name: "沪铜", unit: "吨", multiplier: 5 }
     - { symbol: "AL888", exchange: "SHFE", product: "AL", name: "沪铝", unit: "吨", multiplier: 5 }
@@ -58,6 +60,7 @@ ingest:
     - { symbol: "SP888", exchange: "SHFE", product: "SP", name: "纸浆", unit: "吨", multiplier: 10 }
     - { symbol: "AO888", exchange: "SHFE", product: "AO", name: "氧化铝", unit: "吨", multiplier: 20 }
     - { symbol: "HC888", exchange: "SHFE", product: "HC", name: "热卷", unit: "吨", multiplier: 10 }
+    - { symbol: "BR888", exchange: "SHFE", product: "BR", name: "丁二烯橡胶", unit: "吨", multiplier: 5 }
     # ---- INE 上期能源 ----
     - { symbol: "SC888", exchange: "INE", product: "SC", name: "原油", unit: "桶", multiplier: 1000 }
     # ---- GFEX 广州期货交易所 ----
