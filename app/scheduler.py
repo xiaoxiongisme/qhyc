@@ -1514,6 +1514,17 @@ def _build_scheduler() -> BlockingScheduler:
         )
 
     # ⑱ LSTM 每周重训一次（周六 06:00，避开交易时段）
+    #
+    # ⚠ **DB 覆盖语义陷阱（2026-11-07 实证，必读）**：本处 ``day_of_week="sat"`` 会被
+    #   ``ops.scheduled_task.schedule`` 的 5 段 cron 覆盖（见 _apply_task_registry /
+    #   resync_jobs_from_db），而 ``CronTrigger.from_crontab`` 的星期语义是
+    #   **0=周一 … 6=周日**（与标准 crontab 的 0=周日/6=周六**错位一天**）。
+    #   故「周六」在 DB 里必须写 **5**，写 6 会静默变成周日跑：
+    #   实测 2026-11-07 前该字典值为 ``0 6 * * 6`` → 实际在**周日** 06:00 触发
+    #   （10-18/10-25/11-01 三条成功记录全是周日），与代码注释/日志 "sat" 相反。
+    #   已于 2026-11-07 修正为 ``0 6 * * 5``。改这类字典值后务必用
+    #   ``CronTrigger.from_crontab(expr).get_next_fire_time()`` 打印真实星期验收，
+    #   **不要**看 ``registered cron sat ...`` 日志（那只是硬编码字符串）。
     sched.add_job(
         _lstm_weekly_job,
         trigger=CronTrigger(day_of_week="sat", hour=6, minute=0, timezone=settings.env.TZ),
@@ -2896,12 +2907,57 @@ def _ensure_hourly_uniq_index() -> None:
         logger.warning(f"[scheduler] hourly_bar unique index skipped (可能已存在重复行，需清洗): {e}")
 
 
+def _reap_stale_running() -> None:
+    """启动自愈：把上一进程遗留的 ``status='running'`` 记录收尾为 ``aborted``。
+
+    ★ 2026-11-07 新增（实测缺陷）。进程被 restart 打断时，正在执行的作业来不及
+      走 ``TaskRepository.finish()`` / 监听器的 EXECUTED 事件，``ops.scheduled_task_run``
+      会**永远**留下 ``status='running' / finished_at=NULL`` 的僵尸行。
+      实测（2026-11-07 21:50）：33/9065 条，最早 11-05，分布
+      scheduler_resync 28 / fusion_scan 3 / hourly_collect 2，且每次重启恰好新增一条
+      （11-06 22:30 resync ↔ 22:31 重启；11-07 14:00 resync ↔ 14:04 重启）。
+
+    危害是**监控数据污染**：任何「查 running 任务判断是否卡住」的诊断都会被误导
+    （2026-11-07 审计时曾据此误判"有任务 hang 住"）。
+
+    为何语义铁定成立：本函数在 ``sched.start()`` **之前**执行，此刻进程内还没有
+    任何作业实例在跑 ⇒ 库里所有 running 必然是上一进程（已被 kill）的遗物。
+
+    只改记录不动业务；任何异常都不阻断启动。
+    """
+    from sqlalchemy import text as _text
+
+    try:
+        from app.core.db import get_session_factory
+
+        with get_session_factory()() as s:
+            n = s.execute(_text(
+                "UPDATE ops.scheduled_task_run SET "
+                "  status = 'aborted', "
+                "  finished_at = COALESCE(finished_at, now()), "
+                "  message = COALESCE(message, '') || ' [reaped: 上一进程重启遗留]' "
+                "WHERE status = 'running'"
+            )).rowcount
+            s.commit()
+        if n:
+            logger.warning(
+                f"[scheduler] 启动自愈：{n} 条上一进程遗留的 running 记录已置 aborted"
+                f"（进程重启打断正在执行的作业所致，非任务故障）")
+    except Exception as e:  # noqa: BLE001 —— 记账清理失败绝不阻断启动
+        logger.warning(f"[scheduler] 启动自愈清理 running 记录失败（忽略，不阻断启动）: {e}")
+
+
 def main() -> None:
     setup_logging()
     settings = get_settings()
     logger.info(f"[scheduler] starting role={settings.env.ROLE}")
 
     sched = _build_scheduler()
+
+    # ★ 2026-11-07：启动自愈——收尾上一进程遗留的 running 僵尸记录（见函数 docstring）。
+    #   必须在本进程任何作业开跑之前执行，故置于 sched.start() 之前。
+    if settings.env.ROLE != "api":  # 仅调度器进程收尾，API 容器不动记账
+        _reap_stale_running()
 
     def _shutdown(*_):
         logger.info("[scheduler] shutdown signal received")
