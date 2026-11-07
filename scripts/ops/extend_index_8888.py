@@ -22,7 +22,10 @@
 
   1. 对每个品种建临时 ``stage_dedup``（该品种窗口内的 contract + continuous 行）；
   2. ``fetch_front`` 取「每交易日日末持仓量最大的合约」+ 换月 carry；
-  3. ``synth_8888`` 合成 ``front - cumsum(carry)``，并按主连时间轴 reindex + ffill；
+  3. ``synth_8888`` 合成 ``front - cumsum(carry)``；它内部会 ``reindex(anchor).ffill()``
+     到主连时间轴，**返回后必须再按 ``front.index`` 裁掉 ffill 出来的行** ——
+     否则合约层缺数据的日子会被填成常数平线，把换月 ratio 门变成恒真判据
+     （实测 2026-11-02 伪造 344 行平线 ⇒ FU 的周末跳空 -146 被判成换月）；
   4. **接缝对齐**：局部窗口算出的 cum 起点是 0，而库里已有的 8888 带着历史累计 cum。
      两者相差一个常数 ``delta``，可用「最后一个已覆盖交易日」上
      ``recon_close - stored_close`` 求得 —— 只要该日 front 选对，这个残差在当日
@@ -127,6 +130,25 @@ def _daily_quality(cur, syms: Sequence[str], t0: datetime, t1: datetime) -> pd.D
     return pd.DataFrame(rows, columns=["d", "ncontract", "front", "front_oi"])
 
 
+def _missing_trading_days(cur, exchange: str | None, d0, d1,
+                          have: set) -> list[str]:
+    """窗口内「开市但该品种一行合约分钟都没有」的交易日。
+
+    「坏日」（有行但残缺）由 :func:`_daily_quality` 的两个门拦下；这里补的是另一类：
+    **整天一行都没有**，它压根不会出现在 ``q`` 里，因此两个门都拦不住它。
+    实测 2026-11-02 的 FU 就是这一类（合约层 0 行，连续层却有 CSV 遗留的 bar），
+    ``synth_8888`` 于是把它 ffill 成平线。必须单独点名，否则只是「静默留洞」。
+    """
+    if not exchange:
+        return []
+    cur.execute(
+        "SELECT trade_date FROM l3_ref.trade_calendar "
+        "WHERE exchange = %s AND is_open "
+        "  AND trade_date > %s AND trade_date <= %s ORDER BY 1",
+        (exchange, d0, d1))
+    return [str(r[0]) for r in cur.fetchall() if r[0] not in have]
+
+
 def extend_one(cur, variety: str, dry_run: bool) -> dict:
     """返回 {'status': ..., 'rows': n, 'skipped_days': [...]}。"""
     last = _last_index(cur, variety)
@@ -178,6 +200,14 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
             bad_days.append(f"{d}({why})")
             bad_objs.add(d)
 
+    # 「整天一行都没有」的交易日：上面两个门都看不见它（它压根不出现在 q 里）。
+    # 危害不是「少一天」那么轻——synth_8888 会把那天 ffill 成常数平线，直接污染
+    # 换月判据（见 1b）。所以必须像坏日一样点名。
+    have_days = {r.d for r in q.itertuples()}
+    for ms in _missing_trading_days(cur, exchange, last_ts.date(),
+                                    t_max.date(), have_days):
+        bad_days.append(f"{ms}(no_contract_rows)")
+
     # ---- 2) 临时 stage_dedup（与全量导入脚本同名同列，直接复用其算法）----
     cur.execute("DROP TABLE IF EXISTS pg_temp.stage_dedup")
     # ⚠ 不要用 `AND NOT (ts::date = ANY(%s))` 配空列表：`= ANY(ARRAY[NULL])` 得到 NULL，
@@ -210,6 +240,32 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
         return {"variety": variety, "status": "no_out", "rows": 0}
 
     out = out.set_index("ts").sort_index()
+
+    # ---- 1b) 禁止 ffill 伪造：只保留 front 合约真实有分钟的时刻 ----
+    #
+    # ``synth_8888`` 末尾有一句 ``cont.reindex(anchor).ffill()``，anchor 是 **888 主连
+    # 时间轴**。全量 CSV 导入时 anchor 与 front 同源，ffill 无害；但增量链路的 anchor
+    # 来自 ``layer='continuous'``（CSV 遗留），front 来自 ``layer='contract'``，两者
+    # 可以不同步：
+    #
+    #   * 2026-11-02 合约层整天没有 FU 的任何行 → front 为空 → ffill 把 10-30 的收盘
+    #     价铺满 11-02 全天 ⇒ 指数变成一条常数平线（实测 344 行同一价位）；
+    #   * 2026-10-31 是周六，合约层无数据，同样被 anchor 拉出 865 行假 bar。
+    #
+    # 常数平线的后果不是「精度差一点」，而是**把换月检测变成随机判据**：ratio 门是
+    # ``coalesce(idx_delta,1e9) < 0.40*|cc|``，平线的 ``idx_delta`` 恒为 0 ⇒ 门恒成立
+    # ⇒ 任何跳空（含周末跳空）都被判成换月。实测 FU 在 11-02 09:15 的周末跳空
+    # -146（10-30 收盘 5436 → 11-02 开盘 5290）被当成换月写进了
+    # ``l2_adj.roll_segment``，并连带把另外 7 个品种各写了一段假 offset。
+    #
+    # 所以这里按「front 真实有分钟」硬裁剪：**缺就是缺**。宁可有洞（``idx_delta`` 为
+    # NULL ⇒ 门关闭 ⇒ 保守地不判换月），也绝不写一条会误导判据的假曲线。
+    n_filled = len(out)
+    out = out.loc[out.index.intersection(front.index)]
+    n_filled -= len(out)
+    if len(out) == 0:
+        return {"variety": variety, "status": "no_front_rows_in_window", "rows": 0,
+                "skipped_days": bad_days}
 
     # ---- 2) 接缝对齐：用「最后一个已覆盖交易日」求常数 delta ----
     seam_day = last_ts.date()
@@ -248,7 +304,7 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
 
     if dry_run:
         return {"variety": variety, "status": "dry-run", "rows": len(new),
-                "skipped_days": bad_days,
+                "ffill_dropped": n_filled, "skipped_days": bad_days,
                 "range": f"{new.index.min()} .. {new.index.max()}",
                 "delta": round(delta, 4)}
 
@@ -272,7 +328,8 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
         for r in rows:
             cp.write_row(r)
     return {"variety": variety, "status": "written", "rows": len(rows),
-            "skipped_days": bad_days, "delta": round(delta, 4)}
+            "ffill_dropped": n_filled, "skipped_days": bad_days,
+            "delta": round(delta, 4)}
 
 
 def main() -> int:
