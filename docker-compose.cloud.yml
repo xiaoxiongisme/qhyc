@@ -89,7 +89,7 @@ services:
       - ./scripts:/app/scripts:ro
       - ./tests:/app/tests:ro
       - ./migrations:/app/migrations:ro
-      - ./conftest.py:/app/conftest.py:ro
+      # 2026-11-07 Q3: conftest.py 归档删除，挂载同步移除（原 - ./conftest.py:/app/conftest.py:ro）
       - ./pytest.ini:/app/pytest.ini:ro
       # ⚠ config 暂不挂载：保留镜像内 cloud 配置（含云端实测调校值），避免仓库 config
       #   覆盖线上定制；确需 git 化管理 config 时再挂 ./config:ro 并核对 cloud.yaml 一致。

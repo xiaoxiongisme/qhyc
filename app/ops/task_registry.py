@@ -100,7 +100,7 @@ def task_enabled(task_id: str, default: bool = True) -> bool:
         _warn_once(
             f"unregistered:{task_id}",
             f"[task_registry] task_id={task_id!r} 未登记于 ops.scheduled_task，"
-            f"按代码默认 enabled={default} 执行；请跑 scripts/ops/sync_task_registry.py 补录",
+            f"按代码默认 enabled={default} 执行；请在 ops.scheduled_task 中补录 name/purpose/schedule",
         )
         return default
     return bool(row)
