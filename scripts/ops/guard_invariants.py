@@ -83,9 +83,12 @@ class Ctx:
     _cache: dict = field(default_factory=dict)
 
     def scalar(self, sql: str, **params):
-        if sql not in self._cache:
-            self._cache[sql] = self.session.execute(text(sql), params).scalar()
-        return self._cache[sql]
+        # 缓存键必须含参数：按 layer 循环查同一句 SQL 时，只按 SQL 文本做键
+        # 会让三个 layer 全部命中第一次的结果（曾导致 index 断更被误判为 PASS）。
+        key = (sql, tuple(sorted(params.items())))
+        if key not in self._cache:
+            self._cache[key] = self.session.execute(text(sql), params).scalar()
+        return self._cache[key]
 
     def rows(self, sql: str, **params):
         return self.session.execute(text(sql), params).fetchall()
