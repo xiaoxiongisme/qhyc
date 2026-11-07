@@ -2324,6 +2324,31 @@ def _data_selfcheck_job() -> None:
         with session_scope() as s:
             res = _run(session=s, cfg=cfg)
         logger.info(f"[scheduler] data_selfcheck done: {res}")
+        # ★ 2026-11-07：层间断层必须推送。这类故障的特征是「缺席者不在结果集里」——
+        #   日志淹在每 30 分钟一轮的调度日志中，此前 index 层停更 6 天全程无人知。
+        #   res 为 -1 表示检查本身未执行（同样需要人看见，不能当"通过"）。
+        n_layer = res.get("layer_freshness", 0)
+        if n_layer != 0:
+            try:
+                from app.ops.alerting import alert_config_from_env, send_alert
+
+                ok, note = send_alert(
+                    title="数据自检：层间断层",
+                    content=(
+                        f"data_selfcheck 检出 {n_layer} 处层/表断层"
+                        f"（-1 表示检查未执行）。明细见 qhyc.err.log 中 "
+                        f"[data_selfcheck] 的 error 行：\n"
+                        f"· L0 各 layer 落后全库最新 >36h ⇒ 该层停止产出"
+                        f"（如 index 层 8888 未接入增量合成）\n"
+                        f"· l1_mkt/l2_adj 落后 L0 continuous >36h ⇒ 聚合/物化链断\n"
+                        f"处置：先查该层数据源是否还在采集，再查合成/聚合作业是否注册。"),
+                    cfg=alert_config_from_env(),
+                    key="data_selfcheck_layer_gap",
+                )
+                if not ok:
+                    logger.warning(f"[data_selfcheck] 层断层告警未发出：{note}")
+            except Exception as e:  # noqa: BLE001 —— 告警失败不阻断自检结果记录
+                logger.error(f"[data_selfcheck] 层断层告警异常（已忽略）：{e}")
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] data_selfcheck failed: {e}")
 

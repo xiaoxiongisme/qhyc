@@ -208,6 +208,75 @@ def check_tail_regression(session, cfg: SelfCheckConfig, trade_date: date) -> in
     return n
 
 
+def check_layer_freshness(session, cfg: SelfCheckConfig, trade_date: date) -> int:
+    """L0 各 layer / L1 / L2 的新鲜度断层检查（2026-11-07 新增）。
+
+    为什么必须加（实测盲区）
+    ------------------------
+    :func:`check_missing` 只遍历「当日**有数据**的 symbol」——某层或某品种**彻底断更**
+    时，它根本不出现在结果集里，于是永远检查不到。实测事故：``l0_raw.minute_bar``
+    的 ``layer='index'``（XXXX8888 指数连，供 L2 换月检测的 ratio 门使用）自
+    **2026-10-30 15:00 停更**，到 11-07 已 6 个交易日无数据，而全套日检/告警
+    全程无任何提示（增量采集只采 ``*888``，8888 的合成步骤从未接入增量链路）。
+
+    判定基准用 **L0 全局 ``max(ts)``** 而非 ``now()``：周末/长假期间所有层一起"旧"，
+    用 now() 会集体误报；以最新落盘时间为基准，只抓**层间相对落后**。
+
+    阈值 36 小时：覆盖「夜盘跨零点 + 次日上午无夜盘品种」的正常错位，同时能在
+    「某一层整段停更」的第二个交易日就报出来（不必等一周）。
+
+    Returns:
+        异常层数（0 = 全部新鲜）。异常只记 error 并返回计数，由调度器侧决定告警口径
+        ——本函数**不**写 ``anomaly_ticket``（该表 symbol 语义是"品种"，层名塞进去会
+        污染工单列表与下游按品种的查询）。
+    """
+    bad = 0
+    try:
+        gmax = session.execute(text(
+            "SELECT max(ts) FROM l0_raw.minute_bar")).scalar()
+        if gmax is None:
+            logger.warning("[data_selfcheck] L0 全表为空，跳过新鲜度检查")
+            return 0
+        rows = session.execute(text(
+            "SELECT layer, max(ts) AS mx, count(DISTINCT symbol) AS syms "
+            "FROM l0_raw.minute_bar GROUP BY 1")).fetchall()
+        for layer, mx, syms in rows:
+            if mx is None:
+                continue
+            lag_h = (gmax - mx).total_seconds() / 3600.0
+            if lag_h > 36.0:
+                logger.error(
+                    f"[data_selfcheck] L0 layer={layer} 断更：最新 {mx}"
+                    f"（落后全库最新 {gmax} 共 {lag_h:.0f} 小时，{syms} 个品种）"
+                    f" —— 该层已停止产出，依赖它的下游（换月检测/复权/因子）会静默退化")
+                bad += 1
+        # L1/L2 相对 L0 continuous 的断层（aggregation 断链）
+        l0c = session.execute(text(
+            "SELECT max(ts) FROM l0_raw.minute_bar WHERE layer='continuous'")).scalar()
+        if l0c is not None:
+            for tbl, tc in (("l1_mkt.bar_60m", "bucket"),
+                            ("l2_adj.bar_60m_ba", "bucket"),
+                            ("l1_mkt.bar_15m", "bucket")):
+                try:
+                    mx = session.execute(text(f"SELECT max({tc}) FROM {tbl}")).scalar()
+                except Exception:  # noqa: BLE001 —— 表不存在属迁移未到位，另行处理
+                    session.rollback()
+                    continue
+                if mx is None:
+                    continue
+                lag_h = (l0c - mx).total_seconds() / 3600.0
+                if lag_h > 36.0:
+                    logger.error(
+                        f"[data_selfcheck] {tbl} 断层：最新 {mx} 落后 L0 continuous"
+                        f" {l0c} 共 {lag_h:.0f} 小时 —— 聚合/物化链已断")
+                    bad += 1
+    except Exception as e:  # noqa: BLE001
+        session.rollback()
+        logger.error(f"[data_selfcheck] 新鲜度检查**未执行**：{e}")
+        return -1  # 显式区分「未执行」与「通过」
+    return bad
+
+
 def run(session, cfg: SelfCheckConfig | None = None,
         trade_date: date | None = None) -> dict:
     """执行全部自检，返回 {检查项: 工单数}。cfg.enabled=False 时直接跳过。"""
@@ -220,7 +289,9 @@ def run(session, cfg: SelfCheckConfig | None = None,
         "missing": check_missing(session, cfg, trade_date),
         "zero_volume": check_zero_volume(session, cfg, trade_date),
         "tail_regression": check_tail_regression(session, cfg, trade_date),
+        # ★ 2026-11-07：补「缺席者不在结果集里」的盲区（index 层停更 6 天无人知）
+        "layer_freshness": check_layer_freshness(session, cfg, trade_date),
     }
-    res["total"] = sum(v for v in res.values() if isinstance(v, int))
+    res["total"] = sum(v for v in res.values() if isinstance(v, int) and v > 0)
     logger.info(f"[data_selfcheck] {trade_date} 完成：{res}")
     return res
