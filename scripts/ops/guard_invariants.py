@@ -106,6 +106,10 @@ def _c_signal_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
 
     这是本套断言的一条通用纪律：不变量必须衡量「现在的系统怎么运行」，
     不能拿历史流水当现状（否则收口之后永远无法转 PASS，豁免就变成了永久遮羞布）。
+
+    ★ 持仓豁免（CL-20261107-01）：扫描池允许「非白名单但有持仓」的品种继续扫描，
+      否则它既不会产出平仓/止损信号，持仓会被永久冻结。所以这类品种出现在信号表里
+      是**正确行为**，不是越界。不加这一项，断言会在口径正确时永远 FAIL。
     """
     rows = c.rows("""
         SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v
@@ -114,10 +118,15 @@ def _c_signal_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
           AND signal_at >= now() - interval '7 days'
     """)
     got = {r[0] for r in rows}
+    held = {r[0] for r in c.rows("""
+        SELECT DISTINCT regexp_replace(symbol, '8888?$', '')
+        FROM fusion_position WHERE COALESCE(position, 'FLAT') <> 'FLAT'
+    """)}
     if not got:
-        return True, "近 7 天信号 ⊆ 白名单", "近 7 天无新信号（真空通过）", ""
-    extra = sorted(got - c.whitelist)
-    return not extra, "近 7 天信号 ⊆ 白名单", f"{len(got)} 个品种，越界 {len(extra)}", (
+        return True, "近 7 天信号 ⊆ 白名单 ∪ 持仓豁免", "近 7 天无新信号（真空通过）", ""
+    extra = sorted(got - c.whitelist - held)
+    return not extra, "近 7 天信号 ⊆ 白名单 ∪ 持仓豁免", (
+        f"{len(got)} 个品种（持仓豁免 {len(held)}），越界 {len(extra)}"), (
         f"越界品种：{','.join(extra)}" if extra else "")
 
 
