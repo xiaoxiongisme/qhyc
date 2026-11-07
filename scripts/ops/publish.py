@@ -46,9 +46,12 @@ PROD_REPO = "/Docker/qhyc"
 SCHED_SVC = "qhyc-scheduler"
 
 
-def _run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> str:
+def _run(cmd: list[str], cwd: Path | None = None, check: bool = True,
+         timeout: int = 120) -> str:
+    # 必须带超时：本仓库 `git fetch origin` 实测会卡住（SSH 侧 early EOF / 挂起），
+    # 无超时会让整条发布流程静默吊死，比失败更糟。
     p = subprocess.run(cmd, cwd=str(cwd) if cwd else None,
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, timeout=timeout)
     if check and p.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)} 失败：\n{p.stdout}\n{p.stderr}")
     return (p.stdout or "") + (p.stderr or "")
@@ -89,29 +92,25 @@ def main() -> int:
     head = _run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"]).strip()
     print(f"本地 HEAD = {head}")
 
-    # ---- 2) 是否 fast-forward ----
-    _banner("2/6 提交关系")
-    # fetch 只是为了让 origin/<branch> 的引用是新的；SSH 抖动时
-    # `fetch-pack: unexpected disconnect / early EOF` 很常见。这里做成**尽力而为**：
-    # 拿不到就用上一次的 origin 引用，并明确告知「关系判定基于陈旧引用」——
-    # 因为「网络抖了一下」不该把整条发布流程卡死，而 push 本身会再校验一次。
-    fetched = True
-    for attempt in (1, 2):
-        try:
-            _run(["git", "-C", str(REPO), "fetch", "origin", "--quiet"])
-            break
-        except RuntimeError as e:
-            fetched = False
-            if attempt == 2:
-                print(f"⚠ fetch 失败（{str(e).splitlines()[-1] if str(e) else 'unknown'}）"
-                      f"，改用本地已有的 origin/{a.branch} 引用判断关系")
-    behind = _run(["git", "-C", str(REPO), "rev-list", "--count",
-                   f"HEAD..origin/{a.branch}"]).strip()
-    if behind != "0":
-        print(f"⚠ 本地落后 origin/{a.branch} {behind} 个提交，先 pull 再发布")
-        return 1
-    print(f"origin/{a.branch} 是 HEAD 的祖先（可 fast-forward）"
-          f"{'' if fetched else '（⚠ 引用可能陈旧）'}")
+    # ---- 2) 远端状态（**不 fetch**）----
+    #
+    # 原来这里 `git fetch origin` 判 fast-forward。实测本仓库 fetch 会长时间挂起
+    # （`fetch-pack: unexpected disconnect / early EOF`，或干脆不动），无超时会把
+    # 整条发布流程吊死。改用 `ls-remote`：只取远端那个 sha，不发包不值钱，
+    # 还顺便避免为了「判关系」把几十万对象拉一遍。
+    # 「能不能 FF」交给 push 自己判 —— 非 FF 的 push 会被远端拒绝，判据一样硬。
+    _banner("2/6 远端状态")
+    remote_sha = ""
+    try:
+        out = _run(["git", "-C", str(REPO), "ls-remote", "origin",
+                    f"refs/heads/{a.branch}"], timeout=60)
+        remote_sha = out.split()[0][:7] if out.split() else ""
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        print(f"⚠ ls-remote 失败（{e}）—— 跳过远端比对，直接尝试 push")
+    if remote_sha and remote_sha == head:
+        print(f"远端已是 {head}，无新提交")
+    else:
+        print(f"远端 {remote_sha or '?'} → 本地 {head}")
 
     if a.check:
         print("\n--check：仅检查，未做任何改动")
@@ -120,8 +119,11 @@ def main() -> int:
     # ---- 3) 推送 ----
     _banner("3/6 推送 GitHub")
     out = _run(["git", "-C", str(REPO), "push", "origin", f"HEAD:{a.branch}"],
-               check=False)
+               check=False, timeout=300)
     print(out.strip() or "(已是最新)")
+    if "rejected" in out or "non-fast-forward" in out:
+        print("✗ 远端拒绝（非 fast-forward）—— 先 pull/rebase 你的分支再发布")
+        return 1
 
     # ---- 4) 生产工作树必须干净（本次事故的拦网）----
     _banner("4/6 生产工作树")
