@@ -169,7 +169,35 @@ def main() -> int:
     _banner("5/6 生产 pull")
     changed = _ssh(f"cd {PROD_REPO} && "
                    f"git diff --name-only HEAD origin/{a.branch}").strip()
-    _ssh(f"cd {PROD_REPO} && git pull --ff-only --quiet")
+    try:
+        _ssh(f"cd {PROD_REPO} && git pull --ff-only --quiet")
+    except RuntimeError as e:
+        # 生产上有**未跟踪**文件挡路时 git 会拒绝 pull（`untracked working tree
+        # files would be overwritten`）。这条同样来自「scp 了新文件过去」。
+        # 处理原则与已跟踪文件一致：内容相同才动手，不同就中止交给人。
+        msg = str(e)
+        if "untracked working tree files would be overwritten" not in msg:
+            raise
+        blockers = [ln.split("\t")[-1].strip() for ln in msg.splitlines()
+                    if ln.strip().startswith("\t") or ln.strip().startswith("    ")]
+        blockers = [b for b in blockers if b]
+        if not blockers:
+            raise
+        for f in blockers:
+            same = _ssh(
+                f"cd {PROD_REPO} && git show origin/{a.branch}:{f} 2>/dev/null | "
+                f"cmp -s - {f} && echo SAME || "
+                f"(git show origin/{a.branch}:{f} 2>/dev/null | "
+                f"sed 's/\r$//' | cmp -s - <(sed 's/\r$//' {f}) && echo SAME_CRLF || "
+                f"echo DIFF)", check=False).strip()
+            if same.endswith(("SAME", "SAME_CRLF")):
+                print(f"⚠ 生产未跟踪文件 {f} 内容与提交一致 → 删除以便 pull 落地")
+                _ssh(f"cd {PROD_REPO} && rm -f {f}")
+            else:
+                print(f"✗ 生产未跟踪文件 {f} 内容与 origin/{a.branch} **不同**，拒绝覆盖。")
+                print("  先把它取回本地提交（或确认可丢后手动 rm），再重跑本脚本。")
+                return 1
+        _ssh(f"cd {PROD_REPO} && git pull --ff-only --quiet")
     prod_head = _ssh(f"cd {PROD_REPO} && git rev-parse --short HEAD").strip()
     print(f"生产 HEAD = {prod_head}")
     if prod_head != head:
