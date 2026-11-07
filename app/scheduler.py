@@ -2788,6 +2788,41 @@ def _hourly_job() -> None:
         logger.exception(f"[scheduler] hourly collect failed: {e}")
 
 
+def _extend_index_8888() -> None:
+    """补 XXXX8888 指数层分钟（CL-20261107-05）。
+
+    指数层是**唯一不在采集链路里**的数据：akshare 只给 ``*888`` 主连，8888 由
+    「合约分钟 → 按日末持仓量选主力 → 换月 carry 累计 → back-adjust」合成。
+    这条合成原来只存在于一次性 CSV 导入脚本里，导入结束后就没有任何环节再产出，
+    于是 L1 的 8888 停在导入那天，``sp_build_l2_roll_segment`` 的 ratio 门
+    （``coalesce(idx_delta,1e9) < 0.40*|cc|``）因为 idx_delta 恒为 NULL 而**永不成立**
+    —— 换月段静默不再追加，后复权价在换月处保留原始跳空。**没有报错、没有告警。**
+
+    失败只 warning 不抛：指数层坏掉不该连带 bar 合成停摆，但必须每次可见。
+    """
+    import subprocess
+    import sys as _sys
+
+    try:
+        p = subprocess.run(
+            [_sys.executable, "scripts/ops/extend_index_8888.py"],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True, text=True, timeout=1800,
+        )
+        tail = (p.stdout or "").strip().splitlines()[-3:]
+        if p.returncode == 0:
+            logger.info(f"[scheduler] index_8888 扩展完成: {' | '.join(tail)}")
+        else:
+            # exit 2 = 有品种接缝校验没过（合约层缺主力），数据未写入，需人工看
+            logger.error(f"[scheduler] index_8888 扩展返回 {p.returncode}: "
+                         f"{' | '.join(tail)}")
+            if p.returncode == 2:
+                logger.error("[scheduler] 8888 接缝校验失败 → 该品种换月检测本轮无参照，"
+                             "检查合约层（contract）当日是否含主力合约")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[scheduler] index_8888 扩展异常（不影响 bar 合成）：{e}")
+
+
 def _minute_and_bars_job() -> None:
     """#5 分钟优先管线：实时 1 分钟入库 → 增量合成 5/15/30/60 分钟。
 
@@ -2843,6 +2878,13 @@ def _minute_and_bars_job() -> None:
                     # 「删了不补」的静默丢数据；此处用同一个 Scope 对象保证这一点。
                     from app.data.tradable_scope import load_scope
                     scope = load_scope(s)
+                    # ★ CL-20261107-05：先补 XXXX8888 指数层的分钟。
+                    #   指数层不在任何增量采集里（akshare 只给 *888 主连），过去完全
+                    #   依赖一次性 CSV 导入；源一停，L1 的 8888 就停，换月检测的
+                    #   ratio 门因为 idx_delta 为 NULL 而**恒不成立**，换月段从此
+                    #   静默不再追加（实测卡了 8 天没人发现）。
+                    #   失败只告警不抛：它坏了不等于 bar 合成要停摆，但必须看得见。
+                    _extend_index_8888()
                     purge_recent_buckets(s, days_back=4, scope=scope)
                     synth_stats = synthesize_bars_incremental(
                         s, days_back=3, scope=scope)

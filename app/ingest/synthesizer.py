@@ -84,7 +84,11 @@ _SESSION_SRC_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min",
 #:   wh9999_1m first=09:01 last=15:00    → 终点（已验证 A888 2015-01-05）
 #: ⚠ 若将来接入新的分钟源，务必先到这里登记它的约定，否则整段 bar 会偏 1 分钟。
 _SESSION_END_LABELED_SRCS = ["akshare_1min", "wh9999_1m",
-                             "akshare_1min_nov2026"]
+                             "akshare_1min_nov2026",
+                             # XXXX8888 指数层（CL-20261107-05）：由合约分钟合成，
+                             # 合约的 ts 是「+1min 终点」约定，指数沿用同一时间轴
+                             # ⇒ 同样是终点标签。
+                             "local_csv_synth_8888", "incr_synth_8888"]
 
 #: 已知但**不参与当前增量窗口**的历史源。仅用于 fail-loud 白名单，
 #: 不加入 _SESSION_END_LABELED_SRCS —— 其时间戳约定尚未验证（见报告 M19），
@@ -111,13 +115,25 @@ _SESSION_DAY_BOUNDS = {
          335, 340, 345, 350, 355, 360],
 }
 
+#: 指数层数据源（CL-20261107-05）。``public.minute_bar`` 视图只含 ``layer='continuous'``，
+#: 所以 XXXX8888 拿不到增量。这里直接读基表并限定 layer —— 别名仍叫 ``minute_bar``，
+#: 使 ``_session_insert_sql`` 里各 CTE 的列引用一字不改。
+_INDEX_FROM = ("(SELECT * FROM l0_raw.minute_bar WHERE layer = 'index') AS minute_bar")
 
-def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
+
+def _session_insert_sql(step: int, where: str, tail: str, t: str = "",
+                        from_sql: str = "minute_bar") -> str:
     """按「交易所固定交易时段网格」聚合（见 rebuild_bars_session._build_sql 同源逻辑）。
 
     日盘从 09:00 起、跳过两段休市，边界固定在墙上；夜盘从 21:00 起（无休市），
     残段截断到 seg 自然收盘。锚定固定墙钟（09:00/21:00 on seg_date），
     缺失分钟只让某根 bar 少 1 分钟，标签不变 —— 根治旧 row_number 法对缺失分钟的脆弱。
+
+    ``from_sql``（CL-20261107-05）：数据源。默认 ``minute_bar`` —— 注意这是
+    ``public.minute_bar`` **视图**，它只含 ``layer='continuous'``。指数层
+    ``XXXX8888`` 要传 ``_INDEX_FROM`` 才能进入 L1；否则 L1 里的 8888 永远停在全量
+    导入那天的时点，``sp_build_l2_roll_segment`` 的 ratio 门因 ``idx_delta`` 为 NULL
+    而恒不成立（实测 ``max(seg_start)`` 卡死 2026-10-30）。
     """
     bounds = _SESSION_DAY_BOUNDS[step]
     day_when = " ".join(f"WHEN rel_end <= {b} THEN {b}" for b in bounds)
@@ -125,7 +141,7 @@ def _session_insert_sql(step: int, where: str, tail: str, t: str = "") -> str:
     return (
         "WITH m AS (\n"
         "    SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src\n"
-        "    FROM minute_bar\n"
+        f"    FROM {from_sql}\n"
         f"    {where}\n"
         "), norm AS (\n"
         "    SELECT *, ts - CASE WHEN src = ANY(:end_srcs)\n"
@@ -413,12 +429,23 @@ def minute_pipeline_lock(timeout_sec: int = 600):
                                  f"该连接关闭后 PG 将自动释放会话级锁")
 
 
-def _max_bucket(session: Session, table: str) -> datetime | None:
-    return session.execute(text(f"SELECT max(bucket) FROM {table}")).scalar()
+def _max_bucket(session: Session, table: str,
+                symbols: list[str] | None = None) -> datetime | None:
+    """表内最新桶。``symbols`` 给定时只看这批符号（口径内的同一批）。
+
+    必须显式限定符号集：``table`` 是裸表名，经 search_path 命中的是
+    ``public.bar_*`` **视图**（含口径过滤），而期望值若按全库最新分钟算，
+    口径外品种的夜盘尾巴会把期望推高 → 恒假告警。
+    """
+    if symbols is None:
+        return session.execute(text(f"SELECT max(bucket) FROM l1_mkt.{table}")).scalar()
+    return session.execute(
+        text(f"SELECT max(bucket) FROM l1_mkt.{table} WHERE symbol = ANY(:syms)"),
+        {"syms": symbols}).scalar()
 
 
 def assert_registered_srcs(session: Session, lookback_days: int = 7) -> list[str]:
-    """P0-1 防复发硬断言：近 N 天 continuous 层出现的 src 必须全部登记。
+    """P0-1 防复发硬断言：近 N 天 continuous / index 层出现的 src 必须全部登记。
 
     这次故障的根因不是算法错，而是「新源静默进入、无人登记」。故在任何合成
     动作之前先查库，发现未登记 src 直接抛错（fail loud），不许静默产出错位 bar。
@@ -426,7 +453,7 @@ def assert_registered_srcs(session: Session, lookback_days: int = 7) -> list[str
     """
     rows = session.execute(text(
         "SELECT DISTINCT src FROM l0_raw.minute_bar "
-        "WHERE layer = 'continuous' AND src IS NOT NULL "
+        "WHERE layer IN ('continuous', 'index') AND src IS NOT NULL "
         "  AND ts >= now() - (:d || ' days')::interval"
     ), {"d": lookback_days}).scalars().all()
     known = (set(_SESSION_SRC_PRIORITY) | set(_SESSION_END_LABELED_SRCS)
@@ -440,17 +467,29 @@ def assert_registered_srcs(session: Session, lookback_days: int = 7) -> list[str
     return sorted(set(rows))
 
 
-def _max_minute_ts(session: Session) -> datetime | None:
-    return session.execute(text("SELECT max(ts) FROM minute_bar")).scalar()
+def _max_minute_ts(session: Session,
+                   symbols: list[str] | None = None) -> datetime | None:
+    """最新分钟时间戳（含指数层）。``symbols`` 给定时只看这批符号。"""
+    if symbols is None:
+        return session.execute(
+            text("SELECT max(ts) FROM l0_raw.minute_bar")).scalar()
+    return session.execute(
+        text("SELECT max(ts) FROM l0_raw.minute_bar WHERE symbol = ANY(:syms)"),
+        {"syms": symbols}).scalar()
 
 
 def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
-               tail: str, scope: Scope | None = None) -> int:
+               tail: str, scope: Scope | None = None,
+               layer: str = "continuous") -> int:
     """单表合成：自动在「自然整点桶」与「交易分钟会话桶」之间选择正确口径。
 
     ``scope``（CL-20261107-01 S2）：品种口径。``None`` / fail-open 时不过滤。
     过滤必须加在**读取侧**（``FROM minute_bar`` 的 WHERE），而不是落库后删除 ——
     后者会在 upsert 前短暂写入不该存在的品种，且与 ``purge`` 的删除边界打架。
+
+    ``layer``（CL-20261107-05）：``continuous`` = 主连（默认）；``index`` = XXXX8888
+    指数连，改从基表读 ``layer='index'``。两条链路符号不相交（``RB888`` / ``RB8888``），
+    同一张 ``bar_*`` 表里互不覆盖。
     """
     step = _SESSION_BARS.get(t)
     # 「WHERE TRUE」打底：这样 since / 口径两个条件都能无条件以 AND 追加，
@@ -466,9 +505,12 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
         params.update(scope_params(scope))
 
     if step is None:
-        sql = _INSERT_HEAD.format(t=t, iv=iv) + where + "\nGROUP BY symbol, bucket\n" + tail
+        src = "minute_bar" if layer == "continuous" else _INDEX_FROM
+        sql = (_INSERT_HEAD.format(t=t, iv=iv).replace("FROM minute_bar", f"FROM {src}")
+               + where + "\nGROUP BY symbol, bucket\n" + tail)
         return _run(session, sql, params)
-    sql = _session_insert_sql(step, where=where, tail=tail, t=t)
+    src = "minute_bar" if layer == "continuous" else _INDEX_FROM
+    sql = _session_insert_sql(step, where=where, tail=tail, t=t, from_sql=src)
     params.update({
         "srcs": _SESSION_SRC_PRIORITY,
         "end_srcs": _SESSION_END_LABELED_SRCS,
@@ -578,28 +620,37 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
     #   约 6 小时（夜盘 21:00→次日 02:30），多留 1 天余量足够。
     since_session = _session_floor(since - timedelta(days=1))
     stats: dict[str, int] = {}
+    idx_stats: dict[str, int] = {}
     for t, iv in _BARS:
-        stats[t] = _synth_one(
-            session, t, iv,
-            since_session if t in _SESSION_BARS else since,
-            _UPSERT_TAIL, scope,
-        )
+        since_t = since_session if t in _SESSION_BARS else since
+        stats[t] = _synth_one(session, t, iv, since_t, _UPSERT_TAIL, scope)
+        # 指数层同一张表、另一批符号（XXXX8888）。必须与主连同轮重建，
+        # 否则 bar_15m 里的 8888 停更 → 换月检测 ratio 门恒不成立（静默失效）。
+        idx_stats[t] = _synth_one(session, t, iv, since_t, _UPSERT_TAIL, scope,
+                                  layer="index")
     session.commit()
 
     # ---- 落库后校验：bar_* 是否已追平 minute_bar 最新所在桶 ----
+    #
+    # ⚠ 两侧都必须落在**同一批符号**上。原来 expected 用「全库最新分钟」、got 用
+    #   裸表名 ``bar_15m``（经 search_path 命中 public 视图 = 口径过滤后）：
+    #   口径外品种（AU/AG/SC 交易到 02:30）把 expected 推到 02:30，而口径内
+    #   最晚只到 01:00（SS 收盘）⇒ 每次都是「期望≥02:30 实际01:00」的假告警，
+    #   而这条告警本来是用来发现「并发写入导致漏桶」的，假告警会把它淹掉。
+    scope_syms = sorted(scope.symbols) if (scope is not None and scope.active) else None
     lags: dict[str, int] = {}
     for attempt in range(1, max_retries + 1):
-        target = _max_minute_ts(session)
+        target = _max_minute_ts(session, scope_syms)
         if target is None:
             break
-        # 每张表期望追平到「minute_bar 最新 ts 所在的桶起点」
+        # 每张表期望追平到「该批符号内最新分钟所在桶」
         pending = {}
         for t, iv in _BARS:
             exp = session.execute(
                 text(f"SELECT time_bucket(INTERVAL '{iv}', :ts, 'Asia/Shanghai')"),
                 {"ts": target},
             ).scalar()
-            got = _max_bucket(session, t)
+            got = _max_bucket(session, t, scope_syms)
             if exp is not None and (got is None or got < exp):
                 pending[t] = (exp, got)
         if not pending:
@@ -618,18 +669,17 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
         since = datetime.now(_SH_TZ) - timedelta(days=days_back)
         since_session = _session_floor(since - timedelta(days=1))
         for t, iv in _BARS:
-            stats[t] = _synth_one(
-                session, t, iv,
-                since_session if t in _SESSION_BARS else since,
-                _UPSERT_TAIL, scope,
-            )
+            since_t = since_session if t in _SESSION_BARS else since
+            stats[t] = _synth_one(session, t, iv, since_t, _UPSERT_TAIL, scope)
+            idx_stats[t] = _synth_one(session, t, iv, since_t, _UPSERT_TAIL, scope,
+                                      layer="index")
         session.commit()
 
     if lags:
         logger.error(f"[synth] 重试后仍未追平 minute_bar（可能 MinuteCollector 持续并发写入）: {lags}")
     else:
         logger.info("[synth] 校验通过：bar_* 已追平 minute_bar 最新桶")
-    logger.info(f"[synth] incremental done: {stats}")
+    logger.info(f"[synth] incremental done: 主连 {stats}；指数层 {idx_stats}")
     return stats
 
 
@@ -651,6 +701,12 @@ def synthesize_bars_full(session: Session, work_mem: str = "2GB") -> dict:
         stats[t] = _synth_one(
             session, t, iv, None,
             "ON CONFLICT (symbol, bucket) DO NOTHING",
+        )
+        # 全量重建必须连带指数层：上面刚 TRUNCATE 过，不重建等于把 8888 整条删掉
+        stats[t] += _synth_one(
+            session, t, iv, None,
+            "ON CONFLICT (symbol, bucket) DO NOTHING",
+            layer="index",
         )
     session.commit()
     logger.info(f"[synth] full done: {stats}")
