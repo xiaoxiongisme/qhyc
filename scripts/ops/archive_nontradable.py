@@ -98,6 +98,25 @@ def _count(s, table: str, tcol: str, lo: datetime, hi: datetime) -> int:
         f"AND {_NON_WL_PRED}"), {"lo": lo, "hi": hi}).scalar() or 0)
 
 
+def _copy_out(cur, sql: str, f) -> None:
+    """流式 COPY 到文本文件，兼容 psycopg2 与 psycopg3。
+
+    ⚠ 本项目的 SQLAlchemy DSN 是 ``postgresql+psycopg://``，即 **psycopg3**。
+      psycopg3 的 cursor **没有** ``copy_expert``（那是 psycopg2 的 API），
+      直接照搬会报 ``'Cursor' object has no attribute 'copy_expert'``
+      （2026-11-07 实测踩过）。两代驱动的 COPY 接口必须分开处理。
+    """
+    stmt = f"COPY ({sql}) TO STDOUT WITH (FORMAT csv, HEADER true)"
+    if hasattr(cur, "copy_expert"):            # psycopg2
+        cur.copy_expert(stmt, f)
+        return
+    with cur.copy(stmt) as cp:                 # psycopg3
+        for block in cp:
+            # psycopg3 给的是 memoryview，本身没有 decode()，必须先转 bytes
+            f.write(bytes(block).decode("utf-8") if isinstance(block, (bytes, memoryview))
+                    else block)
+
+
 def _archive_one(s, table: str, tcol: str, batch: str, out_dir: Path,
                  cutoff: datetime, dry_run: bool) -> dict:
     lo = _watermark(s, table)
@@ -119,20 +138,29 @@ def _archive_one(s, table: str, tcol: str, batch: str, out_dir: Path,
     if path.exists():
         path.unlink()
 
-    sql = (f"SELECT * FROM {table} WHERE {tcol} > %(lo)s AND {tcol} <= %(hi)s "
+    # ⚠ 这里必须是**原生** SQL 字面量，不能用 SQLAlchemy 的 :lo 命名参数 ——
+    #   COPY 走的是驱动原生通道（psycopg2 copy_expert / psycopg3 copy），
+    #   SA 的绑定参数不会被替换，直接传给服务端会报
+    #   ``syntax error at or near "%"``（2026-11-07 实测踩过）。
+    #   lo/hi 是本脚本自行计算的 datetime，非外部输入，格式化为字面量是安全的。
+    sql = (f"SELECT * FROM {table} "
+           f"WHERE {tcol} > '{lo.isoformat()}'::timestamptz "
+           f"AND {tcol} <= '{cutoff.isoformat()}'::timestamptz "
            f"AND {_NON_WL_PRED} ORDER BY symbol, {tcol}")
 
     # 大表 COPY 可能远超默认 statement_timeout；本会话单独放开（不改进程全局）
     s.execute(text("SET LOCAL statement_timeout = 0"))
 
-    raw = s.connection().connection  # psycopg2 connection
+    # SQLAlchemy 2.0：session.connection() 是 SA 的 Connection，它的 .connection
+    # 是 _ConnectionFairy，**真正能 copy_expert 的是 driver_connection**。
+    # 直接拿 .connection 会得到 SA 的 Cursor 代理，报
+    # 'Cursor' object has no attribute 'copy_expert'（2026-11-07 实测踩过）。
+    _sa = s.connection().connection
+    raw = getattr(_sa, "driver_connection", None) or _sa
     cur = raw.cursor()
     try:
         with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
-            cur.copy_expert(
-                f"COPY ({sql}) TO STDOUT WITH (FORMAT csv, HEADER true)",
-                f,
-            )
+            _copy_out(cur, sql, f)
         cur.close()
     except Exception:
         cur.close()

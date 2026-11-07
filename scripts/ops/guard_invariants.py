@@ -135,26 +135,46 @@ def _c_whitelist_in_config(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_l1_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
-    """近 3 天 L1 主连新数据 ⊆ 白名单 ∪ 持仓豁免。窗口取短，收口后能快速转 PASS。
+    """L1 主连**新数据**不得来自「非白名单 且 无持仓」。
 
-    ★ 持仓豁免是口径的一部分（CL-20261107-01）：非白名单但有持仓的品种必须继续
-      派生，否则它不再有新 bar，止损/平仓判定拿不到最新价，持仓被永久冻结。
-      不加这一项，断言会在「口径正确」的情况下永远 FAIL，最后只能靠豁免遮住。
+    ★ 为什么不用「近 N 天窗口」（2026-11-07 修正）
+    ------------------------------------------------
+    停派生只阻止**新增**，历史行仍在表里；而 ``purge_recent_buckets`` 现在也
+    跟着口径收窄（不删非白名单，避免「停派生」偷偷变成「分批删除」）。于是
+    「近 3 天存在非白名单行」在停派生后会继续为真好几天 —— 那是**时间衰减**，
+    不是「现在的行为」。用窗口断言的后果是：明明已经收口，却要等一周才能
+    转 PASS，等的这段时间只能靠豁免遮住。
+
+    改为与**口径生效时刻**比较：非白名单品种的最新桶必须不晚于该时刻。
+    生效之后任何一天又给它派生了数据 → 立刻 FAIL。此刻就成立，不依赖衰减。
+
+    ★ 持仓豁免（CL-20261107-01）：非白名单但有持仓的品种必须继续派生，
+      否则它不再有新 bar，止损/平仓判定拿不到最新价，持仓被永久冻结。
+      不加这一项，断言会在「口径正确」时永远 FAIL。
     """
-    rows = c.rows("""
-        SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v
-        FROM l1_mkt.bar_60m
-        WHERE bucket >= now() - interval '3 days' AND symbol ~ '^[A-Za-z]+888$'
-    """)
-    got = {r[0] for r in rows}
+    eff = c.scalar(
+        "SELECT COALESCE(verified_at, updated_at) FROM ops.change_log "
+        "WHERE change_id = 'CL-20261107-01'")
+    if eff is None:
+        # 台账缺失（新环境）→ 退化为保守窗口，宁可晚一点转 PASS 也不误判 PASS
+        eff = c.scalar("SELECT now() - interval '3 days'")
+
     held = {r[0] for r in c.rows("""
         SELECT DISTINCT regexp_replace(symbol, '8888?$', '')
         FROM fusion_position WHERE COALESCE(position, 'FLAT') <> 'FLAT'
     """)}
-    extra = sorted(got - c.whitelist - held)
-    return not extra, "L1 主连新数据 ⊆ 白名单 ∪ 持仓豁免", (
-        f"{len(got)} 个品种（持仓豁免 {len(held)}），越界 {len(extra)}"), (
-        f"越界品种（不交易品种仍在加工层）：{','.join(extra)}" if extra else "")
+    rows = c.rows("""
+        SELECT regexp_replace(symbol, '888$', '') AS v, max(bucket) AS mx
+        FROM l1_mkt.bar_60m
+        WHERE symbol ~ '^[A-Za-z]+888$'
+        GROUP BY 1
+    """)
+    late = sorted(
+        f"{v}@{mx:%Y-%m-%d %H:%M}" for v, mx in rows
+        if v not in c.whitelist and v not in held and mx is not None and mx > eff)
+    return not late, "L1 主连新数据 ⊆ 白名单 ∪ 持仓豁免", (
+        f"{len(rows)} 个品种，口径生效({eff:%m-%d %H:%M})后仍有新数据的 {len(late)} 个"), (
+        f"口径生效后仍在派生：{','.join(late[:15])}" if late else "")
 
 
 def _c_scope_wired(c: Ctx) -> tuple[bool, str, str, str]:
