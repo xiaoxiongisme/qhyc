@@ -1219,6 +1219,134 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。成交口径接线被回退或改坏，回测结论不可信（CL-20261108-11）")
 
 
+def _c_bt_v5x_fill_mode(c: Ctx) -> tuple[bool, str, str, str]:
+    """C2b / CL-20261109-05：V5X 回测必须与 fusion 同口径（E1-C next_open）。
+
+    为什么必须断言而不是只写文档
+
+    改造前 ``v5x_backtest`` 的 docstring 明明写着「E1-C 未实现、偏乐观、
+    不得并列引用」——文档是对的，但**没有任何东西阻止别人拿 +273,705 去和
+    V3.4 比**。这正是本项目反覆出现的形状：口径只存在于文字里。
+
+    所以这条断言同时量三件事（都是「此刻的行为」，零 DB、零时间衰减）：
+
+      1. **默认声明**：``V5XBacktestParams().fill_mode == "next_open"``，
+         跳空阈值 0.5 ATR —— 与 fusion 默认一致，两份回测才第一次可比；
+      2. **真实接线**：AST 找到对 ``reprice_orders`` 的调用（防「字段加了没人读」），
+         且 close 分支直接返回 ``eng.trades``（零回归锚点必须还在）；
+      3. **行为级**：合成趋势序列跑真引擎 →
+         · close 重定价 == 引擎自己的 trades（逐笔 P/X/net/R）；
+         · next_open 首仓价 == ``open[i+1] + dir×tick``（不是信号根收盘）。
+         两条同时成立，才算「同一份事件、两种成交口径」真的通了。
+    """
+    label = "V5X 回测成交口径接 E1-C（默认 next_open 且 close 零回归）"
+    try:
+        import ast
+
+        import numpy as np
+        import pandas as pd
+
+        from app.backtest import v5x_backtest as vb
+        from app.backtest.v5x_fill import reprice_orders
+        from app.strategies.v5x.engine import CostCfg, DailyCtx, SymbolEngine, V5XConfig
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "V5X 回测或成交层不可导入 → C2b 断言不可用（CL-20261109-05）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+
+    p0 = vb.V5XBacktestParams()
+    observed.append(f"default={p0.fill_mode!r} gap={p0.max_adverse_gap_atr!r}")
+    if p0.fill_mode != "next_open":
+        bad.append(f"默认 fill_mode={p0.fill_mode!r}，C2b 起必须 'next_open'")
+    if abs(float(p0.max_adverse_gap_atr) - 0.5) > 1e-9:
+        bad.append(f"默认 max_adverse_gap_atr={p0.max_adverse_gap_atr!r}，须与 E1-C 一致取 0.5")
+
+    # ---------- 2) 源码接线（AST，防 docstring 假阳性）----------
+    try:
+        src = (Path(__file__).resolve().parents[2] / "app" / "backtest"
+               / "v5x_backtest.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        calls_reprice = any(
+            isinstance(n, ast.Call) and (
+                (isinstance(n.func, ast.Name) and n.func.id == "reprice_orders")
+                or (isinstance(n.func, ast.Attribute) and n.func.attr == "reprice_orders"))
+            for n in ast.walk(tree))
+        observed.append(f"calls_reprice={calls_reprice}")
+        if not calls_reprice:
+            bad.append("v5x_backtest 未调用 reprice_orders（成交口径只声明未接线）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"源码 AST 检查失败：{type(exc).__name__}: {exc}")
+
+    # ---------- 3) 行为级：同一份事件、两种口径 ----------
+    n = 120
+    closes = np.linspace(100.0, 130.0, 60).tolist() + np.linspace(130.0, 104.0, 60).tolist()
+    closes = np.asarray(closes, dtype=float)
+    opens = closes - 0.15
+    bars = pd.DataFrame({
+        "bucket": pd.date_range("2026-01-05 09:00", periods=n, freq="h"),
+        "open": opens, "high": closes + 0.5, "low": closes - 0.5,
+        "close": closes, "volume": 1000.0, "raw_c": closes,
+    })
+    cost = CostCfg(fee_row={"OPEN": (3.0, 0.0001), "CLOSE_TODAY": (3.0, 0.0001),
+                            "CLOSE_YEST": (3.0, 0.0001)},
+                   slip_yuan=1.0, mult=10.0, tick=1.0)
+
+    def _run(mode: str, tick: float, gap: float):
+        eng = SymbolEngine("RB888", V5XConfig(M5_ON=False, M1A_ON=False), cost)
+        eng.set_daily_ctx(DailyCtx(td=None))
+        orders: list[dict] = []
+        atr: list[float] = []
+        for k, row in enumerate(bars.itertuples(index=False)):
+            evs = eng.on_bar(row.bucket, float(row.open), float(row.high),
+                             float(row.low), float(row.close), float(row.volume),
+                             float(row.raw_c), allow=True)
+            for ev in evs:
+                ev["bar_i"] = k
+            orders.extend(evs)
+            atr.append(float(eng.atr.v) if eng.atr.v is not None else float("nan"))
+        tr, _ = reprice_orders(
+            orders, opens=bars["open"].to_numpy(dtype=float),
+            closes=closes, raw_closes=closes, tds=[0] * n,
+            tss=bars["bucket"].tolist(), atr=atr, cost=cost,
+            fill_mode=mode, tick=tick, gap_lim=gap, sl_atr=1.75)
+        return tr, eng.trades
+
+    try:
+        tr_close, eng_tr = _run("close", 1.0, 0.0)
+        if not eng_tr:
+            bad.append("合成趋势序列未触发开仓（信号层被改坏）")
+        elif len(tr_close) != len(eng_tr):
+            bad.append(f"close 重定价 {len(tr_close)} 笔 != 引擎 {len(eng_tr)} 笔（零回归破了）")
+        else:
+            diffs = [abs(a["net"] - b["net"]) for a, b in zip(tr_close, eng_tr)]
+            observed.append(f"close_parity_maxdiff={max(diffs):.2e}")
+            if max(diffs) > 1e-6:
+                bad.append(f"close 重定价与引擎 trades 不一致（maxdiff={max(diffs):.3g}）")
+
+        tr_no, _ = _run("next_open", 1.0, 0.0)
+        if not tr_no:
+            bad.append("next_open 未产出成交（成交层未接线）")
+        else:
+            fill_ok = all(
+                abs(t["P0"] - (opens[t["fill_i"]] + t["dir"] * 1.0)) < 1e-9
+                and t["fill_i"] == t["signal_i"] + 1
+                for t in tr_no)
+            observed.append(f"next_open_fill={fill_ok} n={len(tr_no)}")
+            if not fill_ok:
+                bad.append("next_open 首仓价不是「下一根开盘 ± 1tick」（仍是同根收盘）")
+            if len(tr_no) > 0 and abs(tr_no[0]["net"] - eng_tr[0]["net"]) < 1e-9:
+                bad.append("next_open 净盈亏与 close 完全相同 → 口径没真的换")
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"行为级对拍异常 {type(exc).__name__}: {exc}", (
+            "V5X 成交层未按预期工作（CL-20261109-05）")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。V5X 与 fusion 成交口径分叉，两份回测不可比（CL-20261109-05）")
+
+
 def _c_factor_z_ts_distinct(c: Ctx) -> tuple[bool, str, str, str]:
     """A1 / CL-20261108-20：横截面 z 与时序 z 必须是两个因子、两种语义。
 
@@ -3231,6 +3359,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 防「定义了没人用」「静默丢滑点」「退化成延后一根」三种假绿。
     ("BT-GAP-FILTER-WIRED", "E1-C 跳空不利过滤（0.5 ATR / 语义 B）真实接线",
      "block", _c_bt_gap_filter_wired),
+    # C2b / CL-20261109-05：V5X 回测原为「同根收盘」，与 fusion 的 E1-C 差一整个
+    # 成交假设，却没有任何东西阻止别人拿 +273,705 去和 V3.4 比。断言同时钉
+    # 「默认口径」「真实接线」「close 零回归」「next_open 确实落在下一根开盘」。
+    ("BT-V5X-FILL-MODE-WIRED", "V5X 回测成交口径接 E1-C（默认 next_open / close 零回归）",
+     "block", _c_bt_v5x_fill_mode),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
