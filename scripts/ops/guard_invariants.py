@@ -1667,6 +1667,79 @@ def _c_schedule_parity(c: Ctx) -> tuple[bool, str, str, str]:
         + "。字典与代码分叉 = 作业在没人预期的时间跑（CL-20261109-07）")
 
 
+def _c_cfg_strategy_override(c: Ctx) -> tuple[bool, str, str, str]:
+    """`strategies.<key>.params` 覆盖层必须真的生效（CL-20261108-09）。
+
+    这条防的是「文档说能改、代码里没人读」：`YamlConfig` 一度**没有**
+    `strategies` 字段，而 `registry.params_for` 用
+    `getattr(get_settings(), "strategies", None)` 取覆盖 —— 恒为 None，
+    于是 scheduler 里「只有 config 显式写了才会覆盖」的注释是反的。
+
+    三面同时判（零 DB、零时间衰减）：
+      1. **字段存在**：`YamlConfig.model_fields` 有 `strategies`，
+         `Settings` 有同名属性；
+      2. **返回纯 dict**：给 pydantic 模型会让 `registry` 的 `isinstance(ov, dict)`
+         判假 → 覆盖再次静默失效（这比死代码更隐蔽）；
+      3. **端到端合并**：临时替换 `get_settings`，验证 `params_for` 真的合并了
+         覆盖值，且 `_fusion_params` 把它落到 FusionConfig。
+    """
+    label = "策略 config 覆盖层真实生效（strategies.<key>.params）"
+    try:
+        import app.core.config as cfgmod
+        from app.core.config import EnvSettings, Settings, YamlConfig
+        from app.strategies.registry import params_for
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "配置/注册表不可导入（CL-20261108-09）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+
+    if "strategies" not in YamlConfig.model_fields:
+        bad.append("YamlConfig 缺 strategies 字段 → 覆盖层永远是 None")
+    if not hasattr(Settings, "strategies"):
+        bad.append("Settings 未暴露 strategies 属性")
+
+    def _mk(strategies: dict | None) -> Settings:
+        y = YamlConfig.model_validate({"strategies": strategies} if strategies else {})
+        return Settings(env=EnvSettings(), yaml=y)
+
+    try:
+        s = _mk({"fusion_v34": {"params": {"sl_atr": 1.5}}})
+        st = s.strategies
+        plain = isinstance(st.get("fusion_v34"), dict)
+        observed.append(f"plain_dict={plain}")
+        if not plain:
+            bad.append("Settings.strategies 返回的不是原生 dict → registry 会静默跳过")
+
+        orig = cfgmod.get_settings
+        try:
+            cfgmod.get_settings = lambda: s
+            merged = params_for("fusion_v34")
+        finally:
+            cfgmod.get_settings = orig
+        observed.append(f"params_for={merged}")
+        if merged.get("sl_atr") != 1.5:
+            bad.append(f"params_for 未合并覆盖值：{merged!r}")
+
+        # 无覆盖时必须为空（生产现状：cloud.yaml 没有 strategies 段）
+        orig = cfgmod.get_settings
+        try:
+            cfgmod.get_settings = lambda: _mk(None)
+            empty = params_for("fusion_v34")
+        finally:
+            cfgmod.get_settings = orig
+        if empty:
+            bad.append(f"无 strategies 段时 params_for 应为空，实得 {empty!r}")
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"端到端合并异常 {type(exc).__name__}: {exc}", (
+            "覆盖层接线不完整（CL-20261108-09）")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。按注释改配置调参会静默无效（CL-20261108-09）")
+
+
 def _c_factor_z_ts_distinct(c: Ctx) -> tuple[bool, str, str, str]:
     """A1 / CL-20261108-20：横截面 z 与时序 z 必须是两个因子、两种语义。
 
@@ -3697,6 +3770,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 两条巧合才保住节奏 —— 纯属幸存，必须变成断言。
     ("OPS-SCHEDULE-PARITY", "调度频率单一真相（字典 == 代码）", "block",
      _c_schedule_parity),
+    # CL-20261108-09：YamlConfig 一度没有 strategies 字段，params_for 恒返回 {}，
+    # 而 scheduler 的注释写着「写了就会覆盖」——又一次「口径只存在注释里」。
+    ("CFG-STRATEGY-OVERRIDE-WIRED", "策略 config 覆盖层真实生效（strategies.<key>.params）",
+     "block", _c_cfg_strategy_override),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",

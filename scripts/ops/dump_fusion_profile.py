@@ -16,11 +16,12 @@
   L4 注册表     ``strategies.<key>.params``             ← 只作用于 scheduler 的扫描 cfg
   L5 DB         ``cfg_feature_switch``                  ← 全是功能开关，**不覆盖数值参数**
 
-⚠ 两个已知的「看起来能改、其实不生效」的层：
-  · ``Settings`` / ``YamlConfig`` 都没有 ``strategies`` 字段，所以
-    ``app.strategies.registry.params_for()`` 的 config 覆盖层恒为空；
-    ``app.scheduler._fusion_params`` 注释里「config 显式写 strategies.<key>.params
-    就会覆盖」是死代码（见 CL-20261108-09）。
+⚠ 「看起来能改、其实不生效」的层（2026-11-09 更新）
+  · L4 已接线（CL-20261108-09）：`YamlConfig` 现在有 `strategies` 字段，
+    `Settings.strategies` 把它 dump 成纯 dict 供 `registry.params_for()` 读。
+    生产 `cloud.yaml` **仍无** `strategies` 段 → 覆盖为空 → 生效参数 = 代码默认。
+    将来真写进去，`OPS-FUSION-PROFILE-PINNED` 会因 hash 偏离基线而 FAIL，
+    必须登记台账并重钉 `PINNED_FUSION_SIGNAL_HASH`。
   · DB ``cfg_feature_switch`` 只控制作业/开关（含 portfolio_brake 阈值），
     不参与 fusion 参数合并。审计报告的「DB 叠加参数」这一层经实证不存在。
 
