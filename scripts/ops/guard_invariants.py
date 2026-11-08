@@ -1497,13 +1497,19 @@ def _c_v5x_live_wired(c: Ctx) -> tuple[bool, str, str, str]:
         from app.strategies.v5x import live as _live
 
         observed.append(f"gate_lag={_live.GATE_LAG} regime={_live.REGIME_MODE} "
-                        f"hours={len(_live.SCAN_HOURS)}")
+                        f"scan_minutes={_live.SCAN_MINUTES}")
         if _live.GATE_LAG != 1:
             bad.append(f"扫描器 GATE_LAG={_live.GATE_LAG}（小时级实盘必须为 1）")
         if _live.REGIME_MODE != "strict":
             bad.append(f"扫描器 REGIME_MODE={_live.REGIME_MODE}（必须 strict 才无前视）")
-        if not _live.SCAN_HOURS:
-            bad.append("SCAN_HOURS 为空（等于永不扫描）")
+        # CL-20261108-28：节奏必须是 :05/:35 双时刻。只跑 :05 会漏掉 11:15 / 14:15
+        # 这两根非整点收盘的日盘 bar（实测 2026-11-06 14:15 的 FU888 平仓信号从未产出）。
+        mins = tuple(_live.SCAN_MINUTES)
+        if len(mins) < 2:
+            bad.append(f"SCAN_MINUTES={mins}（必须至少 :05/:35 两个时刻，"
+                       "单时刻会漏掉非整点收盘的 bar）")
+        if 5 not in mins or 35 not in mins:
+            bad.append(f"SCAN_MINUTES={mins} 缺 :05 或 :35")
     except Exception as exc:                                 # noqa: BLE001
         bad.append(f"扫描器导入异常 {type(exc).__name__}: {exc}")
 

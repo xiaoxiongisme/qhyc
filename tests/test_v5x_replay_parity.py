@@ -7,8 +7,9 @@
 这组测试钉四件事：
   1. **每根 bar 用自己那根的复权偏移**（BA 是加性偏移，随时间漂移；
      拿最后一根的偏移去反解全部历史会把早年价格算成负几万）；
-  2. ``hours_only`` 只保留 SCAN_HOURS 的 bar —— 12:00 那根实时从未被扫过，
-     回放若纳入就会凭空多出实盘不存在的信号；
+  2. ``coverable_only`` 只保留「真实 :05/:35 调度节奏下会被评估到」的 bar ——
+     判据不是「整点小时白名单」，因为真实 60m bar 收盘标签是 10:00 / 11:15 /
+     14:15 / 15:00 / 22:00 / 23:00 / 00:00 / 01:00 / 02:00 / 02:30；
   3. 区间边界是闭区间，且按 bar 收盘时刻判；
   4. 预热门与实时一致：该 bar 之前不足 MIN_BARS 根就不产信号。
 """
@@ -87,18 +88,37 @@ def test_replay_orders_uses_own_offset(patched):
         "复权偏移必须逐根取，取末根会把历史价格整体算错"
 
 
-def test_scan_range_filters_non_scan_hours(patched):
-    """12:00 不在 SCAN_HOURS → 回放默认必须排除（实时从未扫过那根）。"""
-    assert 12 not in live.SCAN_HOURS
-    start = datetime(2026, 11, 6, 9, 0)
-    end = datetime(2026, 11, 6, 14, 30)
+def test_coverable_accepts_non_integer_hour_bars():
+    """★ 非整点收盘的 bar 必须判为「可覆盖」——这是本轮修正的核心。
 
-    got = live.scan_range(None, start=start, end=end)
-    hours = sorted({pd.Timestamp(s.bar_ts).hour for s in got})
-    assert hours == [9, 10, 13, 14], f"12 点那根应被排除，实际 {hours}"
+    真实标签：日盘 10:00 / 11:15 / 14:15 / 15:00，夜盘 22:00 / 23:00 /
+    00:00 / 01:00 / 02:00 / 02:30。旧实现按「整点小时白名单」过滤，
+    把 11:15 与 14:15 判成不可覆盖，而实盘在 :05/:35 节奏下明明会评估它们。
+    """
+    cases = [
+        # (bar 收盘, 下一根 bar 收盘)
+        (datetime(2026, 11, 6, 10, 0), datetime(2026, 11, 6, 11, 15)),
+        (datetime(2026, 11, 6, 11, 15), datetime(2026, 11, 6, 14, 15)),
+        (datetime(2026, 11, 6, 14, 15), datetime(2026, 11, 6, 15, 0)),
+        (datetime(2026, 11, 6, 15, 0), datetime(2026, 11, 6, 22, 0)),
+        (datetime(2026, 11, 6, 22, 0), datetime(2026, 11, 6, 23, 0)),
+        (datetime(2026, 11, 7, 2, 30), datetime(2026, 11, 9, 10, 0)),
+    ]
+    for t, nxt in cases:
+        assert live._coverable(t, nxt), f"{t:%m-%d %H:%M} 应被 :05/:35 节奏覆盖"
 
-    got_all = live.scan_range(None, start=start, end=end, hours_only=False)
-    assert len(got_all) == 5, "hours_only=False 时应包含 12 点那根（仅供诊断）"
+
+def test_coverable_rejects_out_of_window():
+    """采集窗口外的扫描时刻不算覆盖（否则回放会算进实盘跑不到的 bar）。"""
+    # 16:00 收盘的 bar：下一个扫描时刻 16:05 已过日盘窗口（08:50-15:20）
+    assert not live._coverable(datetime(2026, 11, 6, 16, 0), None)
+
+
+def test_scan_minutes_has_two_slots():
+    """节奏必须是两个时刻：只跑 :05 会漏掉 11:15 / 14:15 两根日盘 bar。"""
+    assert isinstance(live.SCAN_MINUTES, tuple)
+    assert len(live.SCAN_MINUTES) == 2
+    assert 5 in live.SCAN_MINUTES and 35 in live.SCAN_MINUTES
 
 
 def test_scan_range_bounds_inclusive(patched):
@@ -107,7 +127,8 @@ def test_scan_range_bounds_inclusive(patched):
                           start=datetime(2026, 11, 6, 10, 0),
                           end=datetime(2026, 11, 6, 13, 0))
     ts = [pd.Timestamp(s.bar_ts).strftime("%H:%M") for s in got]
-    assert ts == ["10:00", "13:00"], f"闭区间边界应含 10:00 与 13:00，实际 {ts}"
+    assert ts == ["10:00", "12:00", "13:00"], f"闭区间应含 10:00 与 13:00，实际 {ts}"
+    assert "09:00" not in ts and "14:00" not in ts, "区间外的 bar 不得混入"
 
 
 def test_scan_range_matches_scan_once_at_same_bar(patched):
@@ -134,9 +155,9 @@ def test_scan_range_respects_warmup(patched, monkeypatch):
     got = live.scan_range(None,
                           start=datetime(2026, 11, 6, 9, 0),
                           end=datetime(2026, 11, 6, 14, 30))
-    # 第 1、2 根 bar 之前分别只有 0/1 根，均 < 3 → 只剩 13:00 / 14:00（12 点被 hours 过滤）
+    # 第 1、2 根 bar 之前分别只有 0/1 根，均 < 3 → 只剩 12:00 / 13:00 / 14:00
     hours = sorted({pd.Timestamp(s.bar_ts).hour for s in got})
-    assert hours == [13, 14], f"预热不足的 bar 应被跳过，实际 {hours}"
+    assert hours == [12, 13, 14], f"预热不足的 bar 应被跳过，实际 {hours}"
 
 
 def test_dedupe_key_excludes_source():

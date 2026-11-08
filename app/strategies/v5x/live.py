@@ -58,7 +58,7 @@ from app.strategies.v5x.params import config_from
 
 __all__ = [
     "V5XSignal",
-    "SCAN_HOURS",
+    "SCAN_MINUTES",
     "scan_once",
     "scan_range",
     "format_message",
@@ -72,10 +72,23 @@ LOOKBACK_DAYS = 540
 MIN_BARS = 200
 #: 最后一根 bar 的最大年龄（分钟）。超过即视为数据陈旧，**本轮该品种不产信号**。
 #: 来源：生产 V3.4 在 2026-09-23 因陈旧 K 线一轮误推 18 条信号，此后加了同类门控。
-#: 取 90 分钟：小时线最坏情况是「整点采集延迟 + 扫描在 :05 触发」，正常 ≤ 65 分钟。
+#: 取 90 分钟：**真实 60m bar 的收盘标签不是整点**（见 SCAN_MINUTES 注释），
+#: 最长一段是日盘 10:00→11:15 的 75 分钟，留 15 分钟采集延迟余量。
 MAX_BAR_AGE_MIN = 90
-#: 允许扫描的小时（收盘后那根 bar 才有意义）：日盘 09-11/13-15、夜盘 21-23
-SCAN_HOURS = frozenset({9, 10, 11, 13, 14, 15, 21, 22, 23})
+#: 扫描触发分钟（每小时的 :05 / :35）。
+#:
+#: ★★ 为什么不能只跑 :05（2026-11-08 实测修正，CL-20261108-28）
+#: ---------------------------------------------------------------
+#: 真实 60m bar 的收盘标签**不是整点**，实测生产分布：
+#:   日盘 10:00 / 11:15 / 14:15 / 15:00；夜盘 22:00 / 23:00 / 00:00 / 01:00 / 02:00 / 02:30。
+#: 于是「每小时只在 :05 扫一次」会这样漏：
+#:   · 11:15 那根 → 11:05 时还没收盘，13:05 时已是 110 分钟前（> MAX_BAR_AGE_MIN）→ 跳过；
+#:   · 14:15 那根 → 14:05 时还没收盘，15:05 时已被 15:00 那根顶掉 → 永远不被评估。
+#: 实证（2026-11-06）：14:15 的 FU888 平仓信号在 :05-only 节奏下**从未被评估**，
+#: 而 :35 时刻一跑就出来了。这不是「少推一条」的小事——回放对账会把这条算进去，
+#: 于是「回放有、实盘没有」，对账永远对不平。
+#: V3.4 一直就是 :05/:35 双跑，V5X 抄成单跑是移植时的疏漏。
+SCAN_MINUTES = (5, 35)
 #: V5X 信号价格源（与回测 v5x_backtest.py 默认一致）
 SRC = "bar_60m_ba"
 #: 实盘口径：t-1 门控 + 无前视体制
@@ -112,6 +125,39 @@ class V5XSignal:
 def _td_series(buckets: pd.Series, open_days: np.ndarray) -> np.ndarray:
     """bar 收盘时刻 → 所属交易日（夜盘归次一交易日）。"""
     return assign_td(buckets, open_days)
+
+
+def _next_scan_time(t: datetime) -> datetime | None:
+    """``t`` 之后（含）最近的一个扫描触发时刻（``SCAN_MINUTES`` 内的整分）。"""
+    cur = t.replace(second=0, microsecond=0)
+    if cur < t:
+        cur += timedelta(minutes=1)
+    for _ in range(90):
+        if cur.minute in SCAN_MINUTES:
+            return cur
+        cur += timedelta(minutes=1)
+    return None
+
+
+def _coverable(t: datetime, nxt: datetime | None,
+               max_age_min: int = MAX_BAR_AGE_MIN) -> bool:
+    """这根 bar 在真实调度节奏下**是否真的会被评估到**。
+
+    判据：存在扫描时刻 ``T`` 满足 ``t <= T < min(下一根 bar 的收盘时刻, t+90min)``，
+    且 ``T`` 落在采集窗口内（:mod:`app.ingest.trading_window` 已处理周五夜盘顺延到
+    周六凌晨、周日休市这些边界）。
+
+    为什么回放要这么吹毛求疵：回放的意义是「复现当时会推的东西」。若回放把
+    实盘永远评估不到的 bar 也算进去，对账报告就会长期多出几条幽灵信号，
+    而实盘的缺失反而被这份「更全」的报告掩盖掉。
+    """
+    from app.ingest.trading_window import is_collection_window
+
+    limit = t + timedelta(minutes=max_age_min)
+    if nxt is not None and nxt < limit:
+        limit = nxt
+    nt = _next_scan_time(t)
+    return nt is not None and nt <= limit and is_collection_window(nt)
 
 
 def _load(session, symbols: list[str] | None, end: date):
@@ -245,20 +291,19 @@ def scan_once(session, symbols: list[str] | None = None, *,
 def scan_range(session, symbols: list[str] | None = None, *,
                start: datetime, end: datetime | None = None,
                overrides: dict | None = None,
-               hours_only: bool = True) -> list[V5XSignal]:
+               coverable_only: bool = True) -> list[V5XSignal]:
     """**一次重放**返回 ``[start, end]`` 区间内全部信号（历史回放补录用）。
 
     为什么不「对每个小时点各调一次 :func:`scan_once`」：那要重放 N 次 540 天数据，
     38 品种 × 12 小时点 ≈ 456 次全量重放，纯浪费。状态机从同一份数据横扫一遍，
-    产生的订单事件序列与「逐小时扫描各取最后一根」**完全等价**——因为 scan_once
+    产生的订单事件序列与「逐时刻扫描各取最后一根」**完全等价**——因为 scan_once
     每轮也都是从头重放、只取最后一根。
 
     Args:
-        hours_only: 只保留落在 :data:`SCAN_HOURS` 那些小时的 bar。
-            **默认 True 且不要关**：实时扫描只在 ``SCAN_HOURS`` 触发，
-            12:00 那根 bar 在 13:05 已被 13:00 的 bar 顶掉，**从未被扫过**。
-            若回放把 12:00 也纳入，会凭空多出实盘永远不会出现的信号，
-            回放对账就永远对不上（这是最容易搞错的一处，CL-20261108-28）。
+        coverable_only: 只保留「真实调度节奏下会被评估到」的 bar
+            （见 :func:`_coverable`）。**默认 True 且不要关**：
+            关掉会把实盘永远评估不到的 bar 也算进来，回放报告长期多出幽灵信号，
+            反而掩盖实盘的缺失。
 
     预热门与实时一致：该 bar 之前不足 :data:`MIN_BARS` 根的一律不产信号
     （实时在那些时点同样会被 `len(df) < MIN_BARS` 拦掉）。
@@ -272,6 +317,7 @@ def scan_range(session, symbols: list[str] | None = None, *,
     cfg = config_from(overrides or {})
     sigs: list[V5XSignal] = []
     n_bar = 0
+    n_skip_cover = 0
 
     for sym in symbols:
         df = md.bars.get(sym)
@@ -289,13 +335,19 @@ def scan_range(session, symbols: list[str] | None = None, *,
             t = pd.Timestamp(ts).to_pydatetime()
             if t < start or t > end:
                 continue
-            if hours_only and t.hour not in SCAN_HOURS:
-                continue
+            if coverable_only:
+                nxt = (pd.Timestamp(df["bucket"].iloc[i + 1]).to_pydatetime()
+                       if i + 1 < len(df) else None)
+                if not _coverable(t, nxt):
+                    n_skip_cover += 1
+                    continue
             n_bar += 1
             sigs.extend(_to_signals(sym, ts, off, orders, source="replay"))
 
     logger.info(f"[v5x.live] 回放完成 {start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M}："
-                f"{n_bar} 根 bar 出信号，共 {len(sigs)} 条")
+                f"{n_bar} 根 bar 出信号，共 {len(sigs)} 条"
+                + (f"（另有 {n_skip_cover} 条因真实调度节奏下不可覆盖而排除）"
+                   if n_skip_cover else ""))
     return sigs
 
 

@@ -998,24 +998,38 @@ def _v5x_scan_job() -> None:
          hvol / 簇冲击 / 体制三道门只吃 ≤ T-1 的日线聚合，全天恒定 ——
          这是小时级扫描唯一可复现的口径（当日口径要等收盘才算得出来）。
       3. 只写 ``public.v5x_signal_log``（去重 + 留痕）并推送；**不**碰
-         ``execution_order`` 与 ``fusion_position``。下单/持仓同步是 C3 第二阶段。
+         ``execution_order`` 与 ``fusion_position``。持仓回写统一由
+         :mod:`app.execution.position_sync` 收口并默认关闭（CL-20261108-26）。
 
-    整点后 :05 触发（与 :00 的 hourly_collect 错开；与 fusion_scan 同分钟但互不依赖）。
-    开关 ``cfg_feature_switch.v5x_live_enabled`` **默认关闭**（migrations/059），
-    开启前须先 dry-run 核对条数与价格反解。
+    触发节奏：:data:`app.strategies.v5x.live.SCAN_MINUTES` = 每小时 :05 与 :35。
+    **必须是两个时刻，不能只跑 :05**（2026-11-08 实测修正，CL-20261108-28）：
+    真实 60m bar 的收盘标签不是整点（日盘 10:00/11:15/14:15/15:00，
+    夜盘 22:00/23:00/00:00/01:00/02:00/02:30），只跑 :05 会让 14:15 那根
+    在 15:05 已被 15:00 顶掉、在 14:05 又还没收盘 —— 永远不被评估。
+    实证：2026-11-06 14:15 的 FU888 平仓信号在 :05-only 下从未产出。
+
+    时段门用 :func:`app.ingest.trading_window.is_hourly_collection_allowed`
+    而不是 :func:`is_trading_day`：夜盘跨午夜（周五 21:00→周六 02:30）时，
+    按日历日判断会把 00:00-02:30 的 bar 全部误杀。该函数已专门处理这个边界。
+
+    开关 ``cfg_feature_switch.v5x_live_enabled``（migrations/059，2026-11-08 开启），
+    关闭时整轮不跑（不采集、不评估、不推送）。
     """
     if not _switch_on("v5x_live_enabled", "QH_V5X_LIVE", default=False):
         logger.debug("[scheduler] v5x_live_enabled=off → 跳过 V5X 扫描")
         return
     now = datetime.now(_SH_TZ)
-    if not is_trading_day(now):
-        logger.info(f"[scheduler] v5x scan {now:%m-%d} 非交易日，跳过")
-        return
-    # 扫描小时常量与扫描器同源（不在这里另抄一份，否则两处会漂）
-    from app.strategies.v5x.live import SCAN_HOURS, run_v5x_scan
 
-    if now.hour not in SCAN_HOURS:
-        logger.debug(f"[scheduler] v5x scan {now:%H:%M} 非扫描时段，跳过")
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    if not is_hourly_collection_allowed(now):
+        logger.info(f"[scheduler] v5x scan {now:%m-%d %H:%M} 非交易时段，跳过")
+        return
+
+    # 扫描节奏常量与扫描器同源（不在这里另抄一份，否则两处会漂）
+    from app.strategies.v5x.live import SCAN_MINUTES, run_v5x_scan
+
+    if now.minute not in SCAN_MINUTES:
+        logger.debug(f"[scheduler] v5x scan {now:%H:%M} 非扫描时刻，跳过")
         return
 
     try:
@@ -1023,7 +1037,7 @@ def _v5x_scan_job() -> None:
             res = run_v5x_scan(s, now=now)
         logger.info(f"[scheduler] v5x scan 完成：{res}")
     except Exception as e:  # noqa: BLE001
-        # 扫描失败绝不影响同一分钟触发的 fusion_scan（V3.4 是唯一生产策略）
+        # 扫描失败绝不影响同一分钟触发的 fusion_scan
         logger.exception(f"[scheduler] v5x scan 失败：{e}")
 
 
@@ -1809,22 +1823,28 @@ def _build_scheduler() -> BlockingScheduler:
                 "[scheduler] V3.4 实盘推送 = 关闭（fusion_v34_live_enabled=false）→ "
                 "fusion_scan 每轮空跑，生产推送源为 V5X.3（v5x_live_enabled）")
 
-    # V5X.3 小时级信号扫描（C3-min，CL-20261108-08）：整点后 :05。
+    # V5X.3 小时级信号扫描（C3-min，CL-20261108-08）：每小时 :05 与 :35。
     # **无条件注册**，由 job 内部读 cfg_feature_switch.v5x_live_enabled 决定跑不跑 ——
-    # 这样打开/关闭开关**不需要重启调度器**（该开关默认 false，见 migrations/059）。
+    # 这样打开/关闭开关**不需要重启调度器**（该开关见 migrations/059）。
     # 2026-11-08 起它是**唯一**生产推送源（V3.4 已由 CL-20261108-27 停用），
     # 但两个作业仍物理并存：V3.4 保留代码与开关，随时可回切。
+    # ★ 节奏必须与 SCAN_MINUTES 同源（:05/:35），只跑 :05 会漏掉 11:15 / 14:15
+    #   这两根非整点收盘的日盘 bar（CL-20261108-28 实证）。
+    from app.strategies.v5x.live import SCAN_MINUTES as _V5X_MINUTES
+
     sched.add_job(
         _v5x_scan_job,
-        trigger=CronTrigger(minute="5", timezone=settings.env.TZ),
+        trigger=CronTrigger(minute=",".join(str(m) for m in _V5X_MINUTES),
+                            timezone=settings.env.TZ),
         id="v5x_scan",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
         misfire_grace_time=1800,
     )
-    logger.info("[scheduler] registered v5x_scan at :05 hourly "
-                "(switch v5x_live_enabled, default off)")
+    logger.info("[scheduler] registered v5x_scan at "
+                + "/".join(f":{m:02d}" for m in _V5X_MINUTES)
+                + " hourly (switch v5x_live_enabled)")
 
     # 复权主连每日重算（adjust_cont_adj）已于 2026-10-04 随 fdf 模块退役停用：
     # cont_adj 不再由定时作业生成（fdf 为唯一生产者，已删）。保留 minute_bar（L0 原始）。
