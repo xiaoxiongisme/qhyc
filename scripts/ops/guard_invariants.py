@@ -709,6 +709,82 @@ def _c_fusion_profile_pinned(c: Ctx) -> tuple[bool, str, str, str]:
     )
 
 
+def _c_config_snapshot_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """P2-2：启动快照 / 信号流水必须绑定**当前生效**的 params_hash。
+
+    与 OPS-FUSION-PROFILE-PINNED 的分工：那条钉住「参数不许漂移」，
+    这条钉住「每次运行、每条信号都能追溯到参数」。衡量的都是此刻可判的状态：
+      · 每个 role 的**最新**快照 hash == 当前生效 hash（不查时间新鲜度，
+        避免「靠历史衰减才能转 PASS」——进程没重启时旧快照依然有效）；
+      · 信号表列存在、写入方源码确实在写（防「加了列没人填」）；
+      · 近 30 天所有非 NULL 的 signal params_hash 都属于当前 hash。
+    """
+    label = "启动快照与信号流水绑定当前生效 params_hash"
+    try:
+        from app.core.config_snapshot import current_params_hash
+        cur = current_params_hash()
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {exc}", (
+            "无法解析当前生效 params_hash → 参数追溯链不可用（CL-20261108-10）")
+    if not cur:
+        return False, label, "current_params_hash=None", (
+            "当前生效参数 hash 为空，快照/信号无法绑定（CL-20261108-10）")
+
+    try:
+        snaps = c.rows("""
+            SELECT DISTINCT ON (role) role, signal_params_hash::text, captured_at::text
+            FROM ops.config_snapshot ORDER BY role, captured_at DESC
+        """)
+        col = c.scalar("""
+            SELECT count(*) FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'fusion_signal_log'
+              AND column_name = 'params_hash'
+        """) or 0
+        signal_hashes = c.rows("""
+            SELECT DISTINCT params_hash FROM fusion_signal_log
+            WHERE params_hash IS NOT NULL
+              AND signal_at > now() - interval '30 days'
+        """)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {exc}", (
+            "ops.config_snapshot / fusion_signal_log 查询失败 → 057 可能未应用"
+            "（CL-20261108-10）")
+
+    try:
+        src = (Path(__file__).resolve().parents[2]
+               / "app" / "strategies" / "fusion_signal.py").read_text(encoding="utf-8")
+        writer_wired = "params_hash=_params_hash" in src
+    except OSError:
+        writer_wired = False
+
+    by_role = {r[0]: str(r[1]) for r in snaps}
+    bad: list[str] = []
+    for role in ("api", "scheduler"):
+        if role not in by_role:
+            bad.append(f"缺 {role} 启动快照")
+        elif by_role[role] != cur:
+            bad.append(f"{role} 最新快照 hash={by_role[role][:12]}… != 当前 {cur[:12]}…")
+    if col == 0:
+        bad.append("fusion_signal_log 缺 params_hash 列（057 未应用）")
+    if not writer_wired:
+        bad.append("persist_signals 未写 params_hash（写入方被回退）")
+    foreign = sorted({str(r[0]) for r in signal_hashes if str(r[0]) != cur})
+    if foreign:
+        bad.append(f"近 30 天信号含 {len(foreign)} 个异参数 hash："
+                   + ", ".join(x[:12] + "…" for x in foreign[:3]))
+
+    observed = (
+        f"cur={cur[:12]}… roles={{{','.join(sorted(by_role))}}} "
+        f"col={col} writer_wired={writer_wired} "
+        f"signal_hash_kinds={len(signal_hashes)}"
+    )
+    return not bad, label, observed, (
+        "" if not bad else
+        "；".join(bad) + "。参数追溯链断裂：确认 057 已应用、api/scheduler 已重启，"
+        "并检查 ops.config_snapshot 最新行（CL-20261108-10）"
+    )
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -744,6 +820,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 「回测的参数是不是生产在跑的参数」，静默调参 / 静默覆盖都无人察觉。
     ("OPS-FUSION-PROFILE-PINNED", "实际生效 fusion 参数与已登记 V3.4 基线一致",
      "block", _c_fusion_profile_pinned),
+    # P2-2：把「哪次启动 / 哪条信号用的是哪套参数」变成机器可判。
+    # 特别防「加了列没人填」——qhyc 历史上最隐蔽的失效模式。
+    ("OPS-CONFIG-SNAPSHOT-FRESH", "启动快照与信号流水绑定当前生效 params_hash",
+     "block", _c_config_snapshot_fresh),
 ]
 
 

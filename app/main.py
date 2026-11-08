@@ -36,9 +36,15 @@ async def lifespan(app: FastAPI):
         with get_engine().connect() as conn:
             conn.exec_driver_sql("SELECT 1")
         logger.info("[main] DB connection ok")
-        # R3②：品种清单以 config 为唯一事实源，启动时幂等同步
+        # ★ P2-2 / CL-20261108-10：启动参数快照（先写、独立事务）。
+        #   与 sync_symbols 分开两个 session_scope，避免品种同步失败时把快照一起回滚。
+        #   record_config_snapshot 内部失败只告警；「快照没写」由守卫
+        #   OPS-CONFIG-SNAPSHOT-FRESH 报 FAIL，不是静默失效。
         from app.core.bootstrap import sync_symbols
+        from app.core.config_snapshot import record_config_snapshot
 
+        with session_scope() as s:
+            record_config_snapshot(s, role=settings.env.ROLE or "api")
         with session_scope() as s:
             sync_symbols(s)
     except Exception as e:

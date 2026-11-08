@@ -632,6 +632,9 @@ class FusionSignalLog(Base):
     lots: Mapped[int | None] = mapped_column(Integer)     # 手数
     pnl: Mapped[float | None] = mapped_column(Float)      # 持仓浮盈率
     extra: Mapped[dict | None] = mapped_column(JSON)      # 其余字段兜底
+    # P2-2 / CL-20261108-10：产生该信号时实际生效的 fusion 参数指纹。
+    # 与 ops.config_snapshot 同源，让「这条信号用哪套参数算的」可机器追溯。
+    params_hash: Mapped[str | None] = mapped_column(Text)
 
 
 # 新增列的兼容迁移语句（表已存在时 create_all 不会补列）
@@ -641,6 +644,9 @@ _MIGRATIONS = (
     "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS signal_at TIMESTAMPTZ",
     "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ",
     "ALTER TABLE fusion_position ADD COLUMN IF NOT EXISTS lots INTEGER DEFAULT 1",
+    # 正式通道是 migrations/057；这里给未跑迁移的本地/开发库做幂等兜底。
+    # public.fusion_signal_log 若为分层 shim 视图，本语句会被下方 except 兜住。
+    "ALTER TABLE fusion_signal_log ADD COLUMN IF NOT EXISTS params_hash TEXT",
 )
 
 
@@ -693,6 +699,14 @@ def persist_signals(session, signals: list[dict], ts_local: datetime,
     prev_states = prev_states or {}
     utc = ts_local.astimezone(timezone.utc)
     trade_date = ts_local.strftime("%Y-%m-%d")
+    # P2-2 / CL-20261108-10：整轮信号共用同一个「本进程生效」参数指纹。
+    # 解析失败留 NULL 并告警，绝不编造；守卫只校验非 NULL 值的一致性。
+    try:
+        from app.core.config_snapshot import current_params_hash
+        _params_hash = current_params_hash()
+    except Exception as exc:  # noqa: BLE001
+        _params_hash = None
+        logger.warning(f"[fusion] 参数指纹不可用，本轮信号 params_hash=NULL：{exc}")
     rows = []
     for sg in signals:
         lv = sg.get("levels") or {}
@@ -719,6 +733,7 @@ def persist_signals(session, signals: list[dict], ts_local: datetime,
             extra={k: v for k, v in sg.items()
                    if k not in ("symbol", "name", "action", "to", "close",
                                 "entry", "new_entry", "levels", "pnl")} or None,
+            params_hash=_params_hash,
         ))
     try:
         session.bulk_save_objects(rows)

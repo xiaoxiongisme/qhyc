@@ -3186,6 +3186,16 @@ def main() -> None:
     if settings.env.ROLE != "api":  # 仅调度器进程收尾，API 容器不动记账
         _reap_stale_running()
 
+    # ★ P2-2 / CL-20261108-10：启动参数快照（在本进程任何作业开跑之前）。
+    #   放在 _reap_stale_running 之后、sched.start() 之前，保证快照对应的是
+    #   「这一轮进程真正生效的参数」。失败只告警，由守卫兜底可见。
+    try:
+        from app.core.config_snapshot import record_config_snapshot
+        with session_scope() as s:
+            record_config_snapshot(s, role=settings.env.ROLE or "scheduler")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[scheduler] 启动参数快照写入失败（守卫会报 FAIL）：{exc}")
+
     def _shutdown(*_):
         logger.info("[scheduler] shutdown signal received")
         try:
