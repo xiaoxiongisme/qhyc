@@ -360,6 +360,19 @@ def _c_l0_layers_fresh(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_equity_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """权益流必须够新、且**够长**——否则组合熔断是「开着但空转」。
+
+    ★ 2026-11-09 加严（CL-20261107-07 / CL-20261107-20）
+    ------------------------------------------------
+    旧版只看「7 天内有没有更新」。但 `portfolio_brake.load_equity_curve` 要求
+    至少 ``EQUITY_MIN_DAYS``（20）个交易日样本，否则返回 ``[]`` → 上层**恒等放行**：
+    >15% 降半仓 / >25% 清仓两条规则形同不存在，而开关显示 `=t`。
+    实测 2026-11-09：`portfolio_equity` 只有 **1 行，停在 2026-10-27**（13 天前），
+    样本 1/20 → 熔断完全空转。这正是 position_sync 那次同型的「声明 vs 实际」背离。
+
+    所以一条断言同时判两件事：新鲜度 + 样本量。细节里直接写明「熔断是否真的生效」，
+    不让运维从「权益流不新鲜」自己推导出「风控没在跑」。
+    """
     n = c.scalar("SELECT count(*) FROM portfolio_equity")
     if not n:
         return False, "portfolio_equity 有记录且 7 天内更新", "0 行", (
@@ -367,9 +380,30 @@ def _c_equity_fresh(c: Ctx) -> tuple[bool, str, str, str]:
             "写入方：scripts/ops/upsert_equity.py")
     last = c.scalar("SELECT max(trade_date) FROM portfolio_equity")
     days = c.scalar("SELECT CURRENT_DATE - max(trade_date) FROM portfolio_equity")
-    return days <= 7, "portfolio_equity 7 天内更新", (
-        f"{n} 行，最新 {last}（{days} 天前）"), (
-        "" if days <= 7 else "权益流停更 → 熔断读的是过期曲线，回撤判断失真")
+
+    try:
+        from app.risk.portfolio_brake import EQUITY_MIN_DAYS
+        need = int(EQUITY_MIN_DAYS)
+    except Exception:                                     # noqa: BLE001
+        need = 20
+    brake_on = bool(c.scalar(
+        "SELECT enabled FROM cfg_feature_switch "
+        "WHERE switch_key = 'portfolio_brake_enabled'"))
+
+    fresh = days <= 7
+    enough = int(n) >= need
+    eff = ("生效" if (fresh and enough) else
+           ("空转：样本 %d/%d" % (int(n), need) if not enough else "读过期曲线"))
+    detail = []
+    if not fresh:
+        detail.append(f"权益流停更 {days} 天 → 熔断读的是过期曲线，回撤判断失真")
+    if not enough:
+        detail.append(
+            f"样本 {int(n)}/{need} 个交易日 < 下限 → `load_equity_curve` 返回 [] → "
+            f"熔断**恒等放行**（开关 {'=t 但不会触发任何降仓' if brake_on else '=f'}）")
+    detail.append(f"熔断当前：{eff}；写入方 scripts/ops/upsert_equity.py")
+    return fresh and enough, "portfolio_equity 新鲜且样本 ≥ 熔断下限", (
+        f"{n} 行/{need} 天，最新 {last}（{days} 天前）"), "；".join(detail)
 
 
 # ---------------------------------------------------------------- 交易日历
