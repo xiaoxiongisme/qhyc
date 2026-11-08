@@ -2267,6 +2267,51 @@ def _c_ci_same_source_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。CI 同源断言未真实生效，E3 结论不可信（CL-20261108-17）")
 
 
+def _c_ops_data_lag_trade_day(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-01：日线滞后必须按**交易日**计，不得回退到自然日差。
+
+    历史误报（2026-11-09 00:00）：「日线数据滞后 3 天（最新 2026-11-06）」，
+    而 daily_bar 与交易日真源 futures_rule 的 max(trade_date) 同为 2026-11-06，
+    数据零滞后 —— 纯粹是 (today - db_max).days 在周末被顶到 3。
+
+    衡量此刻的行为（不查历史流水）：
+      · ops_monitor.collect 的 AST 中存在以 ``DATA_LAG_TRADE_WARN`` 为比较对象的
+        If 判据（证明交易日阈值真的接进了判定，而不只是定义了常量）；
+      · 期望值来源为 ``futures_rule`` + ``expected_trade_date``（不用已死的
+        ``l3_ref.trade_calendar``，见 CL-20261107-18）。
+    """
+    import ast
+
+    label = "日线滞后按交易日计（CL-20261109-01）"
+    root = Path(__file__).resolve().parents[2]
+    mon = root / "scripts" / "ops" / "ops_monitor.py"
+    bad: list[str] = []
+    observed: list[str] = []
+    if not mon.is_file():
+        return False, label, "ops_monitor.py 缺失", "文件不存在"
+    src = mon.read_text(encoding="utf-8")
+    observed.append("futures_rule={0}".format("futures_rule" in src))
+    if "futures_rule" not in src:
+        bad.append("真源未使用 futures_rule（可能回退到已死的 l3_ref.trade_calendar）")
+    if "expected_trade_date" not in src:
+        bad.append("缺 expected_trade_date（未输出期望交易日，无法解释滞后口径）")
+    try:
+        tree = ast.parse(src)
+        used = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If):
+                names = {x.id for x in ast.walk(node.test) if isinstance(x, ast.Name)}
+                if "DATA_LAG_TRADE_WARN" in names:
+                    used = True
+                    break
+        observed.append("判据引用 DATA_LAG_TRADE_WARN={0}".format(used))
+        if not used:
+            bad.append("交易日阈值未接进判定（仅定义常量不算生效）")
+    except SyntaxError as e:
+        bad.append("ops_monitor 语法错误: {0}".format(str(e)[:60]))
+    return (not bad), label, " · ".join(observed), "；".join(bad)
+
+
 def _c_ops_push_quota(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261108-23：运维告警不得挤爆与交易信号共用的推送通道。
 
@@ -2736,6 +2781,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
     ("OPS-PUSH-QUOTA", "告警日配额与单轮 digest（不挤爆信号通道）",
      "block", _c_ops_push_quota),
+    # CL-20261109-01：11-09 00:00 那条「日线滞后 3 天」是自然日差在周末被顶到阈值，
+    # 数据实际零滞后。防「判据回退成自然日差」与「真源退回已死的 l3_ref.trade_calendar」。
+    ("OPS-DATA-LAG-TRADE-DAY", "日线滞后按交易日计且真源为 futures_rule",
+     "block", _c_ops_data_lag_trade_day),
     # CL-20261108-18：恢复推送盈亏金额后，防止功能再下线 / 契约测试再僵尸化。
     ("OPS-PUSH-PNL-WIRED", "推送盈亏金额已接线且契约测试真实通过（CL-20261108-18）",
      "block", _c_ops_push_pnl_wired),
