@@ -827,6 +827,10 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
             "close": closes,
             "state": [0, side, side, side, 0, 0, 0, 0],
             "lots": [0, 1, 1, 1, 0, 0, 0, 0],
+            # 给有效 ATR：全 NaN 会让 _simulate_trades 的 np.nanmean 打
+            # "Mean of empty slice" 到 stderr，污染每日 09:10 守卫日志。
+            # 只影响 risk/R 字段，不影响成交价与成交 bar 的判据。
+            "atr": [1.0] * n,
         })
 
     def run(mode: str, side: int, tick_size: float = 0.0):
