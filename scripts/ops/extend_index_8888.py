@@ -178,7 +178,7 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
     last = _last_index(cur, variety)
     if last is None:
         return {"variety": variety, "status": "no_index_series", "rows": 0}
-    last_ts, last_close, _exchange, amt_caliber = last
+    last_ts, last_close, exchange, amt_caliber = last
 
     # 窗口：从「最后一个已覆盖交易日的前 1 天」开始，保证接缝日能被完整重建
     t0 = datetime.combine((last_ts - timedelta(days=1)).date(), datetime.min.time()).replace(

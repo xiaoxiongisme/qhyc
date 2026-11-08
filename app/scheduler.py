@@ -1258,7 +1258,6 @@ def _sync_cloud_local_job() -> None:
       CLOUD_SYNC_LOOKBACK_DAYS=30   增量时额外重放的回看窗口（修云端历史回补分歧）
     DSN 由脚本自身按 CLOUD_PG*/LOCAL_PG* 解析（CB 经隧道 15432 连云）。
     """
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -1400,7 +1399,6 @@ def _seed_futures_rule_job() -> None:
 
     回看窗口：默认 14 天（SEED_RULE_LOOKBACK_DAYS），避免库被清空时从 2015 年全量重扫。
     """
-    import subprocess
     import sys as _sys
     from datetime import date as _date, timedelta as _td
 
@@ -1441,7 +1439,6 @@ def _collect_roll_yield_job() -> None:
     那会按交易日×品种全量重扫（约 2000 天 × 40 品种 × sleep，单次即数十分钟），
     放进每日调度窗口会挤占正常采集。
     """
-    import subprocess
     import sys as _sys
     from datetime import date as _date, timedelta as _td
 
@@ -1496,7 +1493,6 @@ def _sync_trading_cost_job() -> None:
     频率取"每周"而非"每日"：手续费由交易所通知驱动，变更低频；且该脚本要抓郑商所官网，
     每日跑属无谓的外部请求压力。可用 SYNC_COST_CRON_* 覆盖。
     """
-    import subprocess
     import sys as _sys
 
     script = _scripts_dir() / "sync_cost_from_exchange.py"
@@ -1532,7 +1528,6 @@ def _rebuild_dict_dryrun_job() -> None:
     自动覆盖会静默抹掉这些裁定，风险远大于收益。故本作业只做**漂移检测**，
     有差异时输出 WARNING，由人工判断后再手动执行 --apply。
     """
-    import subprocess
     import sys as _sys
 
     script = _scripts_dir() / "rebuild_dict_from_akshare.py"
@@ -2189,7 +2184,6 @@ def _factor_v1v6_job() -> None:
     增量口径：默认回溯 60 天（FACTOR_COMPUTE_LOOKBACK_DAYS），脚本 UPSERT 幂等；
     首次部署或修复历史时手工跑一次全量（--since 2015）。
     """
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -2217,7 +2211,6 @@ def _factor_v1v6_job() -> None:
 
 def _factor_ic_monitor_job() -> None:
     """因子滚动 IC 监控（T21）：写入 factor_ic_roll，异常因子进告警清单。"""
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -2259,7 +2252,6 @@ def _factor_value_job() -> None:
 
     增量口径：默认回溯 ``FACTOR_VALUE_LOOKBACK_DAYS``（默认 30）天，UPSERT 幂等。
     """
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -2305,7 +2297,6 @@ def _factor_value_b_job() -> None:
 
     C 组为 §18.5 M6a ``basis_factors`` 派生的两个新因子（迁移 049 注册）。
     """
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -2348,7 +2339,6 @@ def _collect_member_rank_summary_job() -> None:
     另一处根因：该脚本原先 ``os.environ["PGPASSWORD"]``（下标取值）在容器内
     **必然 KeyError** → 本批已改走 scripts/pgconn.py。
     """
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -2387,7 +2377,6 @@ def _factor_freshness_job() -> None:
       补算时自动放宽到 420 自然日）③补后仍断供 → **硬告警**。
       排在 19:10 collect_roll_yield 之后、20:00 pre_night 之前（依赖链末端）。
     """
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -2771,7 +2760,6 @@ def _warehouse_receipt_job() -> None:
     未装时脚本/导入会直接抛错（fail-loud），便于发现镜像缺漏，而非静默缺数据。
     默认关闭：镜像重建并置 WAREHOUSE_RECEIPT_ENABLED=1 后启用。
     """
-    import subprocess
     import sys as _sys
     from pathlib import Path
 
@@ -2834,7 +2822,6 @@ def _extend_index_8888() -> None:
 
     失败只 warning 不抛：指数层坏掉不该连带 bar 合成停摆，但必须每次可见。
     """
-    import subprocess
     import sys as _sys
 
     try:
@@ -3020,7 +3007,6 @@ def _archive_nontradable_job() -> None:
     选 03:20 的理由：早于 06:30 的权重月更与日间采集，磁盘 IO 最空；
     且月度归档是纯读操作，与分钟管线（:07/:37）不冲突。
     """
-    import subprocess
     import sys as _sys
 
     script = _scripts_dir() / "ops" / "archive_nontradable.py"
