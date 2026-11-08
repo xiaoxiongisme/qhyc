@@ -94,6 +94,23 @@ SRC = "bar_60m_ba"
 #: 实盘口径：t-1 门控 + 无前视体制
 GATE_LAG = 1
 REGIME_MODE = "strict"
+#: 推送失败的重发窗口（小时）。
+#:
+#: ★ 为什么必须有重发窗口（2026-11-09，CL-20261109-06）
+#: ---------------------------------------------------
+#: ``_persist`` 用 ``ON CONFLICT (dedupe_key) DO NOTHING`` 去重，推送失败时
+#: 那一行**已经落库**，下一轮 ``_persist`` 返回空 —— 若只推「本轮新增」，
+#: 这条信号就**永远不会再发**。pushplus 抖一下 = 信号永久丢失，且用户侧
+#: 看到的表现是「这个小时没信号」，与「行情没信号」不可区分。这是比「没有
+#: 备用通道」更严重的一层退化。
+#:
+#: 取 2 小时（约 4 个扫描周期）：短故障能在窗口内补上；超过 2 小时的信号
+#: 价格早已不可用，补推反而误导下单，宁可让它留在表里靠 ``notify_ok=false``
+#: 和 task_run 的 failed 留痕。
+RETRY_WINDOW_HOURS = 2.0
+
+#: 「备用通道未配置」的告警只打一次（进程级），避免每小时刷屏。
+_NO_FALLBACK_WARNED = False
 
 
 @dataclass
@@ -114,6 +131,9 @@ class V5XSignal:
     reason: str | None = None   # stop / tp
     net_yuan: float | None = None
     source: str = "live"        # live=实盘推送；replay=历史回放补录（不推送）
+    #: 这一条是「上一轮推送失败、本轮补发」而非本轮新产出。
+    #: 只用于推送文案打标记，**不参与 dedupe_key**（同一根 bar 的同一动作全局唯一）。
+    from_retry: bool = False
 
     @property
     def dedupe_key(self) -> str:
@@ -382,6 +402,57 @@ def _persist(session, sigs: Iterable[V5XSignal],
     return new
 
 
+def _load_unsent(session, now: datetime,
+                 *, hours: float = RETRY_WINDOW_HOURS) -> list[V5XSignal]:
+    """取「已落库但尚未确认送达」的信号 = 本轮新增 + 之前推送失败的（重发队列）。
+
+    判据 ``notify_ok IS NOT TRUE`` 覆盖两种状态：
+      · 刚由 ``_persist`` 落库 → ``notify_ok`` 为 NULL（还没试过）；
+      · 上一轮推送失败 → ``notify_ok = false``（还没送达）。
+
+    ★ 必须排除 ``source <> 'live'``：回放补录的行 ``notify_ok`` 同样是 NULL
+      （回放按设计不推送），若不过滤，某天重跑回放会把一堆历史信号当「未送达」
+      一次性补推到微信。
+
+    ★ 必须限制窗口：超过 :data:`RETRY_WINDOW_HOURS` 的信号价格已不可用，
+      补推等于误导下单。宁可留痕（``notify_ok=false`` + task_run failed）。
+    """
+    since = now - timedelta(hours=hours)
+    rows = session.execute(text("""
+        SELECT symbol, action, side, bar_ts, adj_offset, price_ba, price_real,
+               lots, stop_ba, stop_real, etype, reason, net_yuan,
+               (notify_ok IS FALSE) AS was_failed
+          FROM public.v5x_signal_log
+         WHERE notify_ok IS NOT TRUE
+           AND source = 'live'
+           AND bar_ts >= :since
+           AND bar_ts <= :now
+         ORDER BY bar_ts, symbol, action
+    """), {"since": since, "now": now}).mappings().all()
+
+    def _f(v):
+        return None if v is None else float(v)
+
+    return [V5XSignal(
+        symbol=r["symbol"],
+        action=r["action"],
+        side=r["side"],
+        bar_ts=r["bar_ts"],
+        adj_offset=float(r["adj_offset"] or 0.0),
+        price_ba=float(r["price_ba"]),
+        price_real=float(r["price_real"]),
+        lots=float(r["lots"] or 1.0),
+        stop_ba=_f(r["stop_ba"]),
+        stop_real=_f(r["stop_real"]),
+        etype=r["etype"] or "",
+        reason=r["reason"],
+        net_yuan=_f(r["net_yuan"]),
+        source="live",
+        # notify_ok 为 NULL = 本轮刚落库；为 FALSE = 上轮推送失败，本轮补发
+        from_retry=bool(r["was_failed"]),
+    ) for r in rows]
+
+
 def _mark_notify(session, sigs: Iterable[V5XSignal], ok: bool, via: str) -> None:
     for s in sigs:
         session.execute(text("""
@@ -391,18 +462,25 @@ def _mark_notify(session, sigs: Iterable[V5XSignal], ok: bool, via: str) -> None
         """), {"ok": ok, "via": via, "k": s.dedupe_key})
 
 
-def format_message(sigs: list[V5XSignal]) -> tuple[str, str]:
-    """生成推送标题与正文（价格一律真实合约价，BA 价附在括号里备查）。"""
+def format_message(sigs: list[V5XSignal], *, retry: bool = False) -> tuple[str, str]:
+    """生成推送标题与正文（价格一律真实合约价，BA 价附在括号里备查）。
+
+    Args:
+        retry: 这是「上一轮推送失败后的补发」而非本轮新信号。标题加标记、
+            正文加警示 —— 补发的是旧 bar，价格可能已经不可用，
+            不能让他当成刚出的信号去下单。
+    """
     n_open = sum(1 for s in sigs if s.action == "OPEN")
     n_close = sum(1 for s in sigs if s.action == "CLOSE")
     n_add = sum(1 for s in sigs if s.action == "ADD")
-    title = f"[V5X] {len(sigs)} 条信号（开{n_open}/加{n_add}/平{n_close}）"
+    tag = " 补推" if retry else ""
+    title = f"[V5X{tag}] {len(sigs)} 条信号（开{n_open}/加{n_add}/平{n_close}）"
 
     lines: list[str] = []
     icon = {"OPEN": "🚨", "ADD": "➕", "CLOSE": "✅"}
     for s in sorted(sigs, key=lambda x: (x.action != "OPEN", x.symbol)):
-        tag = f"{icon.get(s.action, '•')} {s.action} {s.side}"
-        lines.append(f"{tag}  {s.symbol} @ {s.price_real:,.2f}"
+        tag_line = f"{icon.get(s.action, '•')} {s.action} {s.side}"
+        lines.append(f"{tag_line}  {s.symbol} @ {s.price_real:,.2f}"
                      f"（BA {s.price_ba:,.2f}，偏移 {s.adj_offset:+,.2f}）")
         if s.stop_real is not None:
             lines.append(f"   ⛔止损 {s.stop_real:,.2f}")
@@ -411,6 +489,10 @@ def format_message(sigs: list[V5XSignal]) -> tuple[str, str]:
         elif s.action == "OPEN":
             lines.append(f"   路径 {'回踩' if s.etype == 'pb' else '突破'}，手数 {s.lots:g}")
         lines.append(f"   bar {s.bar_ts}")
+    if retry:
+        lines.append("")
+        lines.append("⚠️ 补推：以上 bar 的收盘时刻早于本次推送（前一轮推送失败，已自动补发）。"
+                     "价格可能已不可用，请勿直接照此下单。")
     lines.append("")
     lines.append("口径：V5X.3 · t-1 门控（hvol/簇冲击/体制均只用 ≤T-1 日线），"
                  "BA 后复权信号 + 真实价反解；同根收盘成交假设，偏乐观。")
@@ -420,25 +502,69 @@ def format_message(sigs: list[V5XSignal]) -> tuple[str, str]:
 
 def run_v5x_scan(session, *, now: datetime | None = None,
                  do_push: bool = True, overrides: dict | None = None) -> dict[str, Any]:
-    """扫描 + 去重落库 + 推送。返回摘要（供调度器写 task_run / 日志）。"""
+    """扫描 + 去重落库 + 推送（含失败补发）。返回摘要（供调度器写 task_run / 日志）。
+
+    ★ 顺序刻意是「先落库 → 再推 → 最后标记」，而不是「先推、成功才落库」：
+      落库是事实记录，推送是可失败的外设。反过来的话，推送失败就什么都不留，
+      事后既无法统计信号、也无法补发（CL-20261109-06）。
+
+    返回字段：
+      n_signals  本轮扫描产出的信号数（含已被去重的历史 bar）
+      n_new      本轮**新增**落库的条数（0 = 扫到的全是以前落过的旧 bar）
+      n_unsent   实际进入推送的条数（新增 + 窗口内未送达的补发）
+      pushed     是否送达（``False`` 且 ``n_unsent > 0`` = 需要告警）
+      via        实际通道：pushplus / webhook / none
+      retry      本次推送里是否含补发内容
+    """
     now = now or datetime.now()
     sigs = scan_once(session, now=now, overrides=overrides)
-    if not sigs:
-        return {"n_signals": 0, "n_new": 0, "pushed": False}
-
-    new = _persist(session, sigs)
+    new = _persist(session, sigs) if sigs else []
     session.commit()
-    if not new:
-        logger.info(f"[v5x.live] 本轮 {len(sigs)} 条信号均为已推过的历史 bar → 不重复推送")
-        return {"n_signals": len(sigs), "n_new": 0, "pushed": False}
 
     if not do_push:
-        return {"n_signals": len(sigs), "n_new": len(new), "pushed": False}
+        return {"n_signals": len(sigs), "n_new": len(new), "n_unsent": 0,
+                "pushed": False, "retry": False}
 
+    # 不能只推 ``new``：上一轮推送失败的行**已经在表里**，``_persist`` 会因
+    # dedupe_key 冲突返回空 → 只推 new 的话它永远发不出去（详见 _load_unsent）。
+    unsent = _load_unsent(session, now)
+    if not unsent:
+        logger.info(f"[v5x.live] 本轮 {len(sigs)} 条信号均已送达 → 不重复推送")
+        return {"n_signals": len(sigs), "n_new": len(new), "n_unsent": 0,
+                "pushed": False, "retry": False}
+
+    # 补推按**每行自己的状态**判（notify_ok IS FALSE），不是「队列条数 > 新增数」：
+    # 后者在「本轮新增也被去重」时算不准（new=0 而队列=1，会误判成整批都是补发）。
+    n_retry = sum(1 for s in unsent if s.from_retry)
+    retry = n_retry > 0
+    if retry:
+        logger.warning(f"[v5x.live] 补发 {n_retry} 条上轮未送达的信号"
+                       f"（{RETRY_WINDOW_HOURS:g}h 窗口内）")
+
+    from app.core.config import get_settings
     from app.notify import send_notify
-    title, content = format_message(new)
-    ok, via = send_notify(title, content)
-    _mark_notify(session, new, ok, via)
+
+    # 备用通道：与 V3.4（scheduler._fusion_scan_job）共用同一个配置项。
+    # V5X 接管唯一推送源后若漏传这一项，pushplus 一旦限流/故障就没有降级路径
+    # —— 移植时正是漏了这处（CL-20261109-06）。
+    fallback = getattr(get_settings().fusion, "fallback_webhook", "") or ""
+
+    # 配了参数 ≠ 有降级通道：`fallback_webhook` 留空时 send_notify 直接跳过降级。
+    # 生产实测为空（2026-11-09），所以要显式告警一次 —— 否则「代码看起来修好了」
+    # 会让人误以为有双通道。只打一次，避免每小时刷屏。
+    global _NO_FALLBACK_WARNED
+    if not fallback and not _NO_FALLBACK_WARNED:
+        logger.warning(
+            f"[v5x.live] fusion.fallback_webhook 未配置 → pushplus 是唯一通道。"
+            f"推送失败时靠下一轮补发（窗口 {RETRY_WINDOW_HOURS:g}h），无降级通道。"
+            f"如需双通道，在 config 里填企业微信/钉钉/飞书群机器人 URL。")
+        _NO_FALLBACK_WARNED = True
+
+    title, content = format_message(unsent, retry=retry)
+    ok, via = send_notify(title, content, fallback)
+    _mark_notify(session, unsent, ok, via)
     session.commit()
-    logger.info(f"[v5x.live] 推送 {len(new)} 条（{via}）：ok={ok}")
-    return {"n_signals": len(sigs), "n_new": len(new), "pushed": bool(ok), "via": via}
+    logger.info(f"[v5x.live] 推送 {len(unsent)} 条（{via}"
+                f"{'，含补发' if retry else ''}）：ok={ok}")
+    return {"n_signals": len(sigs), "n_new": len(new), "n_unsent": len(unsent),
+            "pushed": bool(ok), "via": via, "retry": retry}

@@ -988,7 +988,7 @@ def _tradable_scan_pool(specs):
     return kept
 
 
-def _v5x_scan_job() -> None:
+def _v5x_scan_job() -> dict | None:
     """V5X.3 小时级信号扫描（C3-min：**只推送，不建单、不回写持仓**）。
 
     与 :func:`_fusion_scan_job` 的三点区别（2026-11-08，CL-20261108-08）：
@@ -1026,7 +1026,7 @@ def _v5x_scan_job() -> None:
         return
 
     # 扫描节奏常量与扫描器同源（不在这里另抄一份，否则两处会漂）
-    from app.strategies.v5x.live import SCAN_MINUTES, run_v5x_scan
+    from app.strategies.v5x.live import RETRY_WINDOW_HOURS, SCAN_MINUTES, run_v5x_scan
 
     if now.minute not in SCAN_MINUTES:
         logger.debug(f"[scheduler] v5x scan {now:%H:%M} 非扫描时刻，跳过")
@@ -1035,10 +1035,29 @@ def _v5x_scan_job() -> None:
     try:
         with session_scope() as s:
             res = run_v5x_scan(s, now=now)
-        logger.info(f"[scheduler] v5x scan 完成：{res}")
     except Exception as e:  # noqa: BLE001
-        # 扫描失败绝不影响同一分钟触发的 fusion_scan
+        # ★ 必须**外抛**，不能吞（CL-20261109-06）。
+        #   ops.scheduled_task_run 的 success 判据是 apscheduler 有没有收到异常
+        #   （EVENT_JOB_EXECUTED = 没抛 = success）。原实现只 logger.exception
+        #   然后返回，等于「失败静默」—— 2026-11-07 的 pgconn.py 误删事故就是
+        #   这么让 9 个脚本连续 ImportError 而流水全绿的。
+        #   至于注释里原先担心的「影响同一分钟触发的 fusion_scan」：apscheduler
+        #   的作业互相隔离，一个 job 抛异常只改它自己的 run 记录；且 V3.4 已停用
+        #   （fusion_v34_live_enabled=f），不存在互相拖累。
         logger.exception(f"[scheduler] v5x scan 失败：{e}")
+        raise
+
+    logger.info(f"[scheduler] v5x scan 完成：{res}")
+
+    # 有信号但没送达 → 升级为任务失败。否则「推送挂了」和「本轮没信号」
+    # 在监控和用户侧完全不可区分（CL-20261109-06）。
+    if res.get("n_unsent") and not res.get("pushed"):
+        raise RuntimeError(
+            f"V5X {res['n_unsent']} 条信号已落库但推送失败（via={res.get('via')}）——"
+            f"数据在 v5x_signal_log（notify_ok=false），{RETRY_WINDOW_HOURS:g}h 内下一轮"
+            f"会自动补发；持续失败请查 PUSHPLUS_TOKEN / fusion.fallback_webhook / 网络"
+        )
+    return res
 
 
 def _fusion_scan_job() -> None:

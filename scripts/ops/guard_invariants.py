@@ -477,6 +477,130 @@ def _c_minute_collect_window_gated(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad))
 
 
+def _c_v5x_push_channel(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-06：V5X 推送必须①带备用通道 ②保留补发队列 ③返回 n_unsent。
+
+    V5X 已是**唯一**推送源，推送可靠性等价于策略可用性。三处退化全部发生在
+    「从 V3.4 移植时漏抄」，而不是设计取舍：
+
+      · **备用通道**：`scheduler.py:771` 的 V3.4 推送传了
+        `settings.fusion.fallback_webhook`，V5X 只传了 (title, content)
+        → pushplus 限流/故障时没有降级路径。
+      · **补发队列**：`_persist` 用 `ON CONFLICT (dedupe_key) DO NOTHING`，
+        推送失败时那一行**已经落库**，下一轮 `_persist` 返回空。若只推「本轮新增」，
+        这条信号**永远不会再发** —— pushplus 抖一下 = 信号永久丢失，而用户侧
+        看到的是「这个小时没信号」。
+      · **失败可观测**：见 `_c_v5x_push_failure_loud`。
+
+    为什么断言源码而不是查数据：数据侧只有在真出故障后才有 `notify_ok=false`
+    的痕迹，而那时候信号已经丢了。改坏当场红才有意义。
+    """
+    label = "V5X 推送带备用通道 + 失败可补发（CL-20261109-06）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import ast
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        p = root / "app" / "strategies" / "v5x" / "live.py"
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+
+        n_call = n_ok = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+            if name != "send_notify":
+                continue
+            n_call += 1
+            has_pos = len(node.args) >= 3
+            has_kw = any(k.arg == "fallback_webhook" for k in node.keywords)
+            if has_pos or has_kw:
+                n_ok += 1
+            else:
+                bad.append(
+                    f"live.py:{node.lineno} send_notify 未传 fallback_webhook → "
+                    f"pushplus 故障时无降级通道")
+        observed.append(f"send_notify_calls={n_call} with_fallback={n_ok}")
+        if n_call == 0:
+            bad.append("live.py 找不到 send_notify 调用（推送被删掉了？）")
+
+        has_requeue = ("notify_ok IS NOT TRUE" in src) and ("source = 'live'" in src)
+        observed.append(f"requeue={'yes' if has_requeue else 'no'}")
+        if not has_requeue:
+            bad.append(
+                "live.py 缺少未送达补发查询（notify_ok IS NOT TRUE 且 source='live'）"
+                " → 推送失败的信号永远不会再发")
+
+        if '"n_unsent"' not in src and "'n_unsent'" not in src:
+            bad.append("run_v5x_scan 未返回 n_unsent → 调度层无法区分"
+                       "「有信号但没送达」与「本轮没信号」")
+    except Exception as exc:                                    # noqa: BLE001
+        bad.append(f"扫描异常 {type(exc).__name__}: {exc}")
+    return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
+
+
+def _c_v5x_push_failure_loud(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-06：V5X 作业失败必须外抛，不能 `logger.exception` 后吞掉。
+
+    `ops.scheduled_task_run` 的 success 判据是 apscheduler 的
+    `EVENT_JOB_EXECUTED` —— **只要作业函数没抛异常就记 success**。
+    2026-11-07 的 pgconn.py 误删事故里，9 个脚本连续 ImportError、流水仍
+    11 次全绿，就是这么来的（代码里 9 处 `logger.warning` 写得明明白白，
+    监控一条都没报）。2026-11-08 的 V5X 作业又写了一模一样的结尾：
+    `except Exception: logger.exception(...)`。
+
+    断言两件事：
+      · 至少有 2 处 raise —— 扫描异常外抛 + 推送失败升级；
+      · 函数体里出现 `pushed` —— 否则推送失败会被记成 success。
+    """
+    label = "V5X 扫描作业失败必须外抛（否则流水全绿而信号全丢）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import ast
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        p = root / "app" / "scheduler.py"
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+
+        seg = ""
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                    and node.name == "_v5x_scan_job":
+                seg = ast.get_source_segment(src, node) or ""
+                break
+
+        n_raise = 0
+        if seg:
+            try:
+                # 用 AST 数 ast.Raise 节点，不能用字符串 count：
+                # 裸 `raise`（重新抛出）后面紧跟换行，count("raise ") 会漏掉它。
+                n_raise = sum(1 for x in ast.walk(ast.parse(seg))
+                              if isinstance(x, ast.Raise))
+            except SyntaxError:
+                n_raise = seg.count("raise ")
+        observed.append(f"found={'yes' if seg else 'no'} raise={n_raise}")
+        if not seg:
+            bad.append("scheduler.py 找不到 _v5x_scan_job（改名了？断言需同步）")
+        else:
+            if n_raise < 2:
+                bad.append(
+                    f"_v5x_scan_job 里 raise 只有 {n_raise} 处，应 ≥2："
+                    f"扫描异常外抛 + 推送失败升级为任务失败")
+            if "pushed" not in seg:
+                bad.append("_v5x_scan_job 未判断 pushed → 推送失败会被 "
+                           "EVENT_JOB_EXECUTED 记成 success")
+    except Exception as exc:                                    # noqa: BLE001
+        bad.append(f"扫描异常 {type(exc).__name__}: {exc}")
+    return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
+
+
 # ---------------------------------------------------------------- 运行态一致性
 def _c_switch_job_consistency(c: Ctx) -> tuple[bool, str, str, str]:
     """代码开关（cfg_feature_switch）与字典开关（ops.scheduled_task）必须同向。
@@ -3121,6 +3245,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # warn 而非 block：回放是一次性数据动作，清库重来不该把守卫打成永久红。
     ("V5X-REPLAY-SEEDED", "V5X 回放补录已落库（source 列 + replay 行）",
      "warn", _c_v5x_replay_seeded),
+    # CL-20261109-06：V5X 是唯一推送源，通道退化 = 策略不可用。
+    ("V5X-PUSH-FALLBACK-WIRED", "V5X 推送带备用通道且失败可补发",
+     "block", _c_v5x_push_channel),
+    ("V5X-PUSH-FAILURE-LOUD", "V5X 推送失败必须升级为任务失败",
+     "block", _c_v5x_push_failure_loud),
 ]
 
 
