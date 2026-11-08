@@ -453,14 +453,19 @@ def _simulate_trades_ex(states_df: pd.DataFrame, p: FusionBacktestParams,
     margin_no_rate = 0           # 无保证金率记录的手数（fail-loud 统计）
 
     def _one_price(i: int) -> bool:
-        """B1 一字 K 近似：O==H==L==C **且** 相对前收跳空 ≥ limit_move_pct。
+        """B1 一字 K 近似：成交根无波动（O==H==L==C）且处于「板上」。
 
-        口径边界：库内 ``high_limit/low_limit`` 近 30 天 0 行有效值，故**不做**
-        真实板价建模，只用「一字 + 大幅跳空」这一可验证特征。平仓不受此限
-        （与 E1-C 第 5 条一致：平仓不因流动性假设被无限期推迟）。
+        「在板上」两种形态（都必须覆盖，否则连续一字板只有首根被抓到）：
+          ① **首根**：相对信号根收盘显著跳空（≥ limit_move_pct）—— 跳空到板价；
+          ② **延续**：前一根也是同价一字 —— 已在板上，仍然无成交。
 
-        为什么要第二个条件：低波动小时 K 出现 O==H==L==C 很正常（只动几分钱），
-        单看一字会把这类正常 K 误判成停板，导致该品种几乎无法开仓。
+        实测依据（2026-11-08）：38 池 2025-01-01~2026-11-07 共 143,654 根，
+        「一字 + 跳空 ≥3%」12 根，全部是 09:00 集合竞价一字板（2025-04-07
+        关税暴跌、2026-03-09 大涨等）。但首根之后的同价一字根相对前收**无**跳空，
+        只判首根会让「连续板期间的加仓/开仓」完全绕过本判据。
+
+        ⚠ 仍不是真实板价模型：库内 high_limit/low_limit 近 30 天 0 行有效值。
+        平仓不受此限（与 E1-C 第 5 条一致：平仓不得被无限期推迟）。
         """
         if not b1 or limit_mode != "one_price":
             return False
@@ -473,11 +478,28 @@ def _simulate_trades_ex(states_df: pd.DataFrame, p: FusionBacktestParams,
             return False
         if not (_h == _l == _o == _c):
             return False
-        _prev = float(closes[j - 1])
-        if _prev <= 0:
+        _mv = float(getattr(p, "limit_move_pct", 0.03) or 0.0)
+        # 回溯到「无波动且同价」序列的起点 k（最多 60 根），再看**起点**相对
+        # 其前收的跳空。只比较 j 与 j-1 会让连续一字板的第 2 根起漏判；
+        # 而不回溯就直接判「同价一字」会把长期横盘不动误当成停板。
+        k = j
+        _lo = max(1, j - 60)
+        while k > _lo:
+            _pc = float(closes[k - 1])
+            _po = float(opens[k - 1])
+            _ph = float(highs[k - 1])
+            _pl = float(lows[k - 1])
+            if not all(np.isfinite(v) for v in (_pc, _po, _ph, _pl)):
+                break
+            if not (_ph == _pl == _po == _pc):
+                break
+            if _pc <= 0 or abs(float(closes[k]) - _pc) / _pc > 1e-9:
+                break
+            k -= 1
+        _anchor = float(closes[k - 1]) if k >= 1 else float("nan")
+        if not np.isfinite(_anchor) or _anchor <= 0:
             return False
-        return abs(_c - _prev) / _prev >= float(
-            getattr(p, "limit_move_pct", 0.03) or 0.0)
+        return abs(float(closes[k]) - _anchor) / _anchor >= _mv
 
     def _can_afford(margin: float) -> bool:
         """B1 资金约束。initial_capital=0（默认）= 只核算不约束。"""
