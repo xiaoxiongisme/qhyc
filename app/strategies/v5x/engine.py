@@ -540,5 +540,8 @@ class SymbolEngine:
                                 reason=reason))
         self.state = 0; self.cooldown = cfg.COOLDOWN
         self.be_done = False; self.lots = 1.0
-        return dict(type='CLOSE', dir=dir_, price=fill, lots=lots, ts=ts, net=net)
+        # CL-20261109-05（C2b）：事件字典追加 reason，纯诊断字段，不参与任何决策。
+        # 成交层（app/backtest/v5x_fill.py）靠它区分止损/止盈成交；引擎行为不变。
+        return dict(type='CLOSE', dir=dir_, price=fill, lots=lots, ts=ts, net=net,
+                    reason=reason)
 
