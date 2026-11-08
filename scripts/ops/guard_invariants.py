@@ -1355,6 +1355,206 @@ def _c_v5x_engine_parity(c: Ctx) -> tuple[bool, str, str, str]:
         + "。V5X.3 移植已偏离冻结口径，历史回测数字不再可比（CL-20261108-22）")
 
 
+def _c_v5x_t1_gate_no_leak(c: Ctx) -> tuple[bool, str, str, str]:
+    """C3 / CL-20261108-08：``gate_lag=1``（t-1 口径）三道门不得看到当日数据。
+
+    为什么这条必须存在
+    ------------------
+    小时级扫描要在盘中任意整点算信号，而回测口径（``gate_lag=0``）的三道日频门
+    都用到**当日**日线聚合（振幅 / 簇收益 / 已实现波动），收盘前算不出来。
+    于是切 t-1。但「切了参数」≠「真不偷看」：``shift`` 加错位置（例如只挪阈值
+    不挪被比较的值）会让代码看起来是 t-1、实际仍在用当日 —— 这类错误不报错，
+    只会让回测好看起来。本断言用合成序列把方向钉死。
+
+    断言（纯合成数据，零 DB）：
+      · 只有**当日**振幅极端时，``lag=0`` 判禁开（True），``lag=1`` **不**判禁开；
+      · 只有**当日**簇收益极端时，``lag=0`` 封禁，``lag=1`` **不**封禁；
+      · 只有**当日**波动极端时，``lag=0`` 判高波体制 2，``lag=1`` **不**判 2；
+      · 极端值出现在**前一天**时，``lag=1`` 必须能判出来（否则门等于关掉）。
+    """
+    label = "V5X t-1 门控不得使用当日日线（小时级实盘前提）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import pandas as pd
+
+        from app.strategies.v5x.context import (
+            _cluster_shock,
+            _hvol_flags,
+            _regime_table,
+        )
+    except Exception as exc:                                 # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "V5X 供数层不可导入 → t-1 口径断言不可用（CL-20261108-08）")
+
+    n = 320
+    TD = list(range(n))
+    SYM = "RB888"        # 必须在 CLUSTER 里：簇冲击只对登记品种生效
+    CL = "黑色"
+
+    # ---------- hvol：极端振幅只出现在最后一天 ----------
+    try:
+        amp = [0.01] * (n - 1) + [0.99]
+        d = pd.DataFrame({"symbol": SYM, "td": TD, "amp": amp,
+                          "c": 100.0, "vol": 0.01})
+        hv0 = bool(_hvol_flags(d, 0)[SYM][n - 1])
+        hv1 = bool(_hvol_flags(d, 1)[SYM][n - 1])
+        observed.append(f"hvol_lastday lag0={hv0} lag1={hv1}")
+        if not hv0:
+            bad.append("hvol lag=0 未用当日振幅（判定口径与预期不符）")
+        if hv1:
+            bad.append("hvol lag=1 仍用当日振幅（前视未消除）")
+
+        # 极端值挪到倒数第二天 → lag=1 必须判出最后一天禁开
+        amp2 = [0.01] * (n - 2) + [0.99, 0.01]
+        d2 = d.assign(amp=amp2)
+        hv1b = bool(_hvol_flags(d2, 1)[SYM][n - 1])
+        observed.append(f"hvol_prevday lag1={hv1b}")
+        if not hv1b:
+            bad.append("hvol lag=1 对「昨日极端」不生效（门被关掉了）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"hvol 合成检查异常 {type(exc).__name__}: {exc}")
+
+    # ---------- 簇冲击：极端日收益只出现在最后一天 ----------
+    try:
+        px = [100.0] * (n - 1) + [130.0]
+        d = pd.DataFrame({"symbol": SYM, "td": TD, "c": px,
+                          "amp": 0.01, "vol": 0.01})
+        b0 = _cluster_shock(d, 0).get(CL, set())
+        b1 = _cluster_shock(d, 1).get(CL, set())
+        observed.append(f"blocked_lastday lag0={n - 1 in b0} lag1={n - 1 in b1}")
+        if not b0:
+            bad.append("簇冲击 lag=0 未用当日收益（判定口径与预期不符）")
+        if b1:
+            bad.append("簇冲击 lag=1 仍用当日收益（前视未消除）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"簇冲击合成检查异常 {type(exc).__name__}: {exc}")
+
+    # ---------- 体制：最后一天波动极端 ----------
+    try:
+        vol = [0.01] * (n - 1) + [9.9]
+        d = pd.DataFrame({"symbol": SYM, "td": TD, "amp": 0.01,
+                          "c": 100.0, "vol": vol})
+        r0 = _regime_table(d, "strict", 0).get((SYM, n - 1), (None, None))[0]
+        r1 = _regime_table(d, "strict", 1).get((SYM, n - 1), (None, None))[0]
+        observed.append(f"regime_lastday lag0={r0} lag1={r1}")
+        if r0 != 2:
+            bad.append("体制 lag=0 未判高波（判定口径与预期不符）")
+        if r1 == 2:
+            bad.append("体制 lag=1 仍用当日波动（前视未消除）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"体制合成检查异常 {type(exc).__name__}: {exc}")
+
+    # ---------- frozen + lag 必须 fail loud ----------
+    try:
+        from app.strategies.v5x.context import _regime_table as _rt
+        try:
+            _rt(pd.DataFrame({"symbol": SYM, "td": [0], "amp": [0.1],
+                              "c": [1.0], "vol": [0.1]}), "frozen", 1)
+            bad.append("frozen + gate_lag=1 未抛错（会产生既不复现也不可实盘的第三口径）")
+        except ValueError:
+            pass
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"frozen+lag 组合检查异常 {type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。t-1 口径失守 → 小时级扫描可能在偷看当日收盘（CL-20261108-08）")
+
+
+def _c_v5x_live_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """C3 / CL-20261108-08：V5X 小时扫描链路必须真接线，且**不得对外给 BA 价**。
+
+    为什么这条必须存在
+    ------------------
+    1. 「表建了没人读」与「注册表加了没人跑」在本项目已各犯过一次。
+       本断言检查的是**接线**：注册表有 v5x3、SIGNAL_WIRED_KEYS 认它、
+       调度里存在 v5x_scan 作业、扫描器常量仍为 t-1 口径。
+    2. V5X 信号价活在 BA 后复权空间（JD888 实测 ba.close = -462），
+       推送必须已反解。若某次改动把反解漏掉，人收到的是负价格，
+       而系统不会报错。故用真实表数据校验 ``price_real = price_ba - adj_offset``。
+    """
+    label = "V5X 小时扫描接线 + 出口价格反解"
+    bad: list[str] = []
+    observed: list[str] = []
+
+    # ---------- 1) 注册表接线 ----------
+    try:
+        from app.strategies.registry import REGISTRY, SIGNAL_WIRED_KEYS
+
+        observed.append(f"registry={'v5x3' in REGISTRY}")
+        if "v5x3" not in REGISTRY:
+            bad.append("registry 未登记 v5x3")
+        if "v5x3" not in SIGNAL_WIRED_KEYS:
+            bad.append("v5x3 未在 SIGNAL_WIRED_KEYS（会被当成静默空转）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"注册表检查异常 {type(exc).__name__}: {exc}")
+
+    # ---------- 2) 扫描器常量仍为 t-1 ----------
+    try:
+        from app.strategies.v5x import live as _live
+
+        observed.append(f"gate_lag={_live.GATE_LAG} regime={_live.REGIME_MODE} "
+                        f"hours={len(_live.SCAN_HOURS)}")
+        if _live.GATE_LAG != 1:
+            bad.append(f"扫描器 GATE_LAG={_live.GATE_LAG}（小时级实盘必须为 1）")
+        if _live.REGIME_MODE != "strict":
+            bad.append(f"扫描器 REGIME_MODE={_live.REGIME_MODE}（必须 strict 才无前视）")
+        if not _live.SCAN_HOURS:
+            bad.append("SCAN_HOURS 为空（等于永不扫描）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"扫描器导入异常 {type(exc).__name__}: {exc}")
+
+    # ---------- 3) 调度作业存在 ----------
+    try:
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[2] / "app" / "scheduler.py").read_text(
+            encoding="utf-8")
+        has_job = "def _v5x_scan_job" in src and 'id="v5x_scan"' in src
+        observed.append(f"sched_job={has_job}")
+        if not has_job:
+            bad.append("scheduler 缺少 v5x_scan 作业注册（扫描永不触发）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"scheduler 源码检查失败 {type(exc).__name__}: {exc}")
+
+    # ---------- 4) 表与开关 ----------
+    try:
+        n_tbl = c.scalar("""SELECT count(*) FROM information_schema.tables
+                            WHERE table_schema='public' AND table_name='v5x_signal_log'""")
+        observed.append(f"signal_log_table={bool(n_tbl)}")
+        if not n_tbl:
+            bad.append("缺少 public.v5x_signal_log（去重与留痕无处落）")
+        sw = c.scalar("SELECT enabled FROM cfg_feature_switch "
+                      "WHERE switch_key='v5x_live_enabled'")
+        observed.append(f"switch={'missing' if sw is None else bool(sw)}")
+        if sw is None:
+            bad.append("cfg_feature_switch 缺少 v5x_live_enabled（扫描无法开关）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"表/开关检查异常 {type(exc).__name__}: {exc}")
+
+    # ---------- 5) 已推信号必须已反解 ----------
+    try:
+        row = c.session.execute(text("""
+            SELECT count(*) AS n,
+                   count(*) FILTER (WHERE abs(price_real - (price_ba - adj_offset)) > 1e-6) AS bad,
+                   count(*) FILTER (WHERE abs(adj_offset) > 1e-9
+                                      AND abs(price_real - price_ba) < 1e-9) AS not_inverted
+            FROM public.v5x_signal_log
+        """)).one()
+        n, n_bad, n_not_inv = int(row[0]), int(row[1]), int(row[2] or 0)
+        observed.append(f"sig_rows={n} invert_mismatch={n_bad} ba_leak={n_not_inv}")
+        if n_bad:
+            bad.append(f"{n_bad} 条信号的 price_real 与 ba-offset 不一致")
+        if n_not_inv:
+            bad.append(f"{n_not_inv} 条信号 offset≠0 却 price_real==price_ba（BA 价泄漏）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"信号表反解校验异常 {type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。V5X 只推送链路已断或价格未反解（CL-20261108-08 C3-min）")
+
+
 def _c_bt_gap_filter_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """E1-C / CL-20261108-15：0.5 ATR 不利跳空过滤必须真实接线。
 
@@ -2320,6 +2520,12 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 参数或门控一次静默改动就让历史数字不可比，故用行为级门控对拍钉住。
     ("V5X-ENGINE-PARITY", "V5X.3 引擎默认值=冻结参数且五道门控仍生效",
      "block", _c_v5x_engine_parity),
+    # C3 / CL-20261108-08：小时级推送链路。两条断言分别钉「口径」与「接线+反解」：
+    # t-1 偷看当日会让回测好看但实盘做不到；接线断了或忘反解则推的是负价。
+    ("V5X-T1-GATE-NO-LEAK", "V5X t-1 门控不得使用当日日线",
+     "block", _c_v5x_t1_gate_no_leak),
+    ("V5X-LIVE-WIRED", "V5X 小时扫描已接线且出口价已反解",
+     "block", _c_v5x_live_wired),
 ]
 
 

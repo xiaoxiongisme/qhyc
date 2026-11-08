@@ -988,6 +988,45 @@ def _tradable_scan_pool(specs):
     return kept
 
 
+def _v5x_scan_job() -> None:
+    """V5X.3 小时级信号扫描（C3-min：**只推送，不建单、不回写持仓**）。
+
+    与 :func:`_fusion_scan_job` 的三点区别（2026-11-08，CL-20261108-08）：
+      1. 信号跑在 **BA 后复权空间**，出口处反解回真实可成交价（``price_real``）；
+         BA 价可为负（JD888 实测 -462），下游不得直接引用 BA 价下单。
+      2. 日频门控用 **t-1 口径**（``gate_lag=1`` + ``regime_mode=strict``）：
+         hvol / 簇冲击 / 体制三道门只吃 ≤ T-1 的日线聚合，全天恒定 ——
+         这是小时级扫描唯一可复现的口径（当日口径要等收盘才算得出来）。
+      3. 只写 ``public.v5x_signal_log``（去重 + 留痕）并推送；**不**碰
+         ``execution_order`` 与 ``fusion_position``。下单/持仓同步是 C3 第二阶段。
+
+    整点后 :05 触发（与 :00 的 hourly_collect 错开；与 fusion_scan 同分钟但互不依赖）。
+    开关 ``cfg_feature_switch.v5x_live_enabled`` **默认关闭**（migrations/059），
+    开启前须先 dry-run 核对条数与价格反解。
+    """
+    if not _switch_on("v5x_live_enabled", "QH_V5X_LIVE", default=False):
+        logger.debug("[scheduler] v5x_live_enabled=off → 跳过 V5X 扫描")
+        return
+    now = datetime.now(_SH_TZ)
+    if not is_trading_day(now):
+        logger.info(f"[scheduler] v5x scan {now:%m-%d} 非交易日，跳过")
+        return
+    # 扫描小时常量与扫描器同源（不在这里另抄一份，否则两处会漂）
+    from app.strategies.v5x.live import SCAN_HOURS, run_v5x_scan
+
+    if now.hour not in SCAN_HOURS:
+        logger.debug(f"[scheduler] v5x scan {now:%H:%M} 非扫描时段，跳过")
+        return
+
+    try:
+        with session_scope() as s:
+            res = run_v5x_scan(s, now=now)
+        logger.info(f"[scheduler] v5x scan 完成：{res}")
+    except Exception as e:  # noqa: BLE001
+        # 扫描失败绝不影响同一分钟触发的 fusion_scan（V3.4 是唯一生产策略）
+        logger.exception(f"[scheduler] v5x scan 失败：{e}")
+
+
 def _fusion_scan_job() -> None:
     """融合策略扫描（每个整点后 :05/:35 触发，即小时线落盘后再生成信号/推送）。
 
@@ -1739,6 +1778,23 @@ def _build_scheduler() -> BlockingScheduler:
             coalesce=True,
         )
         logger.info("[scheduler] registered fusion_scan at :05/:35 (post hourly collect)")
+
+    # V5X.3 小时级信号扫描（C3-min，CL-20261108-08）：整点后 :05。
+    # **无条件注册**，由 job 内部读 cfg_feature_switch.v5x_live_enabled 决定跑不跑 ——
+    # 这样打开/关闭开关**不需要重启调度器**（该开关默认 false，见 migrations/059）。
+    # 与 fusion_scan 同分钟触发但互不依赖：V5X 异常被自身 try/except 吞掉，
+    # 绝不影响 V3.4（唯一生产策略）出信号。
+    sched.add_job(
+        _v5x_scan_job,
+        trigger=CronTrigger(minute="5", timezone=settings.env.TZ),
+        id="v5x_scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
+    )
+    logger.info("[scheduler] registered v5x_scan at :05 hourly "
+                "(switch v5x_live_enabled, default off)")
 
     # 复权主连每日重算（adjust_cont_adj）已于 2026-10-04 随 fdf 模块退役停用：
     # cont_adj 不再由定时作业生成（fdf 为唯一生产者，已删）。保留 minute_bar（L0 原始）。

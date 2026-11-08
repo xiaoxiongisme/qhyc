@@ -55,6 +55,8 @@ class V5XBacktestParams:
 
     src: str = "bar_60m_ba"        # V5X 冻结版用后复权；"bar_60m" 复现原始价对照
     regime_mode: str = "frozen"    # frozen=复现 V5X（含前视）/ strict=无前视
+    # 日频门控取日：0=当日（回测复现口径，盘中不可复现）；1=t-1（小时级实盘口径）
+    gate_lag: int = 0
     overrides: dict[str, Any] = field(default_factory=dict)
     # —— 三道「上下文门」的开关（对应 V5X 的 ctx.hvol / ctx.blocked / ctx.regime）——
     # 默认全开 = 逐位复现 V5X.3。消融时关掉即可，不必改引擎。
@@ -111,7 +113,8 @@ def run_v5x_backtest(session, symbols: list[str] | None = None,
     end = end or date.today()
 
     md: V5XMarketData = load_market_data(
-        session, symbols, start, end, src=p.src, regime_mode=p.regime_mode)
+        session, symbols, start, end, src=p.src, regime_mode=p.regime_mode,
+        gate_lag=p.gate_lag)
 
     all_trades: list[dict] = []
     per_symbol: list[dict] = []
@@ -163,6 +166,7 @@ def run_v5x_backtest(session, symbols: list[str] | None = None,
         "fill": "同根收盘（V5X 冻结口径，偏乐观；E1-C next_open 未实现）",
     }
     agg["regime_mode"] = p.regime_mode
+    agg["gate_lag"] = p.gate_lag
     agg["gates"] = {"hvol": p.use_hvol, "blocked": p.use_blocked,
                     "regime": p.use_regime}
     agg["diagnostics"] = md.diagnostics

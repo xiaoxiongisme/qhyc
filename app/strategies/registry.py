@@ -83,6 +83,21 @@ REGISTRY: dict[str, StrategySpec] = {
              "（净¥ 18.09万 → 10.04万）。**独立于融合并跑，不叠加进融合状态机**。"
              "仅在 15m 成立；六项稳健性全过、容量梯度 3→10 仓完美单调。",
     ),
+    "v5x3": StrategySpec(
+        key="v5x3",
+        name="V5X.3（移植版）",
+        freq="hourly",
+        caliber="back_adj",
+        fn=None,
+        default_params={},
+        enabled=True,
+        note="2026-11-08 自 V5X 冻结版逐字移植（CL-20261108-22），仅具备"
+             "**可复现回测 + 小时级信号推送**能力，**未接实盘下单/持仓同步**。"
+             "不走 fusion 的 evaluate_all：由独立作业 v5x_scan 驱动"
+             "（app/strategies/v5x/live.py），信号跑在 BA 后复权空间，"
+             "出口反解回真实价。日频门控用 t-1 口径（gate_lag=1）。"
+             "⚠ fn=None 是刻意的：V5X 引擎需要 DailyCtx，不是 fn(sym,data) 形状。",
+    ),
 }
 
 #: 已接入**主信号链**的策略 key（2026-11-06 新增）。
@@ -91,7 +106,11 @@ REGISTRY: dict[str, StrategySpec] = {
 #: :func:`enabled_keys`（且**生产无调用方**），于是"在注册表里加一条策略"这件事
 #: **没有任何后果** —— 又是一种「开关看似生效、实则静默空转」。本表把
 #: "是否真的接进信号链"显式化，:func:`unwired_keys` 用它对账告警。
-SIGNAL_WIRED_KEYS: frozenset[str] = frozenset({"fusion_v34"})
+#:
+#: 2026-11-08 补 ``v5x3``：它接的是**独立作业** ``v5x_scan``（:mod:`app.strategies.v5x.live`），
+#: 不经过 ``fusion`` 的 ``evaluate_all``。所以"已接线"在这里的含义是
+#: 「有确定的调度入口在跑它」，而不是「走融合那条链」——两条链互不影响。
+SIGNAL_WIRED_KEYS: frozenset[str] = frozenset({"fusion_v34", "v5x3"})
 
 #: 主信号扫描使用的主周期（小时线）—— 与 `settings.fusion` 的取数口径一致。
 SCAN_FREQ = "hourly"

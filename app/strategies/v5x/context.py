@@ -6,13 +6,23 @@ K 线与基本面数据翻译成 ``DailyCtx``，并明确标注每一项的口�
 
 五项上下文
 ----------
-| 字段 | 口径 | 前视 |
+| 字段 | 口径（``gate_lag=0``，即回测口径） | 前视 |
 |---|---|---|
-| ``hvol`` | 昨日日振幅 > 该品种 250 日 80 分位（min_periods=60，**shift(1)**） | 无 |
+| ``hvol`` | **当日**日振幅 > 该品种 250 日 80 分位（阈值 shift(1)，min_periods=60） | **有** |
 | ``member_z`` | top20 净持仓（多−空）的**时序 z**，60 期窗，**lag=1 日** | 无 |
-| ``blocked`` | 簇等权日对数收益绝对值 > 3σ(250d) | 无（当日判定，当日封禁） |
+| ``blocked`` | **当日**簇等权日对数收益绝对值 > 3σ(250d) | **有** |
 | ``sess_last_hours`` | 每个交易日最后一根 bar 的小时集合 | 无 |
-| ``regime`` / ``vol_z`` | 日已实现波动（60m 对数收益 std）分位分层 | **frozen 模式含前视**，见下 |
+| ``regime`` / ``vol_z`` | **当日**日已实现波动（60m 对数收益 std）分位分层 | **有**（frozen 另含全样本分位前视） |
+
+★★ ``gate_lag=1``（t-1 口径）—— **小时级实盘的唯一可复现口径**
+
+三道日频门（hvol / blocked / regime）统一改为只吃 **≤ T-1** 的日线聚合，
+全天恒定，任何整点都能算。``gate_lag=0`` 是回测复现口径，**盘中无法复现**。
+
+⚠️ 2026-11-08 实测纠错：旧版本文档写「hvol 用昨日振幅、无前视」是**错的**。
+``_hvol_flags`` 里的 ``shift(1)`` 只作用于**分位阈值**，不作用于振幅本身，
+判定式为 ``amp_T > q80(amp[..T-1])`` —— 用的仍是**当日**振幅（合成序列实测：
+只有末日振幅极大时 flag 即为 True）。三道门在 ``gate_lag=0`` 下**全部**含当日信息。
 
 ★ 两个必须知道的坑
 ------------------
@@ -187,19 +197,31 @@ def _daily_frame(bars: pd.DataFrame, open_days: np.ndarray) -> pd.DataFrame:
     return out.merge(vol, on=["symbol", "td"], how="left")
 
 
-def _hvol_flags(daily: pd.DataFrame) -> dict[str, dict[Any, bool]]:
-    """昨日振幅 > 该品种 250 日 80 分位 → 当日禁开仓（shift(1)，无前视）。"""
+def _hvol_flags(daily: pd.DataFrame, lag: int = 0) -> dict[str, dict[Any, bool]]:
+    """日振幅 > 该品种 250 日 80 分位 → 当日禁开仓。
+
+    ``lag=0``（回测口径）：判定用**当日**振幅，阈值取到 T-1（复现 V5X.3，含前视）。
+    ``lag=1``（t-1 口径）：判定用 T-1 振幅，阈值取到 T-2，全天恒定、无前视。
+
+    ⚠ 注意 ``shift(1)`` 的位置：旧实现把 shift 只加在阈值上，于是
+    ``flag_T = amp_T > q80(..T-1)`` 仍是**当日**判定。这里把 shift 同时作用到
+    振幅与累计窗口，两条口径才真正分开。
+    """
     out: dict[str, dict[Any, bool]] = {}
     for sym, g in daily.groupby("symbol", sort=False):
         g = g.sort_values("td")
-        q = g["amp"].rolling(HVOL_WIN, min_periods=HVOL_MIN).quantile(HVOL_Q).shift(1)
-        flag = (g["amp"] > q).fillna(False)
+        a = g["amp"].shift(lag)
+        q = a.rolling(HVOL_WIN, min_periods=HVOL_MIN).quantile(HVOL_Q).shift(1)
+        flag = (a > q).fillna(False)
         out[sym] = dict(zip(g["td"], flag.to_numpy(bool)))
     return out
 
 
-def _cluster_shock(daily: pd.DataFrame) -> dict[str, set]:
-    """簇等权日对数收益 |·| > 3σ(250d) → 该簇当日封禁。"""
+def _cluster_shock(daily: pd.DataFrame, lag: int = 0) -> dict[str, set]:
+    """簇等权日对数收益 |·| > 3σ(250d) → 该簇当日封禁。
+
+    ``lag=0`` 用当日收益判当日（含前视）；``lag=1`` 用 T-1 收益与 T-1 前阈值。
+    """
     g = daily.sort_values(["symbol", "td"]).copy()
     g["lret"] = np.log(g["c"] / g.groupby("symbol")["c"].shift(1))
     g["cl"] = g["symbol"].map(
@@ -207,24 +229,33 @@ def _cluster_shock(daily: pd.DataFrame) -> dict[str, set]:
     out: dict[str, set] = {}
     for cl, sub in g.dropna(subset=["cl"]).groupby("cl"):
         rr = sub.pivot_table(index="td", columns="symbol", values="lret").mean(axis=1)
-        sd = rr.rolling(CLUSTER_SHOCK_WIN, min_periods=CLUSTER_SHOCK_MIN).std()
-        flag = (rr.abs() > CLUSTER_SHOCK_K * sd).fillna(False)
+        r = rr.shift(lag)
+        sd = r.rolling(CLUSTER_SHOCK_WIN, min_periods=CLUSTER_SHOCK_MIN).std()
+        flag = (r.abs() > CLUSTER_SHOCK_K * sd).fillna(False)
         out[str(cl)] = set(rr.index[flag.to_numpy(bool)])
     return out
 
 
-def _regime_table(daily: pd.DataFrame, mode: str) -> dict[tuple[str, Any], tuple[int, float]]:
+def _regime_table(daily: pd.DataFrame, mode: str,
+                  lag: int = 0) -> dict[tuple[str, Any], tuple[int, float]]:
     """波动体制：0=低波 1=中波 2=高波；vol_z 为相对该品种自身的 z。
 
     mode="frozen"：全样本 33/66 分位 + 全样本 mean/std（复现 V5X.3，**含前视**）；
-    mode="strict"：expanding 分位 + expanding mean/std，且一律 shift(1)（无前视）。
+    mode="strict"：expanding 分位 + expanding mean/std，阈值 shift(1)（无阈值前视）；
+    ``lag=1``：在 strict 基础上把**参与比较的 vol 本身**再滞后 1 个交易日，
+    即 ``rg_T`` 只由 vol[..T-1] 决定 —— 小时级实盘可用。``frozen`` 不支持 lag。
     """
     if mode not in ("frozen", "strict"):
         raise ValueError(f"未知 regime_mode={mode!r}（只支持 frozen / strict）")
+    if lag and mode == "frozen":
+        raise ValueError(
+            "regime_mode='frozen' 不支持 gate_lag>0：frozen 本身用全样本分位（含前视），"
+            "再叠 t-1 只会得到一个既不复现 V5X、也不可实盘的第三种口径")
     out: dict[tuple[str, Any], tuple[int, float]] = {}
     for sym, g in daily.groupby("symbol", sort=False):
         g = g.sort_values("td")
         v = g["vol"].astype(float)
+        vv = v if (mode == "frozen" or not lag) else v.shift(lag)
         if mode == "frozen":
             q33 = float(np.nanpercentile(v.dropna(), 33)) if v.notna().sum() >= 30 else np.nan
             q66 = float(np.nanpercentile(v.dropna(), 66)) if v.notna().sum() >= 30 else np.nan
@@ -235,8 +266,8 @@ def _regime_table(daily: pd.DataFrame, mode: str) -> dict[tuple[str, Any], tuple
             q66 = v.expanding(min_periods=30).quantile(0.66).shift(1)
             mu = v.expanding(min_periods=30).mean().shift(1)
             sd = v.expanding(min_periods=30).std(ddof=0).shift(1)
-            z = (v - mu) / sd.replace(0, np.nan)
-        for i, (td, vol) in enumerate(zip(g["td"], v.to_numpy(float))):
+            z = (vv - mu) / sd.replace(0, np.nan)
+        for i, (td, vol) in enumerate(zip(g["td"], vv.to_numpy(float))):
             _q33 = q33.iloc[i] if hasattr(q33, "iloc") else q33
             _q66 = q66.iloc[i] if hasattr(q66, "iloc") else q66
             if not np.isfinite(vol) or not np.isfinite(_q33) or not np.isfinite(_q66):
@@ -335,8 +366,19 @@ def build_cost(symbol: str, on_date: date) -> CostCfg:
 # ---------------------------------------------------------------- 装载
 def load_market_data(session, symbols: list[str], start: date, end: date, *,
                      src: str = "bar_60m_ba",
-                     regime_mode: str = "frozen") -> V5XMarketData:
-    """一次装载 ``symbols`` 在 [start, end) 的全部上下文。"""
+                     regime_mode: str = "frozen",
+                     gate_lag: int = 0) -> V5XMarketData:
+    """一次装载 ``symbols`` 在 [start, end) 的全部上下文。
+
+    ``gate_lag=0``：回测复现口径（三道日频门都用**当日**，含前视）。
+    ``gate_lag=1``：t-1 口径，三道门只用 ≤ T-1 的日线聚合 —— **小时级实盘专用**。
+    """
+    if gate_lag not in (0, 1):
+        raise ValueError(f"gate_lag 只支持 0 / 1，收到 {gate_lag!r}")
+    if gate_lag and regime_mode == "frozen":
+        raise ValueError(
+            "gate_lag=1 必须配 regime_mode='strict'：frozen 的全样本分位含前视，"
+            "两者组合既不复现 V5X、也不可实盘")
     open_days = load_open_days(session, start, end)
     bars = _load_bars(session, symbols, start, end, src)
     md = V5XMarketData(src=src, open_days=open_days)
@@ -345,6 +387,7 @@ def load_market_data(session, symbols: list[str], start: date, end: date, *,
         "n_symbols": int(bars["symbol"].nunique()) if len(bars) else 0,
         "calendar_days": int(len(open_days)),
         "regime_mode": regime_mode,
+        "gate_lag": int(gate_lag),
         "member_z_topn": MEMBER_Z_TOPN,
         "calendar_fallback": bool(not len(open_days)),
     }
@@ -354,9 +397,9 @@ def load_market_data(session, symbols: list[str], start: date, end: date, *,
     md.bars = {str(s): g.reset_index(drop=True)
                for s, g in bars.groupby("symbol", sort=False)}
     daily = _daily_frame(bars, open_days)
-    md.hvol = _hvol_flags(daily)
-    md.blocked = _cluster_shock(daily)
-    md.regime = _regime_table(daily, regime_mode)
+    md.hvol = _hvol_flags(daily, gate_lag)
+    md.blocked = _cluster_shock(daily, gate_lag)
+    md.regime = _regime_table(daily, regime_mode, gate_lag)
     md.sess_last_hours = _sess_last_hours(bars, open_days)
     md.member_z = _member_ts_z(session, symbols, start, end)
     md.diagnostics["n_member_z_symbols"] = len(md.member_z)
