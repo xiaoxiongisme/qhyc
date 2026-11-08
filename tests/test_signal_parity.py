@@ -201,7 +201,8 @@ def test_default_calibers_pinned():
     assert c.max_hold_days == 365
     assert c.entry_gate_profile == "off"
     assert c.kline_src == "bar_60m"
-    assert b.fill_mode == "close"
+    assert b.fill_mode == "next_open"          # E1-C / CL-20261108-15
+    assert b.max_adverse_gap_atr == 0.5        # 用户拍板阈值（初始约定，待 B1/OOS 复核）
     assert b.lookback_bars == 0
     assert b.max_hold_bars == 0
 
@@ -215,3 +216,78 @@ def test_synthetic_market_dtypes_are_sane():
     htf = htf_direction(c, FusionConfig().ema_k)
     assert len(htf) == len(c)
     assert set(np.unique(np.sign(htf))) <= {-1.0, 0.0, 1.0}
+
+
+# ---------------------------------------------------------------------------
+# 6) E1-C 成交价与 0.5 ATR 跳空过滤（CL-20261108-15，零 DB 合成 K）
+# ---------------------------------------------------------------------------
+_SEG = [0, 1, 1, 1, 0, 0, 0, 0]
+
+
+def _e1c_run(states, open_overrides=None, lots=None, with_open=True, **params):
+    import pandas as pd
+
+    from app.backtest import fusion_backtest as fb
+
+    n = len(states)
+    opens = [100.0] * n
+    for k, v in (open_overrides or {}).items():
+        opens[k] = v
+    d = {
+        "dt": pd.date_range("2026-01-01", periods=n, freq="h"),
+        "close": [100.0] * n,
+        "state": states,
+        "lots": lots if lots is not None else [0 if s == 0 else 1 for s in states],
+        "atr": [1.0] * n,
+    }
+    if with_open:
+        d["open"] = opens
+    p = fb.FusionBacktestParams(tick_size=1.0, **params)
+    return fb._simulate_trades(pd.DataFrame(d), p, symbol=None)
+
+
+def test_e1c_gap_blocks_whole_signal():
+    """1.0 ATR 不利跳空 → 整段作废；关掉过滤则正常成交（开仓 +1tick）。"""
+    blocked = _e1c_run(_SEG, {2: 101.0})
+    assert blocked == []
+    tr = _e1c_run(_SEG, {2: 101.0}, max_adverse_gap_atr=0.0)
+    assert len(tr) == 1
+    assert tr[0]["entry_px"] == pytest.approx(102.0)   # O[2]=101 + 1tick
+    assert tr[0]["exit_px"] == pytest.approx(99.0)     # O[5]=100 - 1tick
+
+
+def test_e1c_gap_is_not_deferred_entry():
+    """封锁期内即使跳空恢复也不重试；只在归零后新信号段才重新开仓。"""
+    tr = _e1c_run([0, 1, 1, 1, 0, 1, 1, 0], {2: 101.0})
+    assert len(tr) == 1
+    assert tr[0]["entry_px"] == pytest.approx(101.0)   # 新段 i=5 → O[6]=100 +1tick
+
+
+def test_e1c_exit_ignores_gap():
+    """平仓腿不做跳空判定：下一根开盘再不利也照常成交。"""
+    tr = _e1c_run(_SEG, {5: 101.0})
+    assert len(tr) == 1
+    assert tr[0]["exit_px"] == pytest.approx(100.0)    # O[5]=101 - 1tick
+
+
+def test_e1c_close_baseline_ignores_gap():
+    """显式 close 时过滤不生效，老基线成交价仍为信号根收盘（逐位零回归）。"""
+    tr = _e1c_run(_SEG, {2: 101.0}, fill_mode="close")
+    assert len(tr) == 1
+    assert tr[0]["entry_px"] == pytest.approx(100.0)
+    assert tr[0]["exit_px"] == pytest.approx(100.0)
+
+
+def test_e1c_addon_rejected_keeps_position():
+    """加仓被拒只取消该次加仓，已有持仓保留（不得强制清仓）。"""
+    tr = _e1c_run(_SEG, {3: 101.0, 4: 101.0}, lots=[0, 1, 2, 2, 0, 0, 0, 0])
+    assert len(tr) == 1
+    assert all(not t.get("addon") for t in tr)
+
+
+def test_e1c_next_open_requires_open_column():
+    """缺 open 列必须 fail loud，不能静默退回收盘价。"""
+    with pytest.raises(ValueError, match="open"):
+        _e1c_run(_SEG, {2: 101.0}, with_open=False)
+    assert len(_e1c_run(_SEG, {2: 101.0}, with_open=False,
+                        fill_mode="close")) == 1

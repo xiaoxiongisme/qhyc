@@ -71,15 +71,22 @@ class FusionBacktestParams:
                                      #   即「开仓 1 手 + N 次加仓」，无 off-by-one 歧义。
     add_thr_atr: float = 1.0         # V3.4 加码浮盈门槛（lots × 该值 × ATR）
     add_guard_atr: float = 0.0       # V3.2 结构保本；V3.4 停用（保留兼容）
-    # —— 成交口径（P2-3 / CL-20261108-11，用户 2026-11-08 拍板）——
-    # "close"（默认）= 信号同根收盘价成交，历史基线，**逐位不变**；
-    # "next_open"    = 信号在 bar i 收盘产生 → bar i+1 开盘成交，且开仓 +dirn×1tick、
-    #                  平仓 -dirn×1tick（不利滑点）。此时成本系数里的 slip_yuan 会置 0，
-    #                  因为滑点已显式计入成交价，不能双计。
-    # ⚠ 不改默认值：新模式只作为「实盘预期下限」的对照口径，旧结论保持可复现。
-    fill_mode: str = "close"
+    # —— 成交口径（P2-3 / CL-20261108-11；E1-C / CL-20261108-15 用户拍板）——
+    # "next_open"（默认）= 信号在 bar i 收盘产生 → bar i+1 开盘成交，开仓
+    #                      +dirn×1tick / 平仓 -dirn×1tick（不利滑点）；
+    #                      成本系数里的 slip_yuan 置 0，滑点已显式计入成交价，不双计。
+    # "close"            = 信号同根收盘价成交，**历史基线**，显式传入可逐位复现；
+    #                      此模式没有「下一根开盘」语义，故跳空过滤恒不生效。
+    # ⚠ 2026-11-08 E1-C 起默认改为 next_open：旧 B0 基线数字一律标 pre-E1C。
+    fill_mode: str = "next_open"
     tick_size: float = 0.0           # 无 symbol 时的 1tick 兜底；有 symbol 时取
                                      # cost_coefficients().tick_size（dim_variety）
+    # —— E1-C 跳空不利过滤（用户 2026-11-08 19:00 拍板 5 条口径）——
+    # gap_atr = dirn × (O[i+1] − C[i]) / ATR[i]，仅 >0（对开仓不利）才判定。
+    # > gap_atr 阈值时：该段信号整体作废（blocked_dir 封锁到 tgt 归零或反向），
+    # 平仓 / 反手的平仓腿 / 末尾强平不受影响；加仓被拒只取消该次、持仓保留。
+    # 0 = 关闭（守卫合成对拍与 close 老基线用）。只在 next_open 生效。
+    max_adverse_gap_atr: float = 0.5
     # —— 回测专用 ——
     src: str = "bar_60m"             # P0-3：唯一 K 线真源 l1_mkt.bar_60m；
                                      # 可切 "bar_60m_ba" 取同一条线的后复权维度
@@ -219,19 +226,25 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
                       symbol: str | None = None) -> list[dict]:
     """组合层：把 state + lots 序列重放成**逐手**成交（close-only，单品种单方向）。
 
-    规则（V3.4 口径，PRD §16/§17）：
-    - bar i 收盘后策略目标持仓 = state_i，在 c[i] 开/平；
-    - P1 阶梯加码：持仓期间引擎 lots 由 L→L+1（浮盈门槛门控），视为当根收盘**加开 1 手**；
-    - 离场/反手时把全部在手按当根收盘价平掉（每手独立计 pnl，成本按各自开仓名义扣）；
+    规则（V3.4 口径，PRD §16/§17；E1-C 起成交口径改为下一根开盘）：
+    - bar i 收盘后策略目标持仓 = state_i；默认在 o[i+1] ± 1tick 开/平，
+      显式 fill_mode="close" 时仍在 c[i] 开/平（历史基线逐位可复现）；
+    - P1 阶梯加码：持仓期间引擎 lots 由 L→L+1（浮盈门槛门控），视为当根**加开 1 手**；
+    - 离场/反手时把全部在手平掉（每手独立计 pnl，成本按各自开仓名义扣）；
     - 每手带 `addon` 标记（首仓=False / 加码=True），指标层单独统计 `n_addons`。
 
-    ★ 成交口径 fill_mode（P2-3 / CL-20261108-11）：
-      · "close"（默认，历史基线）→ 完全走上面的 close-only 路径，逐位不变；
-      · "next_open" → bar i 收盘出信号，bar i+1 开盘成交，开仓 +dirn×1tick /
+    ★ 成交口径 fill_mode（P2-3 / CL-20261108-11；E1-C / CL-20261108-15）：
+      · "next_open"（默认）→ bar i 收盘出信号，bar i+1 开盘成交，开仓 +dirn×1tick /
         平仓 -dirn×1tick。信号层仍只用 ≤i 的数据，下一根开盘价是**成交时点**的
         价格，不构成前视。末尾无 i+1 时退回 closes[i] ± 1tick 强平。
+      · "close"（历史基线）→ 完全走 close-only 路径，逐位不变；跳空过滤不生效。
       · ⚠ 成本系数已含 `slip_yuan = 2×slip_ticks×tick_size×mult`（开平各 1 跳）。
         next_open 模式把它置 0，滑点改由成交价显式体现，**绝不双计**。
+    ★ E1-C 跳空不利过滤（默认 0.5 ATR，只在 next_open 生效）：
+      · gap_atr = dirn × (O[i+1] − C[i]) / ATR[i]，>0.5 的整段信号作废，
+        记 blocked_dir 封锁到 tgt 归零或反向才解锁（语义 B，非「延后一根」）；
+      · 平仓 / 反手的平仓腿 / 末尾强平不判定；加仓被拒只取消该次、持仓保留；
+      · 交易建议价 C[i] 只作展示，trade 的 entry_px/exit_px 恒为成交价（三价分离）。
 
     ⚠ 乘数与成本口径（2026-10-03 修正，用户拍板"真乘数口径"）
       此前 ``mult = getattr(p, "mult", 1.0)`` —— ``FusionBacktestParams`` **没有 mult
@@ -244,14 +257,20 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     """
     dts = states_df["dt"].to_numpy()
     closes = states_df["close"].to_numpy(float)
+    fill_mode = getattr(p, "fill_mode", "next_open") or "next_open"
+    if fill_mode not in ("close", "next_open"):
+        raise ValueError(f"未知 fill_mode={fill_mode!r}（只支持 close / next_open）")
+    # ⚠ next_open 必须有真实 open 列：旧代码缺列时静默 closes.copy()，
+    # 会让跳空恒 0、过滤永不触发、成交价退化成 C[i]±1tick（E1-C 口径失效）。
+    has_open_col = "open" in states_df.columns
     opens = (states_df["open"].to_numpy(float)
-             if "open" in states_df.columns else closes.copy())
+             if has_open_col else closes.copy())
+    if fill_mode == "next_open" and not has_open_col:
+        raise ValueError("next_open 需要 states_df 含 open 列；缺列会静默退回收盘价，"
+                         "拒绝执行（E1-C 口径）")
     states = states_df["state"].to_numpy()
     lots_arr = states_df["lots"].to_numpy()
     n_bars = len(states)
-    fill_mode = getattr(p, "fill_mode", "close") or "close"
-    if fill_mode not in ("close", "next_open"):
-        raise ValueError(f"未知 fill_mode={fill_mode!r}（只支持 close / next_open）")
     atr_arr = (states_df["atr"].to_numpy(dtype=float)
                if "atr" in states_df.columns else np.full(len(states), np.nan))
     with np.errstate(all="ignore"):
@@ -305,17 +324,41 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     else:
         mult = float(getattr(p, "mult", 1.0) or 1.0)
         _tick_size = float(getattr(p, "tick_size", 0.0) or 0.0)
-    # close 模式 tick 恒为 0，保证默认路径与改动前逐位一致
+    # close 模式 tick 恒为 0，保证历史基线逐位一致
     tick = _tick_size if fill_mode == "next_open" else 0.0
+    if fill_mode == "next_open" and symbol and tick <= 0:
+        raise ValueError(f"{symbol}: next_open 需要有效 tick_size（实得 {tick!r}）；"
+                         "为 0 会让 1tick 滑点静默消失（E1-C 口径失效）")
+    # E1-C：跳空过滤只在 next_open 生效（close 老基线逐位零回归）
+    gap_lim = (float(getattr(p, "max_adverse_gap_atr", 0.0) or 0.0)
+               if fill_mode == "next_open" else 0.0)
     trades: list[dict] = []
     open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon, atr}
     pos = 0                      # 当前持仓方向 0/1/2
+    blocked_dir = 0              # E1-C 语义 B：被拒后整段作废的方向（0=未封锁）
 
     def _atr_at(i: int) -> float:
         v = float(atr_arr[i]) if i < len(atr_arr) else float("nan")
         if not np.isfinite(v) or v <= 0:
             v = atr_mean
         return v
+
+    def _gap_blocks(i: int, dirn: float) -> bool:
+        """E1-C：对开仓不利的跳空是否 > 阈值（按信号根 ATR[i] 归一化）。
+
+        adverse = dirn × (O[i+1] − C[i])，>0 才是「买贵/卖便宜」；
+        ATR 不可用或末尾无 i+1 时一律不过滤，避免静默全拒。
+        """
+        if gap_lim <= 0:
+            return False
+        j = i + 1
+        if j >= n_bars:
+            return False
+        a = _atr_at(i)
+        if not np.isfinite(a) or a <= 0:
+            return False
+        adverse = dirn * (float(opens[j]) - float(closes[i]))
+        return (adverse / a) > gap_lim
 
     def _fill_price(i: int, dirn: float, is_open: bool) -> tuple[float, int]:
         """薄封装：委托契约层纯函数 app.contracts.execution.fill_price（E1-B）。
@@ -376,26 +419,40 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     for i in range(len(states)):
         tgt = int(states[i])
         cur_lots = int(lots_arr[i])
-        # P1 加码：持仓中引擎手数增加 → 当根收盘加开对应手数
+        # 语义 B 解锁：只有该段信号结束（归零或反向）才算「信号再次发生」。
+        # pos=0 时 tgt!=pos 每根都成立，若只在被拒那一根跳过，下一根又会开仓
+        # —— 那正是实证过滤率 0% 的语义 A。
+        if tgt == 0 or (blocked_dir and tgt != blocked_dir):
+            blocked_dir = 0
+        # P1 加码：持仓中引擎手数增加 → 当根加开对应手数。
+        # 被跳空拒绝只取消该次加仓，已有持仓保留、不封锁整段（规约 D5）。
         if pos != 0 and tgt == pos and cur_lots > len(open_lots):
             d_add = 1.0 if pos == 1 else -1.0
-            for _ in range(cur_lots - len(open_lots)):
-                px, fi = _fill_price(i, d_add, is_open=True)
-                open_lots.append({"entry_px": px, "entry_i": fi,
-                                  "addon": True, "atr": _atr_at(i)})
+            if not _gap_blocks(i, d_add):
+                for _ in range(cur_lots - len(open_lots)):
+                    px, fi = _fill_price(i, d_add, is_open=True)
+                    open_lots.append({"entry_px": px, "entry_i": fi,
+                                      "addon": True, "atr": _atr_at(i)})
         if tgt != pos:
             if open_lots:
+                # 平仓腿：E1-C 第 5 条，不做跳空判定，一律按下一根开盘 ±1tick 成交
                 d_exit = 1.0 if pos == 1 else -1.0
                 xp, xi = _fill_price(i, d_exit, is_open=False)
                 for lt in open_lots:
                     trades.append(_trade(lt, xp, xi))
                 open_lots.clear()
             if tgt != 0:
-                pos = tgt
-                d_ent = 1.0 if pos == 1 else -1.0
-                px, fi = _fill_price(i, d_ent, is_open=True)
-                open_lots.append({"entry_px": px, "entry_i": fi,
-                                  "addon": False, "atr": _atr_at(i)})
+                d_ent = 1.0 if tgt == 1 else -1.0
+                if blocked_dir == tgt:
+                    pos = 0                    # 该段仍在封锁期：不重试
+                elif _gap_blocks(i, d_ent):
+                    blocked_dir = tgt         # 整段信号作废
+                    pos = 0
+                else:
+                    pos = tgt
+                    px, fi = _fill_price(i, d_ent, is_open=True)
+                    open_lots.append({"entry_px": px, "entry_i": fi,
+                                      "addon": False, "atr": _atr_at(i)})
             else:
                 pos = 0
     # 末尾仍持仓：close 模式按最后收盘价强平；next_open 无 i+1，同样退回收盘价+滑点

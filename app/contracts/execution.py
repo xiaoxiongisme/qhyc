@@ -22,7 +22,8 @@
 机器核验「声明是否仍与当前行为一致」，防止本表沦为过期文档。
 
 ⚠ 本模块是纯数据 + 纯函数，**禁止 import app.* / DB / 配置**，避免回测与守卫
-被拖入执行层依赖。实盘文件零改动（E1-C/E1-D 另行拍板）。
+被拖入执行层依赖。E1-C（CL-20261108-15）已把回测默认口径切到 next_open 并加
+0.5 ATR 跳空过滤；实盘下单链路仍零改动（影子对账归 E1-D → P2-9）。
 """
 from __future__ import annotations
 
@@ -74,9 +75,11 @@ EXECUTION_FORKS: tuple[ForkDecision, ...] = (
             "总收益 -99.9901%→-99.9381%"
         ),
         decision=(
-            "回测已支持 fill_mode=close|next_open，默认仍 close 保证旧基线可复现；"
-            "成交价计算抽为纯函数 fill_price() 置于本契约层，供未来实盘影子对账复用。"
-            "把默认口径切到 next_open 属 E1-C，会作废 B0 基线，需单独拍板"
+            "回测已支持 fill_mode=close|next_open；E1-C / CL-20261108-15 起默认改为 "
+            "next_open（下一根开盘 ±1tick 不利滑点）并启用 0.5 ATR 不利跳空过滤，"
+            "旧 B0 基线标 pre-E1C、显式传 fill_mode=close 仍逐位可复现。"
+            "成交价计算抽为纯函数 fill_price() 置于本契约层，供未来实盘影子对账复用；"
+            "实盘下单链路不在本次范围（E1-D → P2-9）"
         ),
         guard_key="BT-FILL-MODE-WIRED",
     ),

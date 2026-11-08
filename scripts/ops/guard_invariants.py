@@ -789,7 +789,9 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """P2-3 / CL-20261108-11：回测成交口径必须**真实**按 fill_mode 分叉。
 
     衡量的都是「此刻的行为」，不看历史流水、不靠时间衰减：
-      · 默认 fill_mode 仍是 close（旧回测基线可复现）；
+      · 默认 fill_mode = next_open（E1-C / CL-20261108-15 起），close 须可显式复现；
+      · 合成对拍显式关闭跳空过滤，专测成交价分叉（过滤由
+        BT-GAP-FILTER-WIRED 单独验）；
       · 合成 8 根 K 直接调 _simulate_trades，逐笔核对成交价与成交 bar 索引，
         多空两侧都验（防只改了一边）；
       · next_open 必须是「下一根开盘 ± 1tick」且成交 dt 落在下一根；
@@ -798,7 +800,7 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
         用 AST 找 Dict 节点，避免 docstring/注释里的字面量造成假阳性
         （OPS-LSTM-SNAPSHOT-WRITE 曾踩过字符串检查的坑）。
     """
-    label = "回测成交口径 fill_mode 真实接线（默认 close / next_open +1tick）"
+    label = "回测成交口径 fill_mode 真实接线（默认 next_open +1tick / close 可复现）"
     try:
         import ast
         import pandas as pd
@@ -810,10 +812,14 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
     bad: list[str] = []
     observed: list[str] = []
 
-    default_mode = getattr(fb.FusionBacktestParams(), "fill_mode", None)
-    observed.append(f"default={default_mode!r}")
-    if default_mode != "close":
-        bad.append(f"默认 fill_mode={default_mode!r}，必须 'close' 否则历史基线作废")
+    bp = fb.FusionBacktestParams()
+    default_mode = getattr(bp, "fill_mode", None)
+    default_gap = getattr(bp, "max_adverse_gap_atr", None)
+    observed.append(f"default={default_mode!r} gap={default_gap!r}")
+    if default_mode != "next_open":
+        bad.append(f"默认 fill_mode={default_mode!r}，E1-C 起必须 'next_open'")
+    if default_gap is None or abs(float(default_gap) - 0.5) > 1e-9:
+        bad.append(f"默认 max_adverse_gap_atr={default_gap!r}，用户拍板 0.5 ATR")
 
     n = 8
     opens = [100.0 + 10.0 * i for i in range(n)]
@@ -834,7 +840,10 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
         })
 
     def run(mode: str, side: int, tick_size: float = 0.0):
-        p = fb.FusionBacktestParams(fill_mode=mode, tick_size=tick_size)
+        # 显式关闭跳空过滤：本断言只负责成交价分叉，过滤由
+        # BT-GAP-FILTER-WIRED 单独验（否则合成网格的大跳空会拦掉多头开仓）。
+        p = fb.FusionBacktestParams(fill_mode=mode, tick_size=tick_size,
+                                    max_adverse_gap_atr=0.0)
         return fb._simulate_trades(frame(side), p, symbol=None)
 
     def hour(x) -> int:
@@ -906,6 +915,130 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " ".join(observed), (
         "" if not bad else "；".join(bad)
         + "。成交口径接线被回退或改坏，回测结论不可信（CL-20261108-11）")
+
+
+def _c_bt_gap_filter_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """E1-C / CL-20261108-15：0.5 ATR 不利跳空过滤必须真实接线。
+
+    全部是「此刻的行为」，不看历史流水、不靠时间衰减：
+      · 默认口径 = next_open + 0.5 ATR；
+      · 1.0 ATR 不利跳空 → 整段作废（0 笔）；关掉过滤 → 1 笔且成交价含 1tick；
+      · 封锁期内即便跳空恢复也不重试（防退化成语义 A「延后一根」），
+        归零解锁后新信号段才重新开仓；
+      · 平仓腿不受过滤影响；close 老基线忽略过滤、成交价仍为收盘价；
+      · 缺 open 列必须 fail loud；活跃品种 tick_size 必须 >0；
+      · AST 确认 _gap_blocks 被真实调用 ≥2 处（防「定义了没人用」）。
+    """
+    label = "E1-C 跳空不利过滤（0.5 ATR / 语义 B）真实接线"
+    try:
+        import ast
+        import pandas as pd
+        from app.backtest import fusion_backtest as fb
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "融合回测模块不可导入 → 跳空过滤断言不可用（CL-20261108-15）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+    bp = fb.FusionBacktestParams()
+    observed.append(f"defaults={bp.fill_mode!r}/{bp.max_adverse_gap_atr!r}")
+    if bp.fill_mode != "next_open":
+        bad.append(f"默认 fill_mode={bp.fill_mode!r} != next_open")
+    if abs(float(getattr(bp, "max_adverse_gap_atr", 0.0)) - 0.5) > 1e-9:
+        bad.append("默认 max_adverse_gap_atr != 0.5（用户拍板阈值）")
+
+    n = 8
+
+    def frame(states, opens, lots=None, with_open=True):
+        d = {
+            "dt": pd.date_range("2026-01-01", periods=n, freq="h"),
+            "close": [100.0] * n,
+            "state": states,
+            "lots": lots if lots is not None else [0 if s == 0 else 1 for s in states],
+            "atr": [1.0] * n,
+        }
+        if with_open:
+            d["open"] = opens
+        return pd.DataFrame(d)
+
+    def run(states, overrides=None, lots=None, with_open=True, **kw):
+        o = [100.0] * n
+        for k, v in (overrides or {}).items():
+            o[k] = v
+        p = fb.FusionBacktestParams(tick_size=1.0, **kw)
+        return fb._simulate_trades(
+            frame(states, o, lots, with_open), p, symbol=None)
+
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    try:
+        tr = run(seg, {2: 101.0})
+        if tr:
+            bad.append(f"1.0 ATR 不利跳空未拦截（实得 {len(tr)} 笔）")
+        else:
+            observed.append("gap_1atr=blocked")
+        tr = run(seg, {2: 101.0}, max_adverse_gap_atr=0.0)
+        if len(tr) != 1 or abs(tr[0]["entry_px"] - 102.0) > 1e-9:
+            bad.append("关掉过滤后应 1 笔 @102（O[2]=101 +1tick）")
+        else:
+            observed.append("no_filter=1@102")
+        tr = run([0, 1, 1, 1, 0, 1, 1, 0], {2: 101.0})
+        if len(tr) != 1 or abs(tr[0]["entry_px"] - 101.0) > 1e-9:
+            bad.append("整段作废/解锁语义不成立（疑似退化成『延后一根』）")
+        else:
+            observed.append("unlock_after_new_segment=1@101")
+        tr = run(seg, {5: 101.0})
+        if len(tr) != 1 or abs(tr[0]["exit_px"] - 100.0) > 1e-9:
+            bad.append("平仓腿被误过滤（第 5 条口径要求直接成交）")
+        else:
+            observed.append("exit_not_filtered=100")
+        tr = run(seg, {2: 101.0}, fill_mode="close")
+        if (len(tr) != 1 or abs(tr[0]["entry_px"] - 100.0) > 1e-9
+                or abs(tr[0]["exit_px"] - 100.0) > 1e-9):
+            bad.append("close 老基线被跳空过滤污染（应逐位零回归）")
+        else:
+            observed.append("close_baseline=100/100")
+        tr = run(seg, {3: 101.0, 4: 101.0}, lots=[0, 1, 2, 2, 0, 0, 0, 0])
+        if len(tr) != 1 or any(t.get("addon") for t in tr):
+            bad.append("加仓被拒后持仓状态异常（应只取消该次加仓）")
+        else:
+            observed.append("addon_rejected_keeps_pos")
+        try:
+            run(seg, {2: 101.0}, with_open=False)
+            bad.append("next_open 缺 open 列未拒绝（会静默退回收盘价）")
+        except ValueError:
+            observed.append("missing_open=rejected")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"行为级对拍异常 {type(exc).__name__}: {exc}")
+
+    try:
+        row = c.rows(
+            "SELECT count(*) FILTER (WHERE is_active), "
+            "count(*) FILTER (WHERE is_active AND "
+            "(tick_size IS NULL OR tick_size <= 0)) FROM public.dim_variety")[0]
+        observed.append(f"active_varieties={row[0]} bad_tick={row[1]}")
+        if row[1]:
+            bad.append("活跃品种存在 tick_size<=0 → 1tick 滑点会静默消失")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"tick_size 覆盖检查失败：{type(exc).__name__}: {exc}")
+
+    try:
+        src = (Path(__file__).resolve().parents[2] / "app" / "backtest"
+               / "fusion_backtest.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        defined = any(isinstance(nd, ast.FunctionDef) and nd.name == "_gap_blocks"
+                      for nd in ast.walk(tree))
+        calls = sum(1 for nd in ast.walk(tree)
+                    if isinstance(nd, ast.Call) and isinstance(nd.func, ast.Name)
+                    and nd.func.id == "_gap_blocks")
+        observed.append(f"gap_defined={defined} gap_calls={calls}")
+        if not defined or calls < 2:
+            bad.append("_gap_blocks 未定义或未被开仓/加仓两处真实引用")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"源码 AST 检查失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。E1-C 跳空过滤被回退或改坏，融合回测口径不可信（CL-20261108-15）")
 
 
 def _c_bt_walkforward_same_source(c: Ctx) -> tuple[bool, str, str, str]:
@@ -1014,7 +1147,10 @@ def _c_bt_exec_fork_declared(c: Ctx) -> tuple[bool, str, str, str]:
         cfg = None
         bad.append(f"FusionConfig 不可读：{type(exc).__name__}: {exc}")
     checks = (
-        ("fill_mode", getattr(bp, "fill_mode", None), "close"),
+        # E1-C / CL-20261108-15：默认成交口径已切 next_open + 0.5 ATR 过滤，
+        # 任一漂移都会让 E1 的 6 条分叉实测证据失效。
+        ("fill_mode", getattr(bp, "fill_mode", None), "next_open"),
+        ("max_adverse_gap_atr", getattr(bp, "max_adverse_gap_atr", None), 0.5),
         ("max_hold_bars", getattr(bp, "max_hold_bars", None), 0),
         ("lookback_bars", getattr(bp, "lookback_bars", None), 0),
         ("max_bars", getattr(bp, "max_bars", None), 800),
@@ -1064,7 +1200,8 @@ def _c_bt_exec_fork_declared(c: Ctx) -> tuple[bool, str, str, str]:
 
         tr = fb._simulate_trades(
             frame(1),
-            fb.FusionBacktestParams(fill_mode="next_open", tick_size=2.0),
+            fb.FusionBacktestParams(fill_mode="next_open", tick_size=2.0,
+                                    max_adverse_gap_atr=0.0),
             symbol=None)
         if len(tr) != 1:
             bad.append(f"接线对拍期望 1 笔，实得 {len(tr)}")
@@ -1355,8 +1492,13 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_config_snapshot_fresh),
     # P2-3 前置：成交口径是回测结论的地基。此前 close 模式硬编码、无任何断言盯它，
     # 「改成下一根开盘」或「默认被悄悄改掉」都不会有人发现。行为级对拍而非只查源码。
-    ("BT-FILL-MODE-WIRED", "回测成交口径 fill_mode 真实接线（默认 close / next_open +1tick）",
+    ("BT-FILL-MODE-WIRED", "回测成交口径 fill_mode 真实接线（默认 next_open +1tick）",
      "block", _c_bt_fill_mode_wired),
+    # E1-C / CL-20261108-15：0.5 ATR 不利跳空过滤（语义 B 整段作废）。
+    # 行为级合成 K 对拍 + AST 真实引用 + 活跃品种 tick_size 覆盖，
+    # 防「定义了没人用」「静默丢滑点」「退化成延后一根」三种假绿。
+    ("BT-GAP-FILTER-WIRED", "E1-C 跳空不利过滤（0.5 ATR / 语义 B）真实接线",
+     "block", _c_bt_gap_filter_wired),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
