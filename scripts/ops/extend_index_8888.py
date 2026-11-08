@@ -57,7 +57,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Sequence
 
 import numpy as np
@@ -130,22 +130,46 @@ def _daily_quality(cur, syms: Sequence[str], t0: datetime, t1: datetime) -> pd.D
     return pd.DataFrame(rows, columns=["d", "ncontract", "front", "front_oi"])
 
 
-def _missing_trading_days(cur, exchange: str | None, d0, d1,
-                          have: set) -> list[str]:
+def _missing_trading_days(cur, d0, d1, have: set) -> list[str]:
     """窗口内「开市但该品种一行合约分钟都没有」的交易日。
 
     「坏日」（有行但残缺）由 :func:`_daily_quality` 的两个门拦下；这里补的是另一类：
     **整天一行都没有**，它压根不会出现在 ``q`` 里，因此两个门都拦不住它。
     实测 2026-11-02 的 FU 就是这一类（合约层 0 行，连续层却有 CSV 遗留的 bar），
     ``synth_8888`` 于是把它 ffill 成平线。必须单独点名，否则只是「静默留洞」。
+
+    ⚠ 日历真源（CL-20261107-18，2026-11-08 修正）
+    ----------------------------------------------
+    原实现查 ``l3_ref.trade_calendar WHERE exchange = %s``。那张表是 R2 **推断**
+    日历，唯一取值 ``exchange='INF'``（全市场、不分交易所）且止于 2026-10-08；
+    而这里传入的是 L0 指数层的六家真实交易所之一（CFFEX/CZCE/DCE/GFEX/INE/SHFE）
+    ⇒ 恒查不到任何行 ⇒ **这道门从上线起就是死代码**。
+    全系统其它模块（``trading_window`` / ``data_selfcheck`` / ``akshare_source``）
+    早已统一走 ``app/data/trade_calendar.py`` → ``futures_rule`` 的 distinct
+    ``trade_date``（akshare futures_rule 播种的官方真源），本脚本是唯一漏网之鱼。
+    ``trading_window.py:20`` 甚至已注明「l3_ref.trade_calendar 数据稀疏，不可依赖」。
+
+    改读同一张真源，并用 ``cfg_calendar_seed_meta.seeded_through`` 做覆盖边界判断：
+    日历只记交易日，「无行」既可能是休市也可能是尚未播种，绝不静默当成「不缺日」。
+    窗口上界超出播种范围时（夜盘跨自然日常导致 d1 落在周六）只判已确认范围，
+    并在 stderr 大声记一行，避免假绿。
     """
-    if not exchange:
-        return []
     cur.execute(
-        "SELECT trade_date FROM l3_ref.trade_calendar "
-        "WHERE exchange = %s AND is_open "
-        "  AND trade_date > %s AND trade_date <= %s ORDER BY 1",
-        (exchange, d0, d1))
+        "SELECT value FROM cfg_calendar_seed_meta WHERE key = 'seeded_through'")
+    row = cur.fetchone()
+    seeded_through = date.fromisoformat(str(row[0])[:10]) if row and row[0] else None
+    if seeded_through is None:
+        raise RuntimeError(
+            "[calendar] cfg_calendar_seed_meta.seeded_through 缺失，无法判定交易日；"
+            "先跑 scripts/seed_futures_rule.py（禁止退回 weekday 猜测）")
+    upper = min(d1, seeded_through)
+    if upper < d1:
+        print(f"[calendar][WARN] 官方日历止于 {seeded_through}，窗口上界 {d1} "
+              "超出部分不参与缺日判定（夜盘跨自然日属常见情形）", file=sys.stderr)
+    cur.execute(
+        "SELECT DISTINCT trade_date FROM futures_rule "
+        "WHERE trade_date > %s AND trade_date <= %s ORDER BY 1",
+        (d0, upper))
     return [str(r[0]) for r in cur.fetchall() if r[0] not in have]
 
 
@@ -154,7 +178,7 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
     last = _last_index(cur, variety)
     if last is None:
         return {"variety": variety, "status": "no_index_series", "rows": 0}
-    last_ts, last_close, exchange, amt_caliber = last
+    last_ts, last_close, _exchange, amt_caliber = last
 
     # 窗口：从「最后一个已覆盖交易日的前 1 天」开始，保证接缝日能被完整重建
     t0 = datetime.combine((last_ts - timedelta(days=1)).date(), datetime.min.time()).replace(
@@ -204,9 +228,12 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
     # 危害不是「少一天」那么轻——synth_8888 会把那天 ffill 成常数平线，直接污染
     # 换月判据（见 1b）。所以必须像坏日一样点名。
     have_days = {r.d for r in q.itertuples()}
-    for ms in _missing_trading_days(cur, exchange, last_ts.date(),
-                                    t_max.date(), have_days):
+    # 缺日必须同时进 bad_objs：只写进 bad_days 是「点名但不拦」——stage_dedup
+    # 仍会把这些日子的 continuous 行喂给 fetch_front 选主力，与上面注释承诺的
+    # 「像坏日一样拦下」不符（CL-20261107-18 一并修）。
+    for ms in _missing_trading_days(cur, last_ts.date(), t_max.date(), have_days):
         bad_days.append(f"{ms}(no_contract_rows)")
+        bad_objs.add(date.fromisoformat(ms))
 
     # ---- 2) 临时 stage_dedup（与全量导入脚本同名同列，直接复用其算法）----
     cur.execute("DROP TABLE IF EXISTS pg_temp.stage_dedup")

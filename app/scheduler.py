@@ -68,6 +68,26 @@ from app.ops import (
 )
 
 
+def _require_subprocess_success(proc, label: str,
+                                tolerated: tuple[int, ...] = ()) -> None:
+    """subprocess 作业非 0 退出必须让作业抛异常（CL-20261107-19）。
+
+    ``ops.scheduled_task_run`` 的 success 判据是 apscheduler 的
+    ``EVENT_JOB_EXECUTED``——**只要作业函数没抛异常就记 success**。所以
+    ``logger.warning`` 记下 stderr 毫无用处：2026-11-07 的 pgconn.py 误删事故里
+    9 个脚本连续 ImportError，流水仍是 11 次全绿。
+
+    ``tolerated`` 只给「非 0 = 业务状态而非脚本崩溃」的作业（如
+    factor_freshness 的 exit=1 = 有因子仍断供、脚本内部已发硬告警）。
+    调用方的 ``except Exception`` 必须重新 raise，否则这里抛了也会被自己吞掉。
+    """
+    rc = proc.returncode
+    if rc == 0 or rc in tolerated:
+        return
+    tail = ((proc.stderr or "") + "\n" + (proc.stdout or ""))[-1200:]
+    raise RuntimeError(f"[scheduler] {label} 非 0 退出 rc={rc}: {tail}")
+
+
 def _switch_on(switch_key: str, env_name: str | None = None, default: bool = False) -> bool:
     """读功能开关：优先 cfg_feature_switch（迁移 008），表缺失/异常时回退 env。
 
@@ -1266,12 +1286,13 @@ def _sync_cloud_local_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
         logger.info(f"[scheduler] cloud_local_sync exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-600:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] cloud_local_sync stderr={(proc.stderr or '')[-800:]}")
+        _require_subprocess_success(proc, "cloud_local_sync")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] cloud_local_sync timeout>7200s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("[scheduler] cloud_local_sync failed")
+        raise
 
 
 #: 调度以 subprocess 方式调用的生产脚本（相对仓库根的 scripts/）。
@@ -1395,12 +1416,13 @@ def _seed_futures_rule_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         logger.info(f"[scheduler] seed_futures_rule exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-600:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] seed_futures_rule stderr={(proc.stderr or '')[-800:]}")
+        _require_subprocess_success(proc, "seed_futures_rule")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] seed_futures_rule timeout>3600s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("[scheduler] seed_futures_rule failed")
+        raise
 
 
 def _collect_roll_yield_job() -> None:
@@ -1451,12 +1473,13 @@ def _collect_roll_yield_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         logger.info(f"[scheduler] collect_roll_yield exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-600:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] collect_roll_yield stderr={(proc.stderr or '')[-800:]}")
+        _require_subprocess_success(proc, "collect_roll_yield")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] collect_roll_yield timeout>3600s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("[scheduler] collect_roll_yield failed")
+        raise
 
 
 def _sync_trading_cost_job() -> None:
@@ -1486,12 +1509,13 @@ def _sync_trading_cost_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         logger.info(f"[scheduler] sync_cost_from_exchange exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-800:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] sync_cost_from_exchange stderr={(proc.stderr or '')[-800:]}")
+        _require_subprocess_success(proc, "sync_cost_from_exchange")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] sync_cost_from_exchange timeout>1800s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("[scheduler] sync_cost_from_exchange failed")
+        raise
 
 
 def _rebuild_dict_dryrun_job() -> None:
@@ -1521,12 +1545,13 @@ def _rebuild_dict_dryrun_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         out = (proc.stdout or "")
         logger.info(f"[scheduler] rebuild_dict(dry-run) exit={proc.returncode} tail={out[-800:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] rebuild_dict(dry-run) stderr={(proc.stderr or '')[-800:]}")
+        _require_subprocess_success(proc, "rebuild_dict(dry-run)")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] rebuild_dict(dry-run) timeout>1800s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception("[scheduler] rebuild_dict(dry-run) failed")
+        raise
 
 
 def _build_scheduler() -> BlockingScheduler:
@@ -2181,12 +2206,13 @@ def _factor_v1v6_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         logger.info(f"[scheduler] factor_v1v6 exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-400:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] factor_v1v6 stderr={(proc.stderr or '')[-600:]}")
+        _require_subprocess_success(proc, "factor_v1v6")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] factor_v1v6 timeout>3600s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] factor_v1v6 failed: {e}")
+        raise
 
 
 def _factor_ic_monitor_job() -> None:
@@ -2208,12 +2234,13 @@ def _factor_ic_monitor_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         logger.info(f"[scheduler] factor_ic_monitor exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-800:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] factor_ic_monitor stderr={(proc.stderr or '')[-600:]}")
+        _require_subprocess_success(proc, "factor_ic_monitor")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] factor_ic_monitor timeout>3600s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] factor_ic_monitor failed: {e}")
+        raise
 
 
 def _factor_value_job() -> None:
@@ -2256,12 +2283,13 @@ def _factor_value_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         logger.info(f"[scheduler] factor_value(A) exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-400:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] factor_value(A) stderr={(proc.stderr or '')[-600:]}")
+        _require_subprocess_success(proc, "factor_value(A)")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] factor_value(A) timeout>3600s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] factor_value(A) failed: {e}")
+        raise
 
 
 def _factor_value_b_job() -> None:
@@ -2297,12 +2325,13 @@ def _factor_value_b_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         logger.info(f"[scheduler] factor_value(B,C) exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-400:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] factor_value(B,C) stderr={(proc.stderr or '')[-600:]}")
+        _require_subprocess_success(proc, "factor_value(B,C)")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] factor_value(B,C) timeout>3600s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] factor_value(B,C) failed: {e}")
+        raise
 
 
 def _collect_member_rank_summary_job() -> None:
@@ -2333,13 +2362,13 @@ def _collect_member_rank_summary_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         logger.info(f"[scheduler] collect_member_rank_summary exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-400:]}")
-        if proc.returncode != 0:
-            logger.warning(
-                f"[scheduler] collect_member_rank_summary stderr={(proc.stderr or '')[-600:]}")
+        _require_subprocess_success(proc, "collect_member_rank_summary")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] collect_member_rank_summary timeout>1800s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] collect_member_rank_summary failed: {e}")
+        raise
 
 
 def _factor_freshness_job() -> None:
@@ -2372,14 +2401,18 @@ def _factor_freshness_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5400)
         out = (proc.stdout or "")[-2500:]
         logger.info(f"[scheduler] factor_freshness exit={proc.returncode}\n{out}")
-        if proc.returncode != 0:
-            # exit=1 表示「有因子仍断供」→ 脚本内部已发硬告警，这里只记日志
+        # exit=1 = 有因子仍断供（脚本内部已发硬告警），是业务状态不是脚本崩溃；
+        # 其余非 0 一律 raise，否则 ops.scheduled_task_run 会记成 success。
+        _require_subprocess_success(proc, "factor_freshness", tolerated=(1,))
+        if proc.returncode == 1:
             logger.warning(f"[scheduler] factor_freshness 有因子仍断供（已告警）: "
                            f"{(proc.stderr or '')[-400:]}")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] factor_freshness timeout>5400s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] factor_freshness failed: {e}")
+        raise
 
 
 def _data_selfcheck_job() -> None:
@@ -2756,12 +2789,13 @@ def _warehouse_receipt_job() -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5400)
         logger.info(f"[scheduler] warehouse_receipt exit={proc.returncode} "
                     f"tail={(proc.stdout or '')[-600:]}")
-        if proc.returncode != 0:
-            logger.warning(f"[scheduler] warehouse_receipt stderr={(proc.stderr or '')[-800:]}")
+        _require_subprocess_success(proc, "warehouse_receipt")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] warehouse_receipt timeout>5400s")
+        raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] warehouse_receipt failed: {e}")
+        raise
 
 
 def _hourly_job() -> None:
@@ -2813,7 +2847,11 @@ def _extend_index_8888() -> None:
         if p.returncode == 0:
             logger.info(f"[scheduler] index_8888 扩展完成: {' | '.join(tail)}")
         else:
-            # exit 2 = 有品种接缝校验没过（合约层缺主力），数据未写入，需人工看
+            # CL-20261107-19 的有意例外：本函数是 _minute_and_bars_job 内部的一个
+            # 步骤，**不是独立作业**，抛异常会连带中断整条 bar 合成链路（更糟）。
+            # 它有独立的机器兜底：扩展失败 ⇒ L0 index 层停更 ⇒
+            # DATA-L0-LAYERS-FRESH（block）次日 09:10 必报 FAIL，不是静默绿。
+            # exit 2 = 有品种接缝校验没过（合约层缺主力），数据未写入，需人工看。
             logger.error(f"[scheduler] index_8888 扩展返回 {p.returncode}: "
                          f"{' | '.join(tail)}")
             if p.returncode == 2:
@@ -2999,14 +3037,13 @@ def _archive_nontradable_job() -> None:
         logger.info(
             f"[scheduler] archive_nontradable exit={proc.returncode} "
             f"batch={batch} tail={(proc.stdout or '')[-600:]}")
-        if proc.returncode != 0:
-            logger.warning(
-                f"[scheduler] archive_nontradable 非 0 退出 batch={batch} "
-                f"stderr={(proc.stderr or '')[-800:]}")
+        _require_subprocess_success(proc, "archive_nontradable")
     except subprocess.TimeoutExpired:
         logger.warning("[scheduler] archive_nontradable timeout>7200s")
+        raise
     except Exception:  # noqa: BLE001
         logger.exception("[scheduler] archive_nontradable failed")
+        raise
 
 
 def _inventory_job() -> None:

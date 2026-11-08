@@ -43,7 +43,7 @@ import re
 import sys
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
@@ -302,6 +302,44 @@ def _c_equity_fresh(c: Ctx) -> tuple[bool, str, str, str]:
         "" if days <= 7 else "权益流停更 → 熔断读的是过期曲线，回撤判断失真")
 
 
+# ---------------------------------------------------------------- 交易日历
+def _c_calendar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """官方交易日历必须覆盖到「已有数据的最新日」。
+
+    CL-20261107-18：``l3_ref.trade_calendar`` 是 R2 推断表，只有 ``exchange='INF'``
+    且止于 2026-10-08；``extend_index_8888.py`` 却按六家真实交易所查它，导致
+    「整天零合约行」的坏日门恒空、从上线起就是死代码。真源是 ``futures_rule``
+    的 distinct trade_date（akshare futures_rule 播种）+
+    ``cfg_calendar_seed_meta.seeded_through``，由 ``seed_futures_rule`` 每日 08:00 刷新。
+
+    断言只看此刻：日历覆盖上界 vs L0 continuous 层最新数据日。容差 1 天是因为
+    周五夜盘会跨到周六凌晨（``ts::date`` 落在周六，但日历里周六不是交易日），
+    不留这 1 天会每个周一都误报。窗口化查询，禁止对 l0_raw 全表聚合。
+    """
+    seeded = c.scalar(
+        "SELECT value FROM cfg_calendar_seed_meta WHERE key='seeded_through'")
+    cal_max = c.scalar("SELECT max(trade_date) FROM futures_rule")
+    l0_day = c.scalar(
+        "SELECT max(ts)::date FROM l0_raw.minute_bar "
+        "WHERE layer='continuous' AND ts >= now() - interval '14 days'")
+    try:
+        st = date.fromisoformat(str(seeded)[:10]) if seeded else None
+    except ValueError:
+        st = None
+    if st is None or cal_max is None or l0_day is None:
+        return False, "官方日历覆盖到 L0 最新数据日", (
+            f"seeded={seeded} cal_max={cal_max} l0={l0_day}"), (
+            "日历真源缺失 → extend_index_8888 的坏日门无法判定，"
+            "先跑 scripts/seed_futures_rule.py")
+    cover = max(st, cal_max)
+    lag = (l0_day - cover).days
+    ok = lag <= 1
+    return ok, "官方日历覆盖到 L0 最新数据日（容差 1 天跨夜盘）", (
+        f"seeded={st} cal_max={cal_max} l0={l0_day} lag={lag}d"), (
+        "" if ok else
+        f"官方日历落后 {lag} 天 → 指数扩展的坏日门会静默失效（CL-20261107-18）")
+
+
 # ---------------------------------------------------------------- 运行态一致性
 def _c_switch_job_consistency(c: Ctx) -> tuple[bool, str, str, str]:
     """代码开关（cfg_feature_switch）与字典开关（ops.scheduled_task）必须同向。
@@ -364,6 +402,7 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-SCOPE-WIRED", "口径被 L1/L2/视图真实引用", "block", _c_scope_wired),
     ("VAR-SCOPE-VIEW-OK", "口径视图存在、非空、覆盖白名单", "block", _c_scope_view_healthy),
     ("DATA-L0-LAYERS-FRESH", "L0 各 layer 未断层", "block", _c_l0_layers_fresh),
+    ("DATA-CALENDAR-FRESH", "官方交易日历覆盖到最新数据日", "block", _c_calendar_fresh),
     # warn 而非 block：录权益是运营动作，且调度器已有每日一条 pushplus 提醒，
     # 守卫再报 block 只会重复轰炸。挂账后变 WAIVED，录满 20 天自动转 PASS。
     ("DATA-EQUITY-FRESH", "组合权益流新鲜", "warn", _c_equity_fresh),

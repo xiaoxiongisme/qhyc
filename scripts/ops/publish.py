@@ -27,8 +27,27 @@ fast-forward 失败，只能 `git checkout --` 丢弃再拉。表面上补救了
      因为 pull 只会有两种结局：失败，或者把改动悄悄带进下一次提交。
   5. 生产：``git pull --ff-only``
   6. 比对两端 ``rev-parse HEAD`` 完全一致
-  7. 若本次改动命中 ``app/`` → 重启 ``qhyc-scheduler``；命中 ``migrations/`` → 提示
+  7. 若本次改动命中 ``app/`` → **双重启**：``qhyc-scheduler``（systemd）+
+     ``qhyc-api``（docker 容器）；命中 ``migrations/`` → 提示
      （迁移**不自动执行**：DDL 必须人看一眼再 apply，这是刻意的）
+  8. 写部署标记 ``.deployed_sha``（供一致性守卫 C5 校验），并复核容器健康
+
+★ 为什么要双重启（CL-20261107-17，2026-11-08 实证）
+--------------------------------------------------
+只重启 scheduler 会让 ``qhyc-api`` 常驻服务继续跑**上一次进程加载的旧代码**：
+实测容器 11-06 14:32 启动、无 reload，而 11-07 起 ``app/`` 有 13 次提交；
+宿主与容器内文件 sha1 完全一致（文件同步了），但进程没重载。这类漂移
+``git status`` / 文件哈希都看不见，只有比对「进程启动时间 vs 代码落盘时间」才行。
+
+★ 重启前必须检查 bind mount 源路径（2026-11-08 真实事故）
+--------------------------------------------------------
+第一次执行 ``docker restart qhyc-api`` 直接失败并把容器留在 Exited：
+宿主 ``/Docker/qhyc/conftest.py`` 被误建成**空目录**（11-07 22:26），
+而 compose 要求它是文件 → runc ``not a directory``。容器 11-06 启动时
+该目录还没出现，所以一直没暴露，直到这次重启才炸。已从镜像
+``qhyc:latest:/app/conftest.py`` 取回副本恢复。
+因此发布脚本在重启前先做挂载点体检，缺失/类型错就**中止并给出指引**，
+绝不在生产留下 Exited 容器。
 
 退出码：0=已一致；1=检查未通过/中止；2=执行失败。
 """
@@ -44,6 +63,17 @@ BRANCH = "cb/dev"
 PROD_HOST = "qhyc"
 PROD_REPO = "/Docker/qhyc"
 SCHED_SVC = "qhyc-scheduler"
+API_CONTAINER = "qhyc-api"
+API_IMAGE_FALLBACK = "qhyc:latest"
+DEPLOY_MARK = ".deployed_sha"  # 生产仓库根，untracked；守卫 C5 读它
+
+#: compose 里 bind 到**单个文件**的挂载（源路径 basename 带扩展名）。
+#: 这些路径若被误建成目录，docker restart 会直接失败并把容器留在 Exited。
+#: 用 docker inspect 动态取全量 bind 源也行，但这里显式列出便于人核对与告警。
+FILE_BINDS = [
+    "/Docker/qhyc/conftest.py",
+    "/Docker/qhyc/pytest.ini",
+]
 
 
 def _run(cmd: list[str], cwd: Path | None = None, check: bool = True,
@@ -65,6 +95,36 @@ def _banner(t: str) -> None:
     print(f"\n=== {t} ===")
 
 
+def _api_preflight() -> list[str]:
+    """重启 qhyc-api 之前的体检，返回问题描述列表。
+
+    2026-11-08 事故：宿主 ``conftest.py`` 被误建成空目录，``docker restart``
+    直接把容器留在 Exited（runc ``not a directory``）。这类问题在**重启前**
+    就能查出来，绝不该等到容器起不来才发现。
+    """
+    bad: list[str] = []
+    state = _ssh(
+        f"docker inspect {API_CONTAINER} --format '{{{{.State.Status}}}}'",
+        check=False).strip()
+    if state != "running":
+        bad.append(f"{API_CONTAINER} 状态={state!r}（非 running，先人工恢复再发布）")
+
+    fmt = '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}{{println}}{{end}}{{end}}'
+    srcs = _ssh(f"docker inspect {API_CONTAINER} --format '{fmt}'",
+                check=False).strip().splitlines()
+    for p in [s.strip() for s in srcs if s.strip()]:
+        kind = _ssh(
+            f"if [ -f {p} ]; then echo F; elif [ -d {p} ]; then echo D; "
+            f"else echo M; fi", check=False).strip()
+        if kind == "M":
+            bad.append(f"bind 源缺失：{p}")
+        elif "." in Path(p).name and kind != "F":
+            bad.append(
+                f"bind 源应为普通文件却是目录：{p}（docker restart 会报 "
+                f"not a directory；可从 {API_IMAGE_FALLBACK}:/app/<同名> 取回副本）")
+    return bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("-m", "--message", help="提交信息（给出则执行 git add -A + commit）")
@@ -72,6 +132,8 @@ def main() -> int:
     ap.add_argument("--allow-dirty", action="store_true",
                     help="允许本地有未提交改动（只推送已有提交；不推荐）")
     ap.add_argument("--no-restart", action="store_true", help="即使改了 app/ 也不重启")
+    ap.add_argument("--emergency-skip-api", action="store_true",
+                    help="M5 紧急通道：只重启 scheduler，跳过 api（必须 24h 内补台账登记）")
     ap.add_argument("--branch", default=BRANCH)
     a = ap.parse_args()
 
@@ -165,6 +227,22 @@ def main() -> int:
             return 1
     print("干净")
 
+    # ---- 4.5) 重启前置体检：放在 pull 之前，失败时生产工作树完全没动 ----
+    # 2026-11-08 事故：宿主 conftest.py 是空目录 → docker restart 把 api 留在
+    # Exited。若等到第 6 步才重启才发现，代码已经 pull 了，生产处于「新代码 +
+    # 服务离线」的最差状态。
+    _banner("4.5 生产容器可重启性")
+    pre = _api_preflight()
+    if pre:
+        print("✗ qhyc-api 重启前置检查未通过（尚未 pull，生产工作树未改动）：")
+        for x in pre:
+            print(f"   - {x}")
+        print("  修好挂载点后再发布。取回文件副本：")
+        print(f"    docker run --rm --entrypoint cat {API_IMAGE_FALLBACK} "
+              f"/app/conftest.py > /Docker/qhyc/conftest.py")
+        return 1
+    print("容器 running，bind 挂载源齐全且类型正确")
+
     # ---- 5) 拉取 + 比对 ----
     _banner("5/6 生产 pull")
     changed = _ssh(f"cd {PROD_REPO} && "
@@ -212,19 +290,39 @@ def main() -> int:
     touched_app = [f for f in files if f.startswith("app/")]
     touched_mig = [f for f in files if f.startswith("migrations/")]
     if touched_app and not a.no_restart:
-        print(f"app/ 有 {len(touched_app)} 个文件变更 → 重启 {SCHED_SVC}")
+        print(f"app/ 有 {len(touched_app)} 个文件变更 → 双重启 {SCHED_SVC} + {API_CONTAINER}")
         _ssh(f"sudo systemctl restart {SCHED_SVC} && sleep 6 && "
              f"systemctl is-active {SCHED_SVC}")
+        if a.emergency_skip_api:
+            # M5：紧急修复通道。不隐式豁免，必须显式带这个 flag，且打印补登记要求。
+            print(f"⚠ M5 紧急通道生效：跳过 {API_CONTAINER} 重启 → "
+                  "常驻服务仍在跑上一次加载的旧代码")
+            print("  必须在 24h 内在 ops.change_log 补登记并安排重启；"
+                  "次日 09:00 一致性守卫 C4 会报 DRIFT")
+        else:
+            out = _ssh(f"docker restart {API_CONTAINER}", timeout=180).strip()
+            print(f"  {API_CONTAINER} restart -> {out}")
+            st = _ssh(f"docker ps --filter name={API_CONTAINER} --format "
+                      "'{{.Status}}'", check=False).strip()
+            if "Up" not in st:
+                print(f"✗ {API_CONTAINER} 重启后未处于 Up：{st!r}（立刻人工恢复）")
+                return 2
+            print(f"  {API_CONTAINER}: {st}")
     elif touched_app:
-        print("app/ 有变更，但 --no-restart：**生产仍在跑旧代码**，记得手动重启")
+        print(f"app/ 有变更，但 --no-restart：**{API_CONTAINER} 与 {SCHED_SVC} "
+              "仍在跑旧代码**，记得手动双重启")
     else:
-        print("未触及 app/，无需重启调度器")
+        print("未触及 app/，无需重启服务")
     if touched_mig:
         print(f"⚠ migrations/ 有 {len(touched_mig)} 个新迁移，**未自动执行**：")
         for f in touched_mig:
             print(f"    docker exec -w /app -e PYTHONPATH=/app qhyc-api "
                   f"python scripts/db_apply_migrations.py --only {Path(f).name} --apply")
 
+    # 部署标记：C5 用它判断「这次发布是否走完整个通道」。untracked，不影响 C3。
+    _ssh(f"cd {PROD_REPO} && printf '%s %s\\n' {head} \"$(date -u +%FT%TZ)\" "
+         f"> {DEPLOY_MARK}")
+    print(f"部署标记 {DEPLOY_MARK} = {head}")
     print(f"\n✓ 发布完成：本地 = 生产 = GitHub = {head}")
     return 0
 
