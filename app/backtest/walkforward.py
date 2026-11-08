@@ -115,8 +115,9 @@ def run_walk_forward(session, symbols: list[str] | None = None,
     p = params or WalkForwardParams()
     base = base or fusion_params_from_config()
     if symbols is None:
-        from app.core.config import get_settings
-        symbols = [s.symbol for s in get_settings().main_contracts]
+        # CL-20261108-12：OOS 品种池同样严格取 38 白名单，不用 main_contracts(50+)
+        from app.data.tradable_scope import load_tradable_pool
+        symbols = [f"{v}888" for v in sorted(load_tradable_pool(session))]
 
     if start is None or end is None:
         start, end = _data_range(session, symbols, base.src)

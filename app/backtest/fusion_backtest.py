@@ -29,6 +29,7 @@ from sqlalchemy import select, text
 from app.contracts.execution import fill_price as _contract_fill_price
 from app.core.config import get_settings
 from app.core.logging import logger
+from app.data.tradable_scope import load_tradable_pool, variety_of
 from app.models import HourlyBar
 from app.strategies.fusion_signal import walk_fusion_states
 
@@ -532,6 +533,26 @@ def _jittered_params(p: FusionBacktestParams, seed: int, jitter: float) -> Fusio
     return q
 
 
+def _validate_backtest_symbols(symbols: list[str],
+                               pool: frozenset[str]) -> list[str]:
+    """纯函数：回测品种池必须是 38 白名单（CL-20261108-12，用户 19:48 拍板）。
+
+    ``pool`` 为大写品种码集合。非白名单 symbol 一律**拒绝执行**（不静默跳过），
+    否则「少跑了几个品种」会伪装成一份正常的回测报告。持仓豁免品种
+    （B/J/LH/NI）只保留在数据链路供存量持仓止损，**不进回测池**。
+
+    写成零 DB 纯函数是为了让守卫能做行为级断言（BT-POOL-IN-WHITELIST）。
+    """
+    allowed = {v.upper() for v in pool}
+    bad = [s for s in symbols if variety_of(s).upper() not in allowed]
+    if bad:
+        raise ValueError(
+            f"回测品种不在 38 可交易白名单内，拒绝执行：{bad}。"
+            f"允许 {len(allowed)} 个品种；口径真源 l3_ref.tradable_variety"
+            "（CL-20261108-12）")
+    return list(symbols)
+
+
 def run_fusion_backtest(session, symbols: list[str] | None = None,
                         params: FusionBacktestParams | None = None,
                         start: date | None = None, end: date | None = None,
@@ -542,12 +563,19 @@ def run_fusion_backtest(session, symbols: list[str] | None = None,
     seeds：非空则对每个 seed 跑一遍（用 seed_jitter 扰动），最终指标取均值。
     include_trades：True 时额外返回逐笔成交 `trades`（walk-forward / 六项检查需要）。
     默认 False —— 保持既有 API 返回体不变（避免逐笔数据放大响应体）。
+
+    ★ 品种池（CL-20261108-12）：默认取 ``l3_ref.tradable_variety`` 的 38 个
+      白名单主连，**不再用** ``settings.main_contracts``（50+，含非白名单）。
+      显式传入的 symbols 会被逐个校验，非白名单直接抛 ValueError。
+      读不到白名单时 fail-closed，宁可不跑也不跑错池。
     """
-    settings = get_settings()
     if params is None:
         params = fusion_params_from_config()
+    pool = load_tradable_pool(session)
     if symbols is None:
-        symbols = [s.symbol for s in settings.main_contracts]
+        symbols = [f"{v}888" for v in sorted(pool)]
+    else:
+        symbols = _validate_backtest_symbols(symbols, pool)
     all_trades: list[dict] = []
     per_symbol: list[dict] = []
     skipped: list[str] = []
@@ -594,9 +622,9 @@ def run_fusion_matrix(session, symbols: list[str] | None = None,
 
     grid 形如 {"src": [...], "sl_atr": [...], "trail_atr": [...]}
     """
-    settings = get_settings()
     if symbols is None:
-        symbols = [s.symbol for s in settings.main_contracts[:10]]  # 矩阵默认抽样 10 品种控时
+        # 矩阵默认抽样 10 品种控时；池严格取 38 白名单（CL-20261108-12）
+        symbols = [f"{v}888" for v in sorted(load_tradable_pool(session))][:10]
     grid = grid or {
         "src": ["akshare"],
         "sl_atr": [1.5, 2.0, 2.5],
@@ -629,7 +657,7 @@ if __name__ == "__main__":
     from app.core.db import session_scope
 
     with session_scope() as s:
-        r = run_fusion_backtest(s, symbols=["FG888", "RB888", "CU888"],
+        r = run_fusion_backtest(s, symbols=["FG888", "RB888", "MA888"],
                                 start=date(2025, 1, 1), end=date(2026, 9, 1))
         print("n_trades=", r["n_trades"], "win_rate=", r["win_rate"],
               "total_return_pct=", r["total_return_pct"], "max_dd=", r["max_drawdown_pct"])

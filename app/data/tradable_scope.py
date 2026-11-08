@@ -139,3 +139,60 @@ def where_clause(scope: Scope, symbol_expr: str = "symbol",
 def describe() -> str:
     """给运维/守卫脚本用的一行摘要（不查库）。"""
     return f"口径 = {SCOPE_VIEW}（白名单 ∪ 持仓豁免；开关 tradable_filter_enabled 关闭即全量）"
+
+
+#: 回测/交易池的唯一真源表（**纯白名单，不含持仓豁免**）。
+#: 与 SCOPE_VIEW 的区别见下方 load_tradable_pool 的 docstring。
+TRADABLE_TABLE = "l3_ref.tradable_variety"
+
+
+def load_tradable_pool(bind: Engine | Session | Connection) -> frozenset[str]:
+    """读取**可交易品种码**（38 个），供回测/研究/交易池使用。
+
+    与 :func:`load_scope` 的两处关键差异（用户 2026-11-08 19:48 拍板）：
+
+    ==================  ==========================  ==========================
+                        load_scope                  load_tradable_pool
+    ==================  ==========================  ==========================
+    集合               白名单 ∪ 持仓豁免（80 sym）  纯白名单（38 品种码）
+    用途               L1/L2 加工、兼容视图          回测 / 研究 / 交易池
+    失败语义           **fail-open**（多派生无害）   **fail-closed**（抛错）
+    ==================  ==========================  ==========================
+
+    为什么这里必须 fail-closed：回测若在口径读不到时悄悄退回
+    ``settings.main_contracts``（50+ 主连，含非白名单品种），就会用错误的
+    品种池产出结论，而这类错误**看起来完全正常**。宁可不跑，不能跑错池。
+    持仓豁免（B/J/LH/NI）只保留在数据链路供存量持仓拿最新 bar 与止损价，
+    **不进回测与交易池**。
+
+    Returns:
+        ``frozenset`` of 大写品种码，如 ``{"A", "AO", ..., "Y"}``。
+
+    Raises:
+        RuntimeError: 视图/表读取异常或有效白名单为空。
+    """
+    sql = text(
+        f"SELECT upper(variety_code) FROM {TRADABLE_TABLE} "
+        "WHERE effective_from <= current_date "
+        "  AND (effective_to IS NULL OR effective_to > current_date)")
+    try:
+        if isinstance(bind, Session):
+            rows = bind.execute(sql)
+        elif isinstance(bind, Connection):
+            rows = bind.execute(sql)
+        else:  # Engine
+            with bind.connect() as conn:
+                codes = frozenset(r[0] for r in conn.execute(sql))
+                if not codes:
+                    raise RuntimeError("有效白名单为空")
+                return codes
+        codes = frozenset(r[0] for r in rows)
+    except RuntimeError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"可交易白名单 {TRADABLE_TABLE} 读取失败 → 回测拒绝执行（fail-closed）: "
+            f"{type(exc).__name__}: {exc}") from exc
+    if not codes:
+        raise RuntimeError(f"有效白名单 {TRADABLE_TABLE} 为空 → 回测拒绝执行")
+    return codes

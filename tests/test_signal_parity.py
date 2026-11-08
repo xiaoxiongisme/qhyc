@@ -270,6 +270,36 @@ def test_e1c_exit_ignores_gap():
     assert tr[0]["exit_px"] == pytest.approx(100.0)    # O[5]=101 - 1tick
 
 
+# ---------------------------------------------------------------------------
+# 7) 回测品种池严格 38 白名单（CL-20261108-12，零 DB）
+# ---------------------------------------------------------------------------
+_POOL = frozenset({"RB", "FG", "MA"})
+
+
+def test_backtest_pool_accepts_whitelist_symbols():
+    from app.backtest.fusion_backtest import _validate_backtest_symbols
+
+    syms = ["RB888", "FG8888", "MA888"]
+    assert _validate_backtest_symbols(syms, _POOL) == syms
+
+
+@pytest.mark.parametrize("sym", ["B888", "CS888", "J888", "CU888", "RB2601"])
+def test_backtest_pool_rejects_out_of_scope(sym):
+    """封禁品种 / 持仓豁免 / 具体合约码一律拒绝，不静默跳过。"""
+    from app.backtest.fusion_backtest import _validate_backtest_symbols
+
+    with pytest.raises(ValueError, match="38 可交易白名单"):
+        _validate_backtest_symbols([sym], _POOL)
+
+
+def test_backtest_pool_rejection_is_all_or_nothing():
+    """一批里混入 1 个非白名单 → 整批拒绝，不能只跑合法的几个。"""
+    from app.backtest.fusion_backtest import _validate_backtest_symbols
+
+    with pytest.raises(ValueError, match="B888"):
+        _validate_backtest_symbols(["RB888", "B888", "MA888"], _POOL)
+
+
 def test_e1c_close_baseline_ignores_gap():
     """显式 close 时过滤不生效，老基线成交价仍为信号根收盘（逐位零回归）。"""
     tr = _e1c_run(_SEG, {2: 101.0}, fill_mode="close")

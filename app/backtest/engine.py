@@ -503,9 +503,10 @@ def backtest_symbols(
     skip_existing: bool = False,
 ) -> list[dict]:
     """多品种回测（skip_existing：断点续跑，跳过 run 内已完成品种）"""
-    settings = get_settings()
     if not symbols:
-        symbols = [s.symbol for s in settings.main_contracts]
+        # CL-20261108-12：多品种回测默认池严格取 38 白名单
+        from app.data.tradable_scope import load_tradable_pool
+        symbols = [f"{v}888" for v in sorted(load_tradable_pool(session))]
     run_id = run_id or f"{datetime.now(TZ):%Y%m%d_%H%M%S}_bt"
     results = []
     for sym in symbols:

@@ -1041,6 +1041,94 @@ def _c_bt_gap_filter_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。E1-C 跳空过滤被回退或改坏，融合回测口径不可信（CL-20261108-15）")
 
 
+def _c_bt_pool_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-12（用户 19:48 拍板）：回测池严格 38 白名单，其余不放行。
+
+    三层都是「此刻的行为」，不看历史流水：
+      · 行为级：白名单 symbol 放行，B888 / CU888 / J888 / 合约码一律拒绝；
+      · AST 真实引用：run_fusion_backtest 必须调用 load_tradable_pool +
+        _validate_backtest_symbols，且不得再读 settings.main_contracts
+        （防「表建了没人读」——qhyc 最隐蔽的失效模式）；
+      · 生产口径：有效白名单 30~45 个且不含持仓豁免品种；同时
+        v_tradable_scope 必须仍含 B888/J888/LH888/NI888 四个持仓豁免，
+        防有人为「严格不放行」把存量持仓的 bar 与止损价一起停掉。
+    """
+    label = "回测品种池严格 38 白名单（持仓豁免只留数据链路）"
+    try:
+        import ast
+        from pathlib import Path
+        from app.backtest import fusion_backtest as fb
+        from app.data.tradable_scope import load_tradable_pool
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "回测/口径模块不可导入 → 品种池断言不可用（CL-20261108-12）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+    pool = frozenset({"RB", "FG", "MA"})
+
+    try:
+        got = fb._validate_backtest_symbols(["RB888", "FG8888"], pool)
+        observed.append(f"accepted={len(got)}")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"白名单 symbol 被误拒：{type(exc).__name__}: {exc}")
+    for sym in ("B888", "CU888", "J888", "RB2601"):
+        try:
+            fb._validate_backtest_symbols([sym], pool)
+            bad.append(f"非白名单 {sym} 未被拒绝（会静默跑错品种池）")
+        except ValueError:
+            observed.append(f"rejected={sym}")
+
+    try:
+        src = (Path(__file__).resolve().parents[2] / "app" / "backtest"
+               / "fusion_backtest.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        fn = next(nd for nd in tree.body
+                  if isinstance(nd, ast.FunctionDef)
+                  and nd.name == "run_fusion_backtest")
+        called = {nd.func.id for nd in ast.walk(fn)
+                  if isinstance(nd, ast.Call) and isinstance(nd.func, ast.Name)}
+        attrs = {nd.attr for nd in ast.walk(fn) if isinstance(nd, ast.Attribute)}
+        observed.append(f"wired={'load_tradable_pool' in called}"
+                        f"/{'_validate_backtest_symbols' in called}")
+        if "load_tradable_pool" not in called or "_validate_backtest_symbols" not in called:
+            bad.append("回测入口未真实引用白名单加载/校验函数（表建了没人读）")
+        if "main_contracts" in attrs:
+            bad.append("回测入口仍读 settings.main_contracts（50+ 含非白名单）")
+        # OOS 与旧多品种引擎同样不得绕过：否则 B1 / V5X.3 的 OOS 会跑错池
+        root = Path(__file__).resolve().parents[2]
+        for rel in ("app/backtest/walkforward.py", "app/backtest/engine.py"):
+            t2 = ast.parse((root / rel).read_text(encoding="utf-8"))
+            a2 = {nd.attr for nd in ast.walk(t2) if isinstance(nd, ast.Attribute)}
+            if "main_contracts" in a2:
+                bad.append(f"{rel} 仍读 settings.main_contracts")
+        observed.append("other_bt_entries=clean")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"源码 AST 检查失败：{type(exc).__name__}: {exc}")
+
+    try:
+        live = load_tradable_pool(c.session)
+        observed.append(f"live_pool={len(live)}")
+        if not 30 <= len(live) <= 45:
+            bad.append(f"有效白名单 {len(live)} 个，偏离 38 口径")
+        leaked = sorted({"B", "CS", "J", "LH", "NI"} & set(live))
+        if leaked:
+            bad.append(f"封禁/持仓豁免品种混入白名单池：{leaked}")
+        rows = c.rows(
+            "SELECT symbol FROM l3_ref.v_tradable_scope "
+            "WHERE symbol IN ('B888','J888','LH888','NI888')")
+        exempt = {r[0] for r in rows}
+        observed.append(f"scope_exempt={len(exempt)}")
+        if len(exempt) < 4:
+            bad.append("持仓豁免被一刀切停派生 → 存量持仓拿不到 bar 与止损价")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"生产口径查询失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。回测品种池偏离 38 白名单或持仓豁免被误停，结论不可信（CL-20261108-12）")
+
+
 def _c_bt_walkforward_same_source(c: Ctx) -> tuple[bool, str, str, str]:
     """P2-3 E2 / CL-20261108-13：walk-forward 的日期范围必须来自唯一 K 线真源。
 
@@ -1503,6 +1591,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
      "block", _c_bt_walkforward_same_source),
+    # CL-20261108-12 / 用户 19:48 拍板：38 白名单是回测与交易池唯一口径。
+    # 行为级拒绝非白名单 + AST 真实引用 + 持仓豁免仍在数据链路，三面防漂移。
+    ("BT-POOL-IN-WHITELIST", "回测品种池严格 38 白名单（持仓豁免只留数据链路）",
+     "block", _c_bt_pool_in_whitelist),
 ]
 
 
