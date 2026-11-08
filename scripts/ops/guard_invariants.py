@@ -412,6 +412,59 @@ def _c_mem_caliber(c: Ctx) -> tuple[bool, str, str, str]:
         "回退到 /proc/meminfo → 分母变成宿主机总内存，服务/容器级内存上限永远告警不到")
 
 
+# ------------------------------------------------------------ 回测批次完整性
+def _c_bt_run_complete(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-02：最新回测 run 必须是完整整批，或仍处于活跃写入中。
+
+    2026-11-08 事故：B0 全量回测跑在 qhyc-api 容器内，被一次「消除 C4 漂移」
+    的容器重启误杀，停在 16/50 品种。系统里没有任何断言或告警能发现，
+    全靠人工挂的只读轮询 65 分钟才定位。更关键的是
+    ``app/backtest/weights.py::update_model_weights`` 默认取
+    「n_sym >= min_symbols_in_run(=10) 且 created_at 最新」的 run ——
+    16 个品种的半成品足以冒充整批，直接污染模型权重月更。
+
+    判据只衡量此刻，不看历史流水：
+      · 参考规模 = 近 90 天所有 run 的最大 symbol 数（自适应，不硬编码 50）；
+      · 最新 run 的 n_sym >= 0.8 × 参考规模 → 完整，PASS；
+      · 否则若最后一笔写入距今 < 2 小时 → 仍在跑，PASS（不打扰进行中的回测）；
+      · 否则 → 停滞的半成品，FAIL。
+    代价：手工单品种验证 run 若成为最新 run 且超过 2 小时，会报 warn。
+    这是刻意保留的——它同样会让权重月更取错 run，属于真实风险。
+    只查 backtest_result（小表），不触碰 l0_raw 全表。
+    """
+    rows = c.rows("""
+        WITH runs AS (
+            SELECT run_id, count(DISTINCT symbol) AS n_sym,
+                   max(created_at) AS last_at
+            FROM public.backtest_result
+            WHERE created_at >= now() - interval '90 days'
+            GROUP BY run_id
+        ), ref AS (SELECT max(n_sym) AS n_max FROM runs)
+        SELECT r.run_id, r.n_sym, r.last_at, f.n_max,
+               extract(epoch FROM now() - r.last_at) / 3600.0 AS idle_h
+        FROM runs r CROSS JOIN ref f
+        ORDER BY r.last_at DESC LIMIT 1
+    """)
+    expected = "最新回测 run 为完整整批，或仍在活跃写入（<2h）"
+    if not rows:
+        return False, expected, "近 90 天无任何回测 run", (
+            "周度回测链路从未产出结果，检查 _backtest_weekly_job")
+    run_id, n_sym, last_at, n_max, idle_h = rows[0]
+    n_sym = int(n_sym or 0)
+    threshold = int((n_max or 0) * 0.8)
+    idle_h = float(idle_h or 0)
+    complete = threshold > 0 and n_sym >= threshold
+    active = idle_h < 2.0
+    ok = complete or active
+    state = "完整整批" if complete else ("写入中" if active else "停滞半成品")
+    return ok, expected, (
+        f"run={run_id} n_sym={n_sym}/{n_max} (门槛{threshold}) "
+        f"last={last_at} idle={idle_h:.2f}h state={state}"), (
+        "" if ok else
+        "最新 run 是停滞的半成品 → update_model_weights 会把它当整批用于权重月更；"
+        "确认回测进程是否被中断，必要时整批重跑并清理半成品批次")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -433,6 +486,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("OPS-SIGNAL-WRITER-UNIQUE", "融合信号单一写入方", "warn", _c_signal_writer_unique),
     ("OPS-WEEKLY-DOW", "周度作业星期语义正确", "warn", _c_weekly_dow),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
+    # warn 而非 block：重跑期间最新 run 天然是半成品，靠「活跃写入 <2h」放行；
+    # 只有停滞超过 2h 才报，正好抓住 CL-20261108-02 的容器重启误杀。
+    ("OPS-BT-RUN-COMPLETE", "最新回测 run 完整或仍在活跃写入", "warn", _c_bt_run_complete),
 ]
 
 
