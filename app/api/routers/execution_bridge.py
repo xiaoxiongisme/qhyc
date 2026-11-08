@@ -184,7 +184,19 @@ def bridge_report(req: ReportReq) -> dict:
     """无限易侧回报成交/拒单/撤单结果。
 
     状态迁移仍走 ``persistence.update_status`` 的校验（非法迁移会被拦住并 400），
-    成交明细写 ``execution_fill``，持仓由 ``upsert_position`` 维护。
+    成交明细写 ``execution_fill``。
+
+    ★ 持仓回写：2026-11-08 订正（CL-20261108-26）
+    ------------------------------------------------
+    旧注释写「持仓由 ``upsert_position`` 维护」——**代码从未做过这件事**。
+    真实情况是：本接口只落 ``execution_fill``，``execution_position`` 一直没人写，
+    于是「桥报成交 / 台账不动」静默漂移了很久。
+
+    现在持仓回写统一收口到 :mod:`app.execution.position_sync`，开关
+    ``position_sync_enabled`` **默认 false**（用户拍板暂时不做）。因此：
+      * 开关关闭（当前）：成交照常记账，响应里 ``position_sync.applied=false``
+        并给出原因 —— **是可观测的「未同步」，不是假装成功**；
+      * 开关开启（后期）：成交后滚动 ``execution_position``。
     """
     # 延迟导入：避免在中途依赖循环（persistence 用 app.core.db）
     from app.execution import persistence
@@ -212,6 +224,7 @@ def bridge_report(req: ReportReq) -> dict:
                 "reason": f"状态迁移被拒（幂等）：{e}"}
 
     fill_warning = None
+    sync_result: dict[str, Any] = {"applied": False, "reason": "no_fill"}
     if status in ("PARTIAL", "FILLED") and req.filled_lots > 0:
         # save_fill 要求显式 broker_fill_id（UNIQUE(order_id, broker_fill_id) 做幂等）；
         # 无限易侧若未提供成交号，用 broker_order_id + 手数+均价合成，保证重复推送不重复记账。
@@ -230,15 +243,32 @@ def bridge_report(req: ReportReq) -> dict:
         except Exception as e:
             fill_warning = "成交明细未落 execution_fill：{0!r}".format(e)
             return {"ok": False, "order_id": req.order_id, "action": "status_only",
-                    "warning": fill_warning}
+                    "warning": fill_warning,
+                    "position_sync": {"applied": False, "reason": "fill_not_saved"}}
+
+        # 成交已可靠落库之后才允许动持仓 —— 顺序不能反：持仓是成交的派生，
+        # 成交都没记上就改持仓，等于凭一个没落地的回报改了台账。
+        from app.execution import position_sync
+
+        sync_result = position_sync.sync_from_fill(
+            real_symbol=str(order.get("real_symbol") or ""),
+            action=str(order.get("action") or ""),
+            direction=str(order.get("direction") or ""),
+            fill_lots=int(req.filled_lots),
+            fill_price=float(req.avg_price) if req.avg_price else None,
+            channel=str(order.get("channel") or "SIM"),
+            account=order.get("account"),
+        ).as_dict()
 
     return {"ok": True, "order_id": req.order_id, "action": "updated", "status": status,
-            "fill_warning": fill_warning}
+            "fill_warning": fill_warning, "position_sync": sync_result}
 
 
 # ------------------------------------------------------------------ health
 @router.get("/bridge/health", tags=["execution-bridge"])
 def bridge_health() -> dict:
+    from app.execution.position_sync import status as position_sync_status
+
     with session_scope() as s:
         pending = s.execute(
             text("SELECT count(*) FROM execution_order WHERE status = 'NEW'")
@@ -251,6 +281,7 @@ def bridge_health() -> dict:
         "healthy": True,
         "pending": int(pending),
         "in_flight": int(open_rows),
+        "position_sync": position_sync_status(),
         "note": "qhyc 侧桥接就绪；下一环是无限易 PythonGO 侧 QhycBridge 轮询",
     }
 

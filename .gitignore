@@ -134,3 +134,19 @@ docs/_swing_out/
 # 仅 docs/期货量化交易系统PRD.md 作为唯一权威需求文档入库
 # =====================================================
 docs/archive/
+
+# =====================================================
+# 生产热修复时留下的备份副本（2026-11-07/08 事故期间手工生成）
+# 例：app/core/config.py.bak_p0_20261107 —— 这些是「改前快照」，不是源码。
+# 不入 git 但**也不删**（回滚还要用），只让 git status 恢复干净：
+# 生产上 git status 必须为空是发布脚本 publish.py 的硬性前置条件，
+# 一堆 .bak 常驻会让它每次都要人肉确认「这些脏文件是不是又绕过通道了」。
+# =====================================================
+*.bak
+*.bak_*
+*.bak_*_*
+
+# 脚本抓取/生成的费率快照（db/seed 下由 rebuild_dict_from_akshare.py /
+# sync_cost_from_exchange.py 运行时写入；本地没有、生产有，属生成物不入库）
+db/seed/ak_futures_fees_variety.csv
+db/seed/czce_official_fees.csv

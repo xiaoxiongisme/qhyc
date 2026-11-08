@@ -2446,18 +2446,25 @@ def _c_loguru_fmt_braces(c: Ctx) -> tuple[bool, str, str, str]:
     关键前提：**只检查 loguru 的调用方**。本项目同时存在标准库 ``logging``
     （``logger = logging.getLogger(__name__)``），那里 ``%s`` 是正确写法 ——
     盲改会把对的改坏（首版台账把 23 处标准库用法误计为缺陷，已订正）。
+
+    ★ 2026-11-08 修守卫本身的漏检（CL-20261108-26 收尾时发现）：
+      旧实现逐行跑正则，**跨行拼接的调用全部漏掉**——``logger.warning(\\n
+      "第一段"\\n "（候选=%s）..."\\n, keys)`` 在这类写法下匹配不到，于是
+      上一轮「已修复 4 处」其实还剩 6 处没修，而守卫一直 PASS。
+      现改用 **AST**：隐式字符串拼接在 AST 里已合并成一个 Constant，跨行天然覆盖；
+      并且只在**存在额外位置参数**时才判为「丢值」（单条消息里的 ``%`` 只是文本）。
     """
+    import ast
+
     label = "loguru 调用不得使用 % 占位符（标准库 logging 不在此列）"
     bad: list[str] = []
     observed: list[str] = []
+    _METHODS = ("info", "warning", "error", "debug", "exception", "critical", "trace")
     try:
-        import re
-        from pathlib import Path
+        import re as _re
 
         root = Path(__file__).resolve().parents[2]
-        call = re.compile(
-            r'logger\.(?:info|warning|error|debug|exception|critical|trace)\(\s*"([^"]*)"')
-        pct = re.compile(r"%[-+ 0#]*\d*(?:\.\d+)?[sdfr]")
+        pct = _re.compile(r"%[-+ 0#]*\d*(?:\.\d+)?[sdfr]")
         marks = ("from app.core.logging import", "from loguru import")
         n_loguru = n_std = 0
         for p in list((root / "app").rglob("*.py")) + list((root / "scripts").rglob("*.py")):
@@ -2467,16 +2474,33 @@ def _c_loguru_fmt_braces(c: Ctx) -> tuple[bool, str, str, str]:
                 continue
             is_loguru = any(m in txt for m in marks) or \
                 p.as_posix().endswith("app/core/logging.py")
-            for i, line in enumerate(txt.splitlines(), 1):
-                m = call.search(line)
-                if not m:
+            try:
+                tree = ast.parse(txt)
+            except SyntaxError:
+                continue
+            rel = p.relative_to(root).as_posix()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
                     continue
-                fmt = m.group(1)
+                fn = node.func
+                if not (isinstance(fn, ast.Attribute) and fn.attr in _METHODS):
+                    continue
+                if not (isinstance(fn.value, ast.Name) and fn.value.id == "logger"):
+                    continue
+                if not node.args:
+                    continue
+                first = node.args[0]
+                if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+                    continue
+                fmt = first.value
                 if not pct.search(fmt) or "%(" in fmt:
                     continue
                 if is_loguru:
-                    n_loguru += 1
-                    bad.append(f"{p.relative_to(root)}:{i} 用 % 占位符")
+                    # 只有「既有 % 占位符、又传了额外参数」才会真的丢值
+                    if len(node.args) > 1:
+                        n_loguru += 1
+                        bad.append(f"{rel}:{node.lineno} 用 % 占位符并丢了 "
+                                   f"{len(node.args) - 1} 个参数")
                 else:
                     n_std += 1
         observed.append(f"loguru_bad={n_loguru}")
@@ -2566,6 +2590,145 @@ def _c_ops_push_pnl_wired(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " ".join(observed), (
         "" if not bad else "；".join(bad)
         + "。推送盈亏金额接线不完整或契约被跳过（CL-20261108-18）")
+
+
+def _c_position_sync_single_entry(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-26：写实盘持仓只允许有一条路。
+
+    2026-11-08 事故形状：``upsert_position`` 有两个同名实现（一个写
+    ``execution_position``、一个写 ``fusion_position``），``apply_fill`` 零调用方，
+    ``bridge_report`` 的注释却声称持仓已被维护。**没有一处报错**，因为「没接线」
+    本身不会抛异常 —— 只有断言能发现。
+
+    断言（此刻可判，不查历史流水）：
+      · 写 ``execution_position`` 的调用（``persistence.upsert_position(``，或
+        文件内已 import ``app.execution.persistence`` 后的裸调用）只能出现在
+        ``app/execution/position_manager.py`` 与 ``app/execution/position_sync.py``；
+      · ``apply_fill(`` 的调用点只能出现在 ``position_sync.py``；
+      · 两者都不许出现在 ``app/api/`` / ``app/scheduler.py`` / ``app/strategies/``
+        —— 接口层和策略层直接写持仓正是要收口掉的东西。
+
+    ⚠ 必须区分两个同名函数（这是本断言最容易写错的地方）：
+      ``app.execution.persistence.upsert_position`` 写 **execution_position**（实盘持仓），
+      ``app.strategies.fusion_signal.upsert_position`` 写 **fusion_position**（V3.4
+      策略意图台账）。后者是策略内部状态机，不属本次收口范围 —— 首版断言没区分，
+      把 scheduler 里两处 fusion 台账写入误判成违规。
+    """
+    label = "写实盘持仓只有 position_sync 一个业务入口（CL-20261108-26）"
+    root = Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    observed: list[str] = []
+
+    allow_upsert = {"app/execution/position_manager.py",
+                    "app/execution/position_sync.py"}
+    allow_apply = {"app/execution/position_sync.py"}
+    hits_upsert: list[str] = []
+    hits_apply: list[str] = []
+
+    for p in list((root / "app").rglob("*.py")):
+        rel = p.relative_to(root).as_posix()
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        # 该文件是否把 execution 层持仓写函数带进了命名空间
+        touches_exec_pos = (
+            "from app.execution import persistence" in txt
+            or "from app.execution.persistence import" in txt
+            or "app.execution.position_manager" in txt
+        )
+        for i, line in enumerate(txt.splitlines(), 1):
+            s = line.strip()
+            if s.startswith("def ") or s.startswith("#"):
+                continue
+            if "upsert_position(" in s and "def upsert_position" not in s:
+                is_exec_pos = ("persistence.upsert_position(" in s
+                               or "position_manager.upsert_position(" in s
+                               or touches_exec_pos)
+                if not is_exec_pos:
+                    continue                     # fusion_signal 的台账写入，不在此列
+                hits_upsert.append(f"{rel}:{i}")
+                if rel not in allow_upsert:
+                    bad.append(f"{rel}:{i} 直接写 execution_position（应经 position_sync）")
+            if "apply_fill(" in s and "def apply_fill" not in s:
+                hits_apply.append(f"{rel}:{i}")
+                if rel not in allow_apply:
+                    bad.append(f"{rel}:{i} 绕过 position_sync 直接调 apply_fill")
+
+    observed.append(f"upsert_calls={len(hits_upsert)} apply_fill_calls={len(hits_apply)}")
+    if not hits_apply:
+        bad.append("position_sync 里没有 apply_fill 调用 —— 收口了但没人用，等于没做")
+    if (root / "app/execution/position_sync.py").is_file():
+        observed.append("module=ok")
+    else:
+        bad.append("app/execution/position_sync.py 缺失（收口模块被删）")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad[:6])
+        + "。多入口写同一张持仓表，迟早出现「两个数都自称是真的」")
+
+
+def _c_position_sync_switch_declared(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-26/27：两个新开关必须**在表里存在**，不能只靠代码默认值。
+
+    区分两件事：①「故意关着」= 表里 enabled=false，是设计；②「行都不存在」=
+    迁移没跑，此时 :func:`app.core.feature_switch.is_enabled` 回退默认值 false，
+    **行为看起来一模一样**，但没人知道到底是哪一种。所以要断言行必须在。
+    """
+    label = "持仓同步/策略单源两个开关已在 cfg_feature_switch 登记"
+    need = ("position_sync_enabled", "fusion_v34_live_enabled")
+    rows = c.rows(
+        "SELECT switch_key, enabled FROM cfg_feature_switch "
+        "WHERE switch_key = ANY(:ks)", ks=list(need))
+    got = {r[0]: bool(r[1]) for r in rows}
+    miss = [k for k in need if k not in got]
+    observed = " ".join(f"{k}={'on' if v else 'off'}" for k, v in sorted(got.items())) \
+        or "(none)"
+    bad = [f"开关缺失 {miss}（migrations/060 未应用？）"] if miss else []
+    return not bad, label, observed, "" if not bad else "；".join(bad)
+
+
+def _c_strategy_single_push_source(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-27：同一时刻只能有一个生产推送源。
+
+    V3.4 与 V5X.3 的持仓假设互不相容（前者维护 ``fusion_position`` 意图台账，
+    后者无状态回放、不认任何台账）。两个开关同时开 = 微信里会同时收到
+    「开多 RB」和「平空 RB」，而且两边都自认为是对的。这比只推一个更糟。
+    """
+    label = "V3.4 与 V5X.3 不得同时作为生产推送源"
+    rows = c.rows(
+        "SELECT switch_key, enabled FROM cfg_feature_switch "
+        "WHERE switch_key IN ('fusion_v34_live_enabled', 'v5x_live_enabled')")
+    got = {r[0]: bool(r[1]) for r in rows}
+    v34 = got.get("fusion_v34_live_enabled", False)
+    v5x = got.get("v5x_live_enabled", False)
+    observed = f"v34={'on' if v34 else 'off'} v5x={'on' if v5x else 'off'}"
+    ok = not (v34 and v5x)
+    detail = "" if ok else (
+        "两个开关同时为 true：V3.4 与 V5X.3 会各推一套互相矛盾的开平信号，"
+        "且 V3.4 的 fusion_position 台账与 V5X 的无状态回放无法互相校验")
+    return ok, label, observed, detail
+
+
+def _c_v5x_replay_seeded(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-28：V5 的统计起点必须真的落在库里，而不是只写在文档里。
+
+    用户拍板起点 = 2026-11-05 夜盘。回放结果以 ``source='replay'`` 落
+    ``v5x_signal_log``。若这列/这些行不存在，「V5 从哪天开始算」就只是记忆，
+    下次统计仍然要从零解释一遍。
+    """
+    label = "V5X 回放补录已落库（source 列 + replay 行）"
+    col = c.scalar(
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name='v5x_signal_log' "
+        "AND column_name='source'")
+    if not col:
+        return False, label, "source列缺失", \
+            "v5x_signal_log 无 source 列（migrations/060 未应用），回放与实盘不可区分"
+    n = c.scalar("SELECT count(*) FROM public.v5x_signal_log WHERE source='replay'") or 0
+    first = c.scalar("SELECT min(bar_ts) FROM public.v5x_signal_log WHERE source='replay'")
+    observed = f"replay={int(n)} first={first}"
+    if not n:
+        return False, label, observed, \
+            "尚无 source='replay' 的行（回放未执行），V5 的统计起点未落地"
+    return True, label, observed, ""
 
 
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
@@ -2670,6 +2833,21 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 事故排查时最需要的信息恰好丢失。只查 loguru 调用方（标准库 %s 是对的）。
     ("LOGURU-FMT-BRACES", "loguru 调用不得使用 % 占位符",
      "block", _c_loguru_fmt_braces),
+    # CL-20261108-26：持仓同步此前是「断链 + 一句谎话」——apply_fill 零调用方，
+    # bridge_report 的注释却声称持仓已被维护。收口成唯一入口并用开关关掉；
+    # 这里钉住「只能有一个入口」与「开关行真的在表里」。
+    ("POSITION-SYNC-SINGLE-ENTRY", "写实盘持仓只有 position_sync 一个业务入口",
+     "block", _c_position_sync_single_entry),
+    ("POSITION-SYNC-SWITCH-DECLARED", "持仓同步/策略单源开关已登记（区分『故意关』与『行不存在』）",
+     "block", _c_position_sync_switch_declared),
+    # CL-20261108-27：V3.4 停用、V5X.3 接唯一推送源。两个开关同时开是最危险状态：
+    # 微信里会同时出现「开多」和「平空」，而两边都自认为对。
+    ("STRATEGY-SINGLE-PUSH-SOURCE", "V3.4 与 V5X.3 不得同时作为生产推送源",
+     "block", _c_strategy_single_push_source),
+    # CL-20261108-28：V5 统计起点（2026-11-05 夜盘）必须落在库里。
+    # warn 而非 block：回放是一次性数据动作，清库重来不该把守卫打成永久红。
+    ("V5X-REPLAY-SEEDED", "V5X 回放补录已落库（source 列 + replay 行）",
+     "warn", _c_v5x_replay_seeded),
 ]
 
 

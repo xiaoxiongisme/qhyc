@@ -17,8 +17,23 @@
    ``real = ba - adj_offset``，其中 ``adj_offset = ba_close - raw_c``（取信号那根
    bar 自带的两列相减，无需再查表）。BA 价同时保留在日志里便于对账。
 
-4. **只读**：本模块**不**写 ``execution_order``、**不**写 ``fusion_position``。
-   下单与持仓同步是 C3 的第二阶段，未经影子对账不接。
+4. **只读**：本模块**不**写 ``execution_order``、**不**写 ``fusion_position``，
+   也不写 ``execution_position``。下单与持仓同步都还没接：
+   * 下单需要影子对账通过后才谈；
+   * 持仓回写已于 2026-11-08 统一收口到 :mod:`app.execution.position_sync` 并
+     **默认关闭**（CL-20261108-26，用户拍板「暂时不做到时候」）。
+   所以本模块的产出只有两样：``v5x_signal_log`` 一行流水 + 一条微信推送。
+
+5. **2026-11-08 起它是唯一生产推送源**（CL-20261108-27）：V3.4 的
+   ``fusion_scan`` 已由开关 ``fusion_v34_live_enabled=false`` 停用。
+   两条链物理并存但只有一个在推，避免出现「一边开多、一边平空」。
+
+回放补录
+========
+:func:`scan_range` 用**同一套重放逻辑**（:func:`_replay_orders`）一次扫出区间内
+全部信号，供「以 2026-11-05 夜盘为统计起点」的回放补录用（CL-20261108-28）。
+与 :func:`scan_once` 逐小时各取最后一根**完全等价**，但只重放一遍；
+信号落库时标 ``source='replay'``，不推送。
 
 去重
 ====
@@ -45,6 +60,7 @@ __all__ = [
     "V5XSignal",
     "SCAN_HOURS",
     "scan_once",
+    "scan_range",
     "format_message",
     "run_v5x_scan",
 ]
@@ -84,15 +100,93 @@ class V5XSignal:
     etype: str = ""             # pb=回踩 / bk=突破
     reason: str | None = None   # stop / tp
     net_yuan: float | None = None
+    source: str = "live"        # live=实盘推送；replay=历史回放补录（不推送）
 
     @property
     def dedupe_key(self) -> str:
+        # ★ 刻意不含 source：同一根 bar 的同一动作全局只允许一条。
+        #   否则「先回放补录、后实盘跑到同一根 bar」会各记一条，统计翻倍。
         return f"{self.symbol}|{self.bar_ts}|{self.action}|{self.side}"
 
 
 def _td_series(buckets: pd.Series, open_days: np.ndarray) -> np.ndarray:
     """bar 收盘时刻 → 所属交易日（夜盘归次一交易日）。"""
     return assign_td(buckets, open_days)
+
+
+def _load(session, symbols: list[str] | None, end: date):
+    """取数（scan_once / scan_range 共用，避免两处口径漂移）。"""
+    if symbols is None:
+        symbols = [f"{v}888" for v in sorted(load_tradable_pool(session))]
+    if not symbols:
+        return None, []
+    start = end - timedelta(days=LOOKBACK_DAYS)
+    md = load_market_data(session, symbols, start, end, src=SRC,
+                          regime_mode=REGIME_MODE, gate_lag=GATE_LAG)
+    return md, symbols
+
+
+def _replay_orders(md, sym: str, df: pd.DataFrame, cfg):
+    """逐根 bar 重放状态机，yield ``(idx, bar_ts, adj_offset, orders)``。
+
+    **实时扫描与历史回放的唯一重放实现**。两处若各写一遍，迟早出现
+    「回放能对账、实盘对不上」这种最难查的分歧（参数/预热/换月处理任一细节都会漂）。
+
+    关于成本参数 ``build_cost(sym, 最后一个交易日)``：取 ``df`` 末根 bar 的日期，
+    即「按当前费率」算，**不按被回放那根 bar 的历史费率**。这是刻意的 —— 回放是为了
+    复现「如果今天用这套参数跑到那根 bar 会出什么信号」，不是复刻当年的真实成本。
+    """
+    tds = _td_series(df["bucket"], md.open_days)
+    # ★ 每根 bar 用**自己那根**的偏移量（BA 是加性偏移，随时间变化）。
+    #   取最后一根去反解所有历史 bar 会把早年价格算成负几万 —— 这是 BA 空间最容易踩的坑。
+    offs = (df["close"].astype(float) - df["raw_c"].astype(float)).to_numpy()
+    eng = SymbolEngine(sym, cfg, build_cost(sym, df["bucket"].iloc[-1].date()))
+    prev_td = None
+    for i in range(len(df)):
+        td = tds[i]
+        if td != prev_td:
+            eng.set_daily_ctx(build_ctx(md, sym, td))
+            prev_td = td
+        r = df.iloc[i]
+        orders = eng.on_bar(r["bucket"], float(r["open"]), float(r["high"]),
+                            float(r["low"]), float(r["close"]),
+                            float(r["volume"]), float(r["raw_c"]))
+        yield i, r["bucket"], float(offs[i]), orders
+
+
+def _to_signals(sym: str, ts, off: float, orders: list[dict],
+                price_off: float | None = None,
+                source: str = "live") -> list[V5XSignal]:
+    """把引擎订单事件转成待推送信号（价格反解到真实合约价）。
+
+    ``price_off`` 为 None 时用 ``off`` 本身；分开传是为了让调用方明确
+    「入场价用哪根 bar 的偏移」与「止损用哪根 bar 的偏移」是同一个量。
+    """
+    o_off = off if price_off is None else price_off
+    out: list[V5XSignal] = []
+    for o in orders:
+        act = str(o.get("type"))
+        d = int(o.get("dir") or 0)
+        side = "LONG" if d > 0 else "SHORT"
+        p_ba = float(o.get("price"))
+        stop_ba = o.get("stop")
+        out.append(V5XSignal(
+            symbol=sym,
+            action=act,
+            side=side,
+            bar_ts=ts,
+            adj_offset=o_off,
+            price_ba=p_ba,
+            price_real=float(p_ba - o_off),
+            lots=float(o.get("lots") or 1.0),
+            stop_ba=float(stop_ba) if stop_ba is not None else None,
+            stop_real=float(stop_ba - o_off) if stop_ba is not None else None,
+            etype=str(o.get("etype") or ""),
+            reason=o.get("reason"),
+            net_yuan=float(o["net"]) if "net" in o else None,
+            source=source,
+        ))
+    return out
 
 
 def scan_once(session, symbols: list[str] | None = None, *,
@@ -105,17 +199,8 @@ def scan_once(session, symbols: list[str] | None = None, *,
         now: 判定「已收盘」的基准时刻，默认当前时间。``bucket <= now`` 才参与。
     """
     now = now or datetime.now()
-    if symbols is None:
-        symbols = [f"{v}888" for v in sorted(load_tradable_pool(session))]
-    if not symbols:
-        logger.warning("[v5x.live] 品种池为空 → 本轮不扫描")
-        return []
-
-    end = (now + timedelta(days=1)).date()
-    start = end - timedelta(days=LOOKBACK_DAYS)
-    md = load_market_data(session, symbols, start, end, src=SRC,
-                          regime_mode=REGIME_MODE, gate_lag=GATE_LAG)
-    if not md.bars:
+    md, symbols = _load(session, symbols, (now + timedelta(days=1)).date())
+    if not md or not md.bars:
         logger.warning(f"[v5x.live] 未取到任何 bar（src={SRC}）→ 本轮不扫描")
         return []
 
@@ -134,8 +219,6 @@ def scan_once(session, symbols: list[str] | None = None, *,
             skipped.append(sym)
             continue
 
-        tds = _td_series(df["bucket"], md.open_days)
-        offs = (df["close"].astype(float) - df["raw_c"].astype(float)).to_numpy()
         # 新鲜度门：陈旧 K 线一律不产信号（宁可漏推，不可用过期数据误导下单）
         last_ts = df["bucket"].iloc[-1]
         age_min = (now - pd.Timestamp(last_ts).to_pydatetime()).total_seconds() / 60.0
@@ -145,60 +228,94 @@ def scan_once(session, symbols: list[str] | None = None, *,
             skipped.append(sym)
             continue
 
-        eng = SymbolEngine(sym, cfg, build_cost(sym, df["bucket"].iloc[-1].date()))
-        prev_td = None
-        orders: list[dict] = []
-        for i in range(len(df)):
-            td = tds[i]
-            if td != prev_td:
-                eng.set_daily_ctx(build_ctx(md, sym, td))
-                prev_td = td
-            r = df.iloc[i]
-            orders = eng.on_bar(r["bucket"], float(r["open"]), float(r["high"]),
-                                float(r["low"]), float(r["close"]),
-                                float(r["volume"]), float(r["raw_c"]))
-        if not orders:
+        last = None
+        for i, ts, off, orders in _replay_orders(md, sym, df, cfg):
+            last = (ts, off, orders)
+        if last is None:
             continue
-
-        off = float(offs[-1])
-        ts = df["bucket"].iloc[-1]
-        for o in orders:
-            act = str(o.get("type"))
-            d = int(o.get("dir") or 0)
-            side = "LONG" if d > 0 else "SHORT"
-            p_ba = float(o.get("price"))
-            stop_ba = o.get("stop")
-            sigs.append(V5XSignal(
-                symbol=sym,
-                action=act,
-                side=side,
-                bar_ts=ts,
-                adj_offset=off,
-                price_ba=p_ba,
-                price_real=float(p_ba - off),
-                lots=float(o.get("lots") or 1.0),
-                stop_ba=float(stop_ba) if stop_ba is not None else None,
-                stop_real=float(stop_ba - off) if stop_ba is not None else None,
-                etype=str(o.get("etype") or ""),
-                reason=o.get("reason"),
-                net_yuan=float(o["net"]) if "net" in o else None,
-            ))
+        ts, off, orders = last
+        if orders:
+            sigs.extend(_to_signals(sym, ts, off, orders))
 
     logger.info(f"[v5x.live] 扫描完成：{len({s.symbol for s in sigs})} 品种出信号，"
                 f"{len(skipped)} 品种跳过（预热不足/无 bar/数据陈旧）")
     return sigs
 
 
-def _persist(session, sigs: Iterable[V5XSignal]) -> list[V5XSignal]:
-    """写信号日志并返回**本次新增**的那些（已推过的自动过滤）。"""
+def scan_range(session, symbols: list[str] | None = None, *,
+               start: datetime, end: datetime | None = None,
+               overrides: dict | None = None,
+               hours_only: bool = True) -> list[V5XSignal]:
+    """**一次重放**返回 ``[start, end]`` 区间内全部信号（历史回放补录用）。
+
+    为什么不「对每个小时点各调一次 :func:`scan_once`」：那要重放 N 次 540 天数据，
+    38 品种 × 12 小时点 ≈ 456 次全量重放，纯浪费。状态机从同一份数据横扫一遍，
+    产生的订单事件序列与「逐小时扫描各取最后一根」**完全等价**——因为 scan_once
+    每轮也都是从头重放、只取最后一根。
+
+    Args:
+        hours_only: 只保留落在 :data:`SCAN_HOURS` 那些小时的 bar。
+            **默认 True 且不要关**：实时扫描只在 ``SCAN_HOURS`` 触发，
+            12:00 那根 bar 在 13:05 已被 13:00 的 bar 顶掉，**从未被扫过**。
+            若回放把 12:00 也纳入，会凭空多出实盘永远不会出现的信号，
+            回放对账就永远对不上（这是最容易搞错的一处，CL-20261108-28）。
+
+    预热门与实时一致：该 bar 之前不足 :data:`MIN_BARS` 根的一律不产信号
+    （实时在那些时点同样会被 `len(df) < MIN_BARS` 拦掉）。
+    """
+    end = end or datetime.now()
+    md, symbols = _load(session, symbols, (end + timedelta(days=1)).date())
+    if not md or not md.bars:
+        logger.warning(f"[v5x.live] 回放未取到任何 bar（src={SRC}）")
+        return []
+
+    cfg = config_from(overrides or {})
+    sigs: list[V5XSignal] = []
+    n_bar = 0
+
+    for sym in symbols:
+        df = md.bars.get(sym)
+        if df is None or df.empty:
+            continue
+        df = df[df["bucket"] <= end].reset_index(drop=True)
+        if len(df) < MIN_BARS:
+            continue
+
+        for i, ts, off, orders in _replay_orders(md, sym, df, cfg):
+            if not orders:
+                continue
+            if i + 1 < MIN_BARS:            # 预热不足：实时同样不会出信号
+                continue
+            t = pd.Timestamp(ts).to_pydatetime()
+            if t < start or t > end:
+                continue
+            if hours_only and t.hour not in SCAN_HOURS:
+                continue
+            n_bar += 1
+            sigs.extend(_to_signals(sym, ts, off, orders, source="replay"))
+
+    logger.info(f"[v5x.live] 回放完成 {start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M}："
+                f"{n_bar} 根 bar 出信号，共 {len(sigs)} 条")
+    return sigs
+
+
+def _persist(session, sigs: Iterable[V5XSignal],
+             source: str = "live") -> list[V5XSignal]:
+    """写信号日志并返回**本次新增**的那些（已推过的自动过滤）。
+
+    ``source``：``live`` = 实盘扫描（会推送）；``replay`` = 历史回放补录
+    （只落库 + 出对账报告，不推送）。去重键不含 source —— 同一根 bar 的同一动作
+    全局只允许一条，这样「先回放、后实盘跑到同一根 bar」不会重复记账
+    （CL-20261108-28）。
+    """
     new: list[V5XSignal] = []
     for s in sigs:
         row = session.execute(text("""
             INSERT INTO public.v5x_signal_log
                 (dedupe_key, symbol, bar_ts, action, side, price_ba, adj_offset,
-                 price_real, stop_ba, stop_real, lots, etype, reason, net_yuan)
+                 price_real, stop_ba, stop_real, lots, etype, reason, net_yuan, source)
             VALUES (:k, :sym, :ts, :act, :side, :pba, :off, :preal,
-                    :sba, :sreal, :lots, :etype, :reason, :net)
+                    :sba, :sreal, :lots, :etype, :reason, :net, :src)
             ON CONFLICT (dedupe_key) DO NOTHING
             RETURNING id
         """), {
@@ -206,7 +323,7 @@ def _persist(session, sigs: Iterable[V5XSignal]) -> list[V5XSignal]:
             "side": s.side, "pba": s.price_ba, "off": s.adj_offset,
             "preal": s.price_real, "sba": s.stop_ba, "sreal": s.stop_real,
             "lots": s.lots, "etype": s.etype, "reason": s.reason,
-            "net": s.net_yuan,
+            "net": s.net_yuan, "src": source,
         }).first()
         if row is not None:
             new.append(s)
@@ -243,9 +360,9 @@ def format_message(sigs: list[V5XSignal]) -> tuple[str, str]:
             lines.append(f"   路径 {'回踩' if s.etype == 'pb' else '突破'}，手数 {s.lots:g}")
         lines.append(f"   bar {s.bar_ts}")
     lines.append("")
-    lines.append("口径：t-1 门控（hvol/簇冲击/体制均只用 ≤T-1 日线），BA 后复权信号 + "
-                 "真实价反解；同根收盘成交假设，偏乐观。")
-    lines.append("⚠️ 只推信号，不建单、不碰持仓；是否下单由你自己判断。")
+    lines.append("口径：V5X.3 · t-1 门控（hvol/簇冲击/体制均只用 ≤T-1 日线），"
+                 "BA 后复权信号 + 真实价反解；同根收盘成交假设，偏乐观。")
+    lines.append("⚠️ 本策略只出信号，不下单、不维护持仓；是否交易由你决定。")
     return title, "\n".join(lines)
 
 

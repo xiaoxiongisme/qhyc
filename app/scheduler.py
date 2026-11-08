@@ -907,8 +907,8 @@ def _fusion_params(base, key: str = "fusion_v34"):
     unknown = sorted(k for k in overrides if k not in known)
     if unknown:
         logger.error(
-            "[scheduler] strategies.%s.params 含 FusionConfig **不存在**的字段 %s"
-            " → 已丢弃（防拼错参数名被静默忽略）", key, unknown)
+            f"[scheduler] strategies.{key}.params 含 FusionConfig **不存在**的字段 {unknown}"
+            " → 已丢弃（防拼错参数名被静默忽略）")
         overrides = {k: v for k, v in overrides.items() if k in known}
     if not overrides:
         return base
@@ -916,8 +916,8 @@ def _fusion_params(base, key: str = "fusion_v34"):
                for k, v in overrides.items() if getattr(base, k, None) != v}
     if changed:
         logger.warning(
-            "[scheduler] 融合参数被 config 覆盖：%s —— **已偏离回测定稿口径**，"
-            "须自行确认已过回测闸门", changed)
+            f"[scheduler] 融合参数被 config 覆盖：{changed} —— **已偏离回测定稿口径**，"
+            "须自行确认已过回测闸门")
     try:
         return base.model_copy(update=overrides)
     except Exception:  # noqa: BLE001 —— 非 pydantic 对象则逐属性兜底
@@ -1038,12 +1038,33 @@ def _fusion_scan_job() -> None:
       - ⏳ 待执行复提：开仓信号在 signal_repeat_min 分钟内每轮重复置顶，防漏看
     非交易日 / 非推送窗口整轮冻结（不采集、不评估、不更新状态）。
     """
-    logger.info("[scheduler] fusion scan start")
     try:
         settings = get_settings()
         f = settings.fusion
         if not f.enabled:
             return
+        # ---- 生产推送源单源开关（CL-20261108-27，2026-11-08 用户拍板）----
+        # V3.4 与 V5X.3 的持仓假设互不相容（V3.4 维护 fusion_position 意图台账，
+        # V5X 无状态回放、不认台账），同时推送必然出现「一边开多、一边平空」。
+        # 故默认关闭 V3.4，生产推送源唯一化为 V5X.3。
+        #
+        # 为什么在函数开头就 return，而不是让作业不注册：
+        #   · 保留回切能力（改一行开关即恢复，不必回滚代码/重启注册表）；
+        #   · 作业仍被调度 = 每分钟仍有一条可观测的「它在但没跑」的痕迹；
+        #   · DB 字典（ops.scheduled_task）里的启用位另有一套语义（移除作业），
+        #     两者叠加时以字典为准——此处开关只表达「策略是否在生产推送」。
+        #
+        # 一并停掉的还有本作业内的 `_collect_hourly_settled`（akshare 小时线定稿复核）。
+        # 这条采集服务的是 V3.4 自己读的 `hourly_bar`；V5X 读 l2_adj.bar_60m_ba，
+        # 由 minute_and_bars(:07/:37) 合成 + back_adjusted_rebuild 校准，
+        # 且 akshare 原始小时线另有独立作业 hourly_collect(`0 * * * *`) 在采。
+        # 所以停 V3.4 不会让任何一条供数链断掉（三链互相独立）。
+        if not _switch_on("fusion_v34_live_enabled", "QH_FUSION_V34_LIVE", default=False):
+            logger.debug("[scheduler] fusion_v34_live_enabled=off → V3.4 不评估、不推送")
+            return
+        # 「start」日志放在开关之后：否则每 30 分钟都打一条 start 再静默 return，
+        # 日志看起来像在跑，实际一行没评估 —— 正是最费时间的误判来源。
+        logger.info("[scheduler] fusion scan start")
         now = datetime.now(_SH_TZ)
         now_utc = datetime.now(timezone.utc)
         names = {x.symbol: x.name for x in settings.main_contracts}
@@ -1082,13 +1103,13 @@ def _fusion_scan_job() -> None:
             if "fusion_v34" not in _scan_keys:
                 logger.warning(
                     "[scheduler] fusion scan 跳过：注册表未启用/未匹配主周期的 fusion_v34"
-                    "（候选=%s）→ 本轮不产出融合信号", _scan_keys)
+                    f"（候选={_scan_keys}）→ 本轮不产出融合信号")
                 return
             _unwired = _registry.unwired_keys()
             if _unwired:
                 logger.warning(
-                    "[scheduler] 注册表存在已启用但**未接入信号链**的策略：%s"
-                    "（仅登记，不产生任何信号——需显式接线）", _unwired)
+                    f"[scheduler] 注册表存在已启用但**未接入信号链**的策略：{_unwired}"
+                    "（仅登记，不产生任何信号——需显式接线）")
             results = evaluate_all(s, _tradable_scan_pool(settings.main_contracts),
                                    _fusion_params(settings.fusion, "fusion_v34"))
 
@@ -1778,12 +1799,21 @@ def _build_scheduler() -> BlockingScheduler:
             coalesce=True,
         )
         logger.info("[scheduler] registered fusion_scan at :05/:35 (post hourly collect)")
+        # 注册 ≠ 会跑。真正的实盘开关在 job 内部（CL-20261108-27）：
+        # 关掉时整轮直接 return，日志只有 debug，所以启动时**必须**把当前推送源说清楚，
+        # 否则「作业在跑但永远不出信号」是最难排查的一类静默故障。
+        if _switch_on("fusion_v34_live_enabled", "QH_FUSION_V34_LIVE", default=False):
+            logger.info("[scheduler] V3.4 实盘推送 = 开启（fusion_v34_live_enabled=true）")
+        else:
+            logger.warning(
+                "[scheduler] V3.4 实盘推送 = 关闭（fusion_v34_live_enabled=false）→ "
+                "fusion_scan 每轮空跑，生产推送源为 V5X.3（v5x_live_enabled）")
 
     # V5X.3 小时级信号扫描（C3-min，CL-20261108-08）：整点后 :05。
     # **无条件注册**，由 job 内部读 cfg_feature_switch.v5x_live_enabled 决定跑不跑 ——
     # 这样打开/关闭开关**不需要重启调度器**（该开关默认 false，见 migrations/059）。
-    # 与 fusion_scan 同分钟触发但互不依赖：V5X 异常被自身 try/except 吞掉，
-    # 绝不影响 V3.4（唯一生产策略）出信号。
+    # 2026-11-08 起它是**唯一**生产推送源（V3.4 已由 CL-20261108-27 停用），
+    # 但两个作业仍物理并存：V3.4 保留代码与开关，随时可回切。
     sched.add_job(
         _v5x_scan_job,
         trigger=CronTrigger(minute="5", timezone=settings.env.TZ),
@@ -2616,10 +2646,10 @@ def _alert_portfolio_brake_idle(status: dict) -> None:
         if not (cfg_alert.enabled and cfg_alert.notify):
             # 通道关着 → 记 error 但**不写标记**（通道修好后立刻能补发）
             logger.error(
-                "[portfolio_brake] 风控空转告警**无法送达**：ALERT_ENABLED=%s "
-                "ALERT_NOTIFY=%s。熔断开关开着但告警通道关闭，此风险目前只有日志可查。"
+                f"[portfolio_brake] 风控空转告警**无法送达**：ALERT_ENABLED={cfg_alert.enabled} "
+                f"ALERT_NOTIFY={cfg_alert.notify}。熔断开关开着但告警通道关闭，此风险目前只有日志可查。"
                 "请修好告警通道，或关闭 cfg_feature_switch.portfolio_brake_enabled "
-                "让状态与实际一致。", cfg_alert.enabled, cfg_alert.notify)
+                "让状态与实际一致。")
             return
         ok, note = send_alert(
             "⚠️ 风控空转：组合回撤熔断实际未生效",
@@ -2640,9 +2670,9 @@ def _alert_portfolio_brake_idle(status: dict) -> None:
         if not ok:
             # ★ 不写节流标记 → 下轮 fusion_scan 会重试（这是本函数存在的意义）
             logger.error(
-                "[portfolio_brake] 风控空转告警**未送达**（note=%s）；未写入节流标记，"
+                f"[portfolio_brake] 风控空转告警**未送达**（note={note}）；未写入节流标记，"
                 "下轮 fusion_scan 将重试。请检查 PUSHPLUS_TOKEN / 网络 / "
-                "ALERT_ENABLED / ALERT_NOTIFY。", note)
+                "ALERT_ENABLED / ALERT_NOTIFY。")
             return
         _BRAKE_IDLE_ALERT_KEY = key
     except Exception as e:  # noqa: BLE001 —— 告警失败绝不阻断信号链路

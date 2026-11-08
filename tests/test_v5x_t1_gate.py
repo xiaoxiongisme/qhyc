@@ -115,4 +115,9 @@ def test_message_uses_real_price_not_ba():
     assert "3,461.00" in body          # 真实价必须出现
     assert "-462.00" in body           # BA 价仅作括号备注，不能当作成交价
     assert "3,511.00" in body          # 止损也须反解
-    assert "只推信号" in body           # 明确「不建单」
+    # 2026-11-08 文案改版（CL-20261108-27 起 V5X 是唯一推送源）：
+    # 断言从「只推信号」改为逐项确认「不建单 + 不维护持仓」——
+    # 后者才是这次收口真正要保证的事（CL-20261108-26）。
+    assert "只出信号" in body
+    assert "不下单" in body and "不维护持仓" in body
+    assert "V5X.3" in body             # 让用户一眼看出是哪套策略在推

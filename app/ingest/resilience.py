@@ -292,9 +292,9 @@ def bars_consistency_check(new: Any, previous: Any, *, max_jump: float = 0.15) -
     if not new_rows or not prev_rows:
         # fail-loud：无参照物 = 校验**未执行**，必须与「校验通过」区分开
         logger.warning(
-            "[resilience] 跨批次一致性校验**跳过**（无参照批次：new=%s previous=%s）"
-            "—— 脏数据拦截此刻**未生效**" % (
-                "有" if new_rows else "空", "有" if prev_rows else "空"))
+            f"[resilience] 跨批次一致性校验**跳过**（无参照批次："
+            f"new={'有' if new_rows else '空'} previous={'有' if prev_rows else '空'}）"
+            "—— 脏数据拦截此刻**未生效**")
         return None
     try:
         # ★ 2026-10-13 修复：比「重叠末端」——本批次最新价 vs 上一成功批次最新价。
