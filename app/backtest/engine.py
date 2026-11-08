@@ -150,6 +150,7 @@ def backtest_symbol(
             boundaries = eval_dates[:: max(1, retrain_every // p.step)]
             torch = _ensure_torch()
             snaps_made = 0
+            snap_fail = 0
             for b in boundaries:
                 sub0 = df[df.index < b]   # 训练数据严格早于段内首个评估日
                 if len(sub0) < cfg.lstm.seq_len + 60:
@@ -160,19 +161,28 @@ def backtest_symbol(
                 tf_bt = (
                     tframe[tframe.index < b] if not tframe.empty else None
                 )
-                r = lstm_train(
-                    torch, symbol, rets_bt.to_numpy(),
-                    dates=rets_bt.index, extra=tf_bt,
-                    seq_len=cfg.lstm.seq_len, epochs=cfg.lstm.epochs,
-                    update_current=False,   # 不覆盖线上权重
-                )
-                snaps_made += 1
+                try:
+                    lstm_train(
+                        torch, symbol, rets_bt.to_numpy(),
+                        dates=rets_bt.index, extra=tf_bt,
+                        seq_len=cfg.lstm.seq_len, epochs=cfg.lstm.epochs,
+                        update_current=False,   # 不覆盖线上权重
+                    )
+                    snaps_made += 1
+                except Exception as e:                    # noqa: BLE001
+                    snap_fail += 1
+                    logger.warning(
+                        f"[backtest] {symbol} 边界 {b} 快照生成失败: {e}")
             logger.info(
                 f"[backtest] {symbol} walk-forward 快照 {snaps_made} 个"
                 f"（边界 {len(boundaries)} 个，节奏 {retrain_every} 根）"
             )
+            if snap_fail:
+                logger.error(
+                    f"[backtest] {symbol} 快照失败 {snap_fail}/{len(boundaries)} 个边界"
+                    " —— LSTM 回测口径不完整，排查 /app/runtime/lstm 写权限")
         except Exception as e:
-            logger.warning(f"[backtest] {symbol} 回测快照生成失败（LSTM 将缺席）: {e}")
+            logger.warning(f"[backtest] {symbol} 回测快照整体失败（LSTM 将缺席）: {e}")
 
     # per-model 收集
     recs: dict[str, list[dict]] = {}

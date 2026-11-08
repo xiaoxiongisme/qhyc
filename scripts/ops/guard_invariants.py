@@ -465,6 +465,77 @@ def _c_bt_run_complete(c: Ctx) -> tuple[bool, str, str, str]:
         "确认回测进程是否被中断，必要时整批重跑并清理半成品批次")
 
 
+def _c_lstm_snapshot_write(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-03：LSTM 快照写入必须能覆盖跨 UID 的只读目标文件。
+
+    09:07 容器内 B0(appuser uid=10001) 留下 85 个 644 快照，宿主
+    ubuntu(uid=1000) 重跑时 torch.save 覆盖报 Permission denied，
+    被 engine.py 的 warning 吞掉，17/53 品种快照悄悄不生成。
+    共享卷天然混合 UID，所以判据不是「文件当前可写」（从容器视角看
+    uid=1000/644 的历史快照也不可写，会误报），而是**实测原子写能力**：
+    让目标文件 mode=0444，仍须能被替换。同时静态检查 train_symbol
+    未回退到直接 torch.save。
+    """
+    import glob                                           # noqa: PLC0415
+    import os                                             # noqa: PLC0415
+    import shutil                                         # noqa: PLC0415
+    import tempfile                                       # noqa: PLC0415
+
+    label = "LSTM 快照写入可跨 UID 覆盖只读目标"
+    d = os.getenv("LSTM_WEIGHT_DIR", "/app/runtime/lstm")
+    if not os.path.isdir(d):
+        return True, label, f"{d} 不存在（非生产环境）", ""
+    files = glob.glob(os.path.join(d, "*.pt"))
+    uid_set = sorted({os.stat(f).st_uid for f in files})
+    try:
+        import ast                                        # noqa: PLC0415
+        from app.predictors import lstm_train as m        # noqa: PLC0415
+        with open(m.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        defs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+        def _calls_torch_save(node):
+            # 用 AST 而非字符串：docstring 里出现 torch.save(...) 不应误判。
+            return any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "save" and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "torch"
+                for n in ast.walk(node))
+
+        atomic = ("train_symbol" in defs and "_atomic_torch_save" in defs
+                  and hasattr(m, "_atomic_torch_save")
+                  and not _calls_torch_save(defs["train_symbol"])
+                  and _calls_torch_save(defs["_atomic_torch_save"]))
+
+        class _FakeTorch:
+            @staticmethod
+            def save(state, path):
+                with open(path, "wb") as fh:
+                    fh.write(b"guard-probe")
+
+        probe_dir = tempfile.mkdtemp(prefix="lstm_guard_")
+        try:
+            target = os.path.join(probe_dir, "probe.pt")
+            with open(target, "wb") as fh:
+                fh.write(b"old")
+            os.chmod(target, 0o444)
+            m._atomic_torch_save(_FakeTorch(), {"k": 1}, target)
+            with open(target, "rb") as fh:
+                cap_ok = fh.read() == b"guard-probe"
+        finally:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {exc}", (
+            "检查 CL-20261108-03：app.predictors.lstm_train 不可用")
+    ok = atomic and cap_ok
+    return ok, label, (
+        f"files={len(files)} uids={uid_set} atomic={atomic} "
+        f"overwrite_0444={cap_ok} dir={d}"), (
+        "" if ok else
+        "train_symbol 未走原子写，或原子写无法覆盖 0444 目标 → "
+        "跨 UID 共享卷会让回测快照静默失败（CL-20261108-03）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -486,6 +557,7 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("OPS-SIGNAL-WRITER-UNIQUE", "融合信号单一写入方", "warn", _c_signal_writer_unique),
     ("OPS-WEEKLY-DOW", "周度作业星期语义正确", "warn", _c_weekly_dow),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
+    ("OPS-LSTM-SNAPSHOT-WRITE", "LSTM 快照共享卷可写且原子写已启用", "warn", _c_lstm_snapshot_write),
     # warn 而非 block：重跑期间最新 run 天然是半成品，靠「活跃写入 <2h」放行；
     # 只有停滞超过 2h 才报，正好抓住 CL-20261108-02 的容器重启误杀。
     ("OPS-BT-RUN-COMPLETE", "最新回测 run 完整或仍在活跃写入", "warn", _c_bt_run_complete),

@@ -81,6 +81,33 @@ def _make_multivariate(
     return X, y, norm, used_cols
 
 
+def _atomic_torch_save(torch, state: dict, path: str) -> None:
+    """原子写权重：先写同目录临时文件，再 os.replace 覆盖目标。
+
+    /app/runtime 由宿主 scheduler(ubuntu uid=1000) 与 qhyc-api 容器
+    (appuser uid=10001) 共享。若目标 .pt 由另一 UID 创建且 mode=644，
+    直接 ``torch.save(state, path)`` 会抛
+    ``inline_container.cc ... Permission denied`` —— 回测快照生成随即被
+    engine.py 的 warning 吞掉，LSTM 口径悄悄退化（CL-20261108-03）。
+    共享目录是 drwxrwxrwx，任何 UID 都能建新文件；os.replace 只依赖
+    目录写权限，不依赖目标文件属主。新文件统一 0666，保证两种 UID
+    后续都能直接覆盖。
+    """
+    import tempfile                                       # noqa: PLC0415
+
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=d)
+    os.close(fd)
+    try:
+        torch.save(state, tmp)
+        os.chmod(tmp, 0o666)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def train_symbol(
     torch,
     symbol: str,
@@ -140,12 +167,12 @@ def train_symbol(
     # 当前权重（线上预测用；回测快照模式 update_current=False 不覆盖）
     path = os.path.join(out_dir, f"{symbol}.pt")
     if update_current:
-        torch.save(state, path)
+        _atomic_torch_save(torch, state, path)
     # 快照（审计 P1：回测按 train_until <= 评估日 加载，消除前视泄漏）
     snap_path = None
     if rets_dates is not None and len(rets_dates) > 0:
         snap_path = os.path.join(out_dir, f"{symbol}__{rets_dates[-1]:%Y%m%d}.pt")
-        torch.save(state, snap_path)
+        _atomic_torch_save(torch, state, snap_path)
     return {
         "symbol": symbol,
         "weights": path if update_current else snap_path,
