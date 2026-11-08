@@ -12,9 +12,10 @@
 告警经 pushplus（与 qhyc 同一通道）发到微信；同一项在冷却期内不重复打扰。
 每日 08:00 可发一份"体检日报"：python3 ops_monitor.py --daily
 
-cron：
-  */10 * * * * /usr/bin/python3 /opt/qhyc-ops/ops_monitor.py >> /var/log/qhyc_ops_monitor.log 2>&1
-  0 8 * * *   /usr/bin/python3 /opt/qhyc-ops/ops_monitor.py --daily >> /var/log/qhyc_ops_monitor.log 2>&1
+cron（★ 直接指向仓库路径：2026-11-08 发现 /opt/qhyc-ops 旧副本已与仓库分叉 212 行，
+仓库里的修复跑不到生产，属「改了不生效」；副本已废弃，仅留 .bak_20261108 回滚）：
+  */10 * * * * /usr/bin/python3 /Docker/qhyc/scripts/ops/ops_monitor.py >> /var/log/qhyc_ops_monitor.log 2>&1
+  0 8 * * *   /usr/bin/python3 /Docker/qhyc/scripts/ops/ops_monitor.py --daily >> /var/log/qhyc_ops_monitor.log 2>&1
 """
 from __future__ import annotations
 

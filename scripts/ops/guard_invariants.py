@@ -2065,6 +2065,95 @@ def _c_ci_same_source_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。CI 同源断言未真实生效，E3 结论不可信（CL-20261108-17）")
 
 
+def _c_ops_push_quota(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-23：运维告警不得挤爆与交易信号共用的推送通道。
+
+    历史事故（2026-11-06）：6 个数据源同时滞后，``check_all`` 逐条发送 →
+    单日 206 条 ``[alert]``，击穿 pushplus 免费额度（约 200 条/日），10:50 起
+    返回 ``code=900 用户账号使用受限``；共用同一 token 的融合信号自 11:01 起
+    7 条全部未送达，直到 11-08 19:30 才恢复。**通道被自家告警打死**。
+
+    衡量此刻的行为（不查历史流水）：
+      · ``AlertConfig.max_per_day`` 存在且 ∈ (0,150]（200 条的 75%，余量留给信号）；
+      · ``check_all`` 内 ``send_alert`` 调用**恰好 1 处**（单轮 digest；
+        恢复成逐条发送会立刻回到 288 条/日）；
+      · ``ops_monitor`` 的静默判据引用了 ``market_live``（休市代理），
+        否则每逢周末必报「无成功推送」——2026-11-08 那条 60 小时告警即此类误报。
+    """
+    import ast
+
+    label = "告警日配额与单轮 digest 生效（CL-20261108-23）"
+    root = Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    observed: list[str] = []
+
+    # 1) 日配额存在且合理
+    try:
+        from app.ops.alerting import AlertConfig
+        limit = int(getattr(AlertConfig(), "max_per_day", 0) or 0)
+    except Exception as e:  # noqa: BLE001
+        limit = -1
+        bad.append("AlertConfig 导入失败: {0}".format(str(e)[:60]))
+    observed.append("max_per_day={0}".format(limit))
+    if not (0 < limit <= 150):
+        bad.append("max_per_day 须 ∈ (0,150]，实测 {0}".format(limit))
+
+    # 2) check_all 单轮只调一次 send_alert（digest）
+    alerts_py = root / "app" / "ops" / "alerting.py"
+    if not alerts_py.is_file():
+        bad.append("app/ops/alerting.py 缺失")
+    else:
+        try:
+            tree = ast.parse(alerts_py.read_text(encoding="utf-8"))
+            n_send = 0
+            found_fn = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == "check_all":
+                    found_fn = True
+                    for sub in ast.walk(node):
+                        if isinstance(sub, ast.Call):
+                            fn = sub.func
+                            name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+                            if name == "send_alert":
+                                n_send += 1
+                    break
+            observed.append("check_all.send_alert={0}".format(n_send))
+            if not found_fn:
+                bad.append("alerting.check_all 未找到")
+            elif n_send != 1:
+                bad.append("check_all 内 send_alert 应恰好 1 处（digest），实测 {0}".format(n_send))
+        except SyntaxError as e:
+            bad.append("alerting.py 语法错误: {0}".format(str(e)[:60]))
+
+    # 3) ops_monitor 静默判据引用市场活跃代理
+    mon = root / "scripts" / "ops" / "ops_monitor.py"
+    if not mon.is_file():
+        bad.append("scripts/ops/ops_monitor.py 缺失")
+    else:
+        try:
+            mt = ast.parse(mon.read_text(encoding="utf-8"))
+            has_proxy = any(
+                isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+                and any(getattr(t, "id", "") == "MARKET_LIVE_H" for t in n.targets)
+                for n in ast.walk(mt)
+            )
+            wired = any(
+                isinstance(n, ast.If)
+                and any(isinstance(x, ast.Name) and x.id == "market_live"
+                        for x in ast.walk(n.test))
+                for n in ast.walk(mt)
+            )
+            observed.append("MARKET_LIVE_H={0} 判据引用={1}".format(has_proxy, wired))
+            if not has_proxy:
+                bad.append("ops_monitor 缺 MARKET_LIVE_H 常量")
+            if not wired:
+                bad.append("ops_monitor 静默判据未引用 market_live（休市会误报）")
+        except SyntaxError as e:
+            bad.append("ops_monitor.py 语法错误: {0}".format(str(e)[:60]))
+
+    return (not bad), label, " · ".join(observed), "；".join(bad)
+
+
 def _c_ops_push_pnl_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261108-18：推送盈亏金额必须真实接线，且契约测试不得再被 skip。
 
@@ -2144,6 +2233,10 @@ def _c_ops_push_pnl_wired(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
+    # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
+    # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
+    ("OPS-PUSH-QUOTA", "告警日配额与单轮 digest（不挤爆信号通道）",
+     "block", _c_ops_push_quota),
     # CL-20261108-18：恢复推送盈亏金额后，防止功能再下线 / 契约测试再僵尸化。
     ("OPS-PUSH-PNL-WIRED", "推送盈亏金额已接线且契约测试真实通过（CL-20261108-18）",
      "block", _c_ops_push_pnl_wired),
