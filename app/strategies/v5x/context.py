@@ -179,22 +179,53 @@ def _load_bars(session, symbols: list[str], start: date, end: date,
 def _daily_frame(bars: pd.DataFrame, open_days: np.ndarray) -> pd.DataFrame:
     """按 (symbol, 交易日) 聚合出日振幅与日已实现波动。
 
+    ★★ 一律先反解回真实价再聚合（2026-11-08 修，CL-20261108-25）：
+      ``l2_adj.bar_60m_ba`` 是**等差**后复权（BA = 真实 + offset），偏移累积可达
+      上万点，全库有 **23,940 根** ``close <= 0``（FB888 35.2% / CJ888 33.2% /
+      RU888 32.5% / LH888 13.8% / JD888 8.5% / RB888 3.1%）。但本函数原来正在
+      那个空间做两类**比例**运算，两者都错：
+        · ``amp = (hh - ll) / c`` —— ``c < 0`` 时**符号翻转**，hvol 的
+          「振幅是否超 80 分位」判据整体反向；
+        · ``lret = log(c / c.shift(1))`` —— 加性偏移下 ``log((r+k)/(r'+k))``
+          ≠ ``log(r/r')``，收益率是比例概念、**没有平移不变性**，且有负价除零。
+      等差后复权的平移不变量只有**差值**（EMA / ATR / 枢轴 / 点数），所以
+      信号空间留在 BA，日频派生必须回真实价。``app/data/back_adjust.py``
+      docstring 原文即：「回测侧应只用点数、不做除法」。
+      实现上 ``high/low`` 与 ``close`` 同量平移，减同一个 ``off`` 即可，无需改 SQL。
+
     ★ ``td`` 一律落成 ``datetime.date``（不是 Timestamp / datetime64）：
       下游 ``hvol`` / ``blocked`` / ``regime`` 都是「date 作 key 的 dict」，
       类型不一致会让查表恒 miss —— 三道门全部静默失效且不报错。
       2026-11-08 实测踩过：三组不同配置跑出**完全相同**的 8,916 笔 / +249,726。
     """
-    df = bars[["symbol", "bucket", "high", "low", "close"]].copy()
+    off = (bars["close"] - bars["raw_c"]).reset_index(drop=True)
+    df = pd.DataFrame({
+        "symbol": bars["symbol"].reset_index(drop=True),
+        "bucket": bars["bucket"].reset_index(drop=True),
+        "high": bars["high"].reset_index(drop=True) - off,
+        "low": bars["low"].reset_index(drop=True) - off,
+        "close": bars["raw_c"].reset_index(drop=True),
+    })
     df["td"] = assign_td(df["bucket"], open_days)
     df["td"] = pd.to_datetime(df["td"]).dt.date
+    # 换月根：同品种相邻 bar 的偏移发生变化 → 该根收益含换月跳空，必须剔除
+    df["roll"] = (off.groupby(df["symbol"]).diff().abs() > 1e-9).to_numpy(bool)
     g = df.groupby(["symbol", "td"], sort=True)
     out = g.agg(hh=("high", "max"), ll=("low", "min"),
                 c=("close", "last")).reset_index()
     out["amp"] = (out["hh"] - out["ll"]) / out["c"].replace(0, np.nan)
-    # 日已实现波动 = 当日 60m 对数收益 std（V5X v5x_regime._daily_vol 同口径）
-    lr = df.assign(lr=np.log(df["close"] / g["close"].shift(1)))[["symbol", "td", "lr"]]
-    vol = lr.groupby(["symbol", "td"], sort=True)["lr"].std().reset_index(name="vol")
-    return out.merge(vol, on=["symbol", "td"], how="left")
+    # 日已实现波动 = 当日 60m 对数收益 std（真实价；换月根置 NaN 不污染 sigma）
+    lr = np.log(df["close"] / g["close"].shift(1)).where(~df["roll"])
+    vol = (df.assign(lr=lr).groupby(["symbol", "td"], sort=True)["lr"]
+             .std().reset_index(name="vol"))
+    out = out.merge(vol, on=["symbol", "td"], how="left")
+    # 日对数收益（簇冲击用）：真实收盘比，整日含换月根则该日置 NaN
+    out = out.sort_values(["symbol", "td"])
+    day_roll = g["roll"].any().reset_index(name="roll")
+    out = out.merge(day_roll, on=["symbol", "td"], how="left")
+    out["lret"] = np.log(out["c"] / out.groupby("symbol")["c"].shift(1))
+    out.loc[out["roll"].fillna(False).to_numpy(bool), "lret"] = np.nan
+    return out.drop(columns=["roll"])
 
 
 def _hvol_flags(daily: pd.DataFrame, lag: int = 0) -> dict[str, dict[Any, bool]]:
@@ -223,7 +254,12 @@ def _cluster_shock(daily: pd.DataFrame, lag: int = 0) -> dict[str, set]:
     ``lag=0`` 用当日收益判当日（含前视）；``lag=1`` 用 T-1 收益与 T-1 前阈值。
     """
     g = daily.sort_values(["symbol", "td"]).copy()
-    g["lret"] = np.log(g["c"] / g.groupby("symbol")["c"].shift(1))
+    # lret 由 _daily_frame 在**真实价**空间算好（换月日已置 NaN）；
+    # 这里不再自己取 log —— 那会在 BA 偏移空间做无意义的比例运算。
+    if "lret" not in g.columns:
+        raise ValueError(
+            "_cluster_shock 需要 _daily_frame 产出的 lret 列（真实价、换月日已置 NaN）；"
+            "自己用 daily['c'] 取 log 会在 BA 偏移空间做比例运算（CL-20261108-25）")
     g["cl"] = g["symbol"].map(
         lambda x: CLUSTER.get(x[:-3] if x.endswith("888") else x))
     out: dict[str, set] = {}
@@ -390,6 +426,10 @@ def load_market_data(session, symbols: list[str], start: date, end: date, *,
         "gate_lag": int(gate_lag),
         "member_z_topn": MEMBER_Z_TOPN,
         "calendar_fallback": bool(not len(open_days)),
+        # BA 空间健康度：真实价反解依赖 raw_c，缺失会让整行失真；
+        # 非正 BA 价是负 log / 符号翻转的来源（CL-20261108-25）
+        "n_bad_raw_c": int(bars["raw_c"].isna().sum()),
+        "n_ba_nonpos": int((bars["close"] <= 0).sum()),
     }
     if bars.empty:
         return md

@@ -925,7 +925,7 @@ def _fusion_params(base, key: str = "fusion_v34"):
             try:
                 setattr(base, k, v)
             except Exception:  # noqa: BLE001
-                logger.warning("[scheduler] 参数 %s 覆盖失败（不可写）", k)
+                logger.warning(f"[scheduler] 参数 {k} 覆盖失败（不可写）")
         return base
 
 

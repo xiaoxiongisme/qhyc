@@ -393,7 +393,7 @@ def minute_pipeline_lock(timeout_sec: int = 600):
             #   而日志只有一行「等待超时」。回收后重试一次，避免人工介入。
             stale = release_stale_pipeline_lock()
             if stale:
-                logger.warning("[synth] 已回收泄漏锁(pid=%s)，重试一次…", stale)
+                logger.warning(f"[synth] 已回收泄漏锁(pid={stale})，重试一次…")
                 got = bool(lock_conn.execute(
                     text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": key}
                 ).scalar())

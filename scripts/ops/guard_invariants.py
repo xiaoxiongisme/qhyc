@@ -1416,9 +1416,11 @@ def _c_v5x_t1_gate_no_leak(c: Ctx) -> tuple[bool, str, str, str]:
         bad.append(f"hvol 合成检查异常 {type(exc).__name__}: {exc}")
 
     # ---------- 簇冲击：极端日收益只出现在最后一天 ----------
+    # 注意基线必须是 0 收益：若用常数非零收益，(r.abs() > 3*sd) 在 sd=0 时恒真，
+    # 整段历史会被判封禁，测试就失去区分力。
     try:
-        px = [100.0] * (n - 1) + [130.0]
-        d = pd.DataFrame({"symbol": SYM, "td": TD, "c": px,
+        lret = [0.0] * (n - 1) + [0.5]
+        d = pd.DataFrame({"symbol": SYM, "td": TD, "c": 100.0, "lret": lret,
                           "amp": 0.01, "vol": 0.01})
         b0 = _cluster_shock(d, 0).get(CL, set())
         b1 = _cluster_shock(d, 1).get(CL, set())
@@ -2354,6 +2356,140 @@ def _c_ops_push_quota(c: Ctx) -> tuple[bool, str, str, str]:
     return (not bad), label, " · ".join(observed), "；".join(bad)
 
 
+def _c_ba_real_price_derived(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-25：日频派生必须回到真实价，不得在 BA 偏移空间做**比例**运算。
+
+    为什么这条必须存在
+    ------------------
+    ``l2_adj.bar_60m_ba`` 是**等差**后复权（BA = 真实 + offset）。等差偏移的
+    平移不变量只有**差值**（EMA / ATR / 枢轴 / 点数）；振幅率 ``(hh-ll)/c`` 与
+    对数收益 ``log(c/c_prev)`` 都**不是**平移不变的。而全库有 23,940 根 BA 价为
+    非正（FB888 35.2% / CJ888 33.2% / RU888 32.5%），于是：
+      · ``amp`` 在 ``c < 0`` 时**符号翻转** → hvol 判据整体反向（实测 3,336 天）；
+      · ``log`` 遇 0/负价 → ``-inf`` / NaN，污染簇冲击与日已实现波动。
+    这些都不抛异常，只会让回测数字悄悄变形。故用合成序列把方向钉死。
+    """
+    label = "BA 空间的日频派生已回真实价（振幅不翻转 / 换月收益不冒充）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import numpy as np
+        import pandas as pd
+
+        from app.strategies.v5x.context import _cluster_shock, _daily_frame
+    except Exception as exc:                                 # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "V5X 供数层不可导入 → BA 价格空间断言不可用（CL-20261108-25）")
+
+    # 构造：真实价 100→98，偏移 -3300 让 BA 价为负；最后一根换月（偏移变化）
+    try:
+        real = np.array([100.0, 99.0, 98.0, 97.0])
+        off = np.array([-3300.0, -3300.0, -3300.0, -3400.0])
+        bars = pd.DataFrame({
+            "symbol": ["FB888"] * 4,
+            "bucket": pd.to_datetime(["2024-01-02 10:00", "2024-01-02 11:00",
+                                      "2024-01-02 14:00", "2024-01-03 10:00"]),
+            "open": real + off,
+            "high": real + 1.0 + off,
+            "low": real - 1.0 + off,
+            "close": real + off,
+            "volume": np.ones(4),
+            "raw_c": real,
+        })
+        open_days = np.array([np.datetime64("2024-01-02"),
+                              np.datetime64("2024-01-03")])
+        d = _daily_frame(bars, open_days)
+        d1 = d.iloc[0]
+        d2 = d.iloc[1]
+
+        observed.append(f"ba_min={float(bars['close'].min()):.0f}")
+        observed.append(f"amp={float(d1['amp']):.6f} expect={4 / 98:.6f}")
+        observed.append(f"close={float(d1['c']):.1f}")
+        observed.append(f"roll_lret_nan={bool(pd.isna(d2['lret']))}")
+        observed.append(f"neg_amp_days={int((d['amp'] < 0).sum())}")
+
+        if not (bars["close"] <= 0).all():
+            bad.append("合成数据未构造出负 BA 价，本断言失去意义")
+        if abs(float(d1["amp"]) - 4.0 / 98.0) > 1e-9:
+            bad.append(f"振幅未回真实价：{float(d1['amp']):.6f} != {4 / 98:.6f}"
+                       "（在 BA 空间算 (hh-ll)/c 会符号翻转）")
+        if float(d1["c"]) != 98.0:
+            bad.append(f"日收盘不是真实价：{float(d1['c'])}")
+        if int((d["amp"] < 0).sum()) != 0:
+            bad.append("出现负振幅 → 振幅仍在 BA 空间计算")
+        if not pd.isna(d2["lret"]):
+            bad.append("换月日对数收益未置 NaN → 换月跳空会冒充真实收益")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"合成检查异常 {type(exc).__name__}: {exc}")
+
+    # 防止回退：_cluster_shock 不得再自己用 BA 收盘取 log
+    try:
+        fake = pd.DataFrame({"symbol": ["RB888"], "td": [1], "c": [-3200.0],
+                             "amp": [0.01], "vol": [0.01]})
+        try:
+            _cluster_shock(fake, 0)
+        except ValueError:
+            observed.append("cluster_shock_requires_lret=ok")
+        else:
+            bad.append("_cluster_shock 在缺 lret 列时未报错 → 可能已回退为 BA 空间取 log")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"簇冲击契约检查异常 {type(exc).__name__}: {exc}")
+
+    return (not bad), label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。日频门控将读取失真的振幅/波动，历史回测数字不可信（CL-20261108-25）")
+
+
+def _c_loguru_fmt_braces(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-24：loguru 只认 ``{}``，写成 ``%s`` 会原样打印占位符并丢参数。
+
+    关键前提：**只检查 loguru 的调用方**。本项目同时存在标准库 ``logging``
+    （``logger = logging.getLogger(__name__)``），那里 ``%s`` 是正确写法 ——
+    盲改会把对的改坏（首版台账把 23 处标准库用法误计为缺陷，已订正）。
+    """
+    label = "loguru 调用不得使用 % 占位符（标准库 logging 不在此列）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        call = re.compile(
+            r'logger\.(?:info|warning|error|debug|exception|critical|trace)\(\s*"([^"]*)"')
+        pct = re.compile(r"%[-+ 0#]*\d*(?:\.\d+)?[sdfr]")
+        marks = ("from app.core.logging import", "from loguru import")
+        n_loguru = n_std = 0
+        for p in list((root / "app").rglob("*.py")) + list((root / "scripts").rglob("*.py")):
+            try:
+                txt = p.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            is_loguru = any(m in txt for m in marks) or \
+                p.as_posix().endswith("app/core/logging.py")
+            for i, line in enumerate(txt.splitlines(), 1):
+                m = call.search(line)
+                if not m:
+                    continue
+                fmt = m.group(1)
+                if not pct.search(fmt) or "%(" in fmt:
+                    continue
+                if is_loguru:
+                    n_loguru += 1
+                    bad.append(f"{p.relative_to(root)}:{i} 用 % 占位符")
+                else:
+                    n_std += 1
+        observed.append(f"loguru_bad={n_loguru}")
+        observed.append(f"stdlib_ok={n_std}")
+        if n_loguru:
+            bad.insert(0, f"loguru 误用 {n_loguru} 处")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"扫描异常 {type(exc).__name__}: {exc}")
+    return (not bad), label, " ".join(observed), (
+        "" if not bad else "；".join(bad[:6])
+        + "。日志会原样打印 %s 并丢掉变量值，事故排查时最需要的信息恰好丢失")
+
+
 def _c_ops_push_pnl_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261108-18：推送盈亏金额必须真实接线，且契约测试不得再被 skip。
 
@@ -2526,6 +2662,14 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_v5x_t1_gate_no_leak),
     ("V5X-LIVE-WIRED", "V5X 小时扫描已接线且出口价已反解",
      "block", _c_v5x_live_wired),
+    # CL-20261108-25：BA 是等差后复权，只对差值平移不变。日频派生（振幅率、
+    # 对数收益）若留在 BA 空间，负价处会符号翻转 / 除零，且全程不报错。
+    ("BA-REAL-PRICE-DERIVED", "BA 空间的日频派生已回真实价",
+     "block", _c_ba_real_price_derived),
+    # CL-20261108-24：loguru 只认 {}。写成 %s 会原样打印占位符并丢参数，
+    # 事故排查时最需要的信息恰好丢失。只查 loguru 调用方（标准库 %s 是对的）。
+    ("LOGURU-FMT-BRACES", "loguru 调用不得使用 % 占位符",
+     "block", _c_loguru_fmt_braces),
 ]
 
 

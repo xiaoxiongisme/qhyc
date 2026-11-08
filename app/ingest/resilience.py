@@ -308,7 +308,7 @@ def bars_consistency_check(new: Any, previous: Any, *, max_jump: float = 0.15) -
         if jump > max_jump:
             return f"跨批次跳变 {jump:.1%} > {max_jump:.1%} ({prev_last} → {new_last})"
     except Exception as e:  # noqa: BLE001
-        logger.warning("[resilience] 一致性校验异常（本轮不判脏）: %s", e)
+        logger.warning(f"[resilience] 一致性校验异常（本轮不判脏）: {e}")
         return None
     return None
 

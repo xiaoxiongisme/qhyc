@@ -170,7 +170,7 @@ def check_limit(session: Session, real_symbol: str, price: float, when) -> list[
             return []
     except Exception as e:  # noqa: BLE001
         # 探测失败不能静默：显式告警，避免"以为在校验、其实没校验"
-        logger.warning("[validator] 涨跌停列探测失败，本次跳过校验: %s", e)
+        logger.warning(f"[validator] 涨跌停列探测失败，本次跳过校验: {e}")
         return []
     # 数据源已存在但未接入比对逻辑：提示待补全（不阻断）
     return [f"涨跌停数据源疑似存在但未接入比对（{real_symbol}）"]

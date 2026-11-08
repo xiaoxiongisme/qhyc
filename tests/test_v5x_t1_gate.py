@@ -33,9 +33,12 @@ SH = ZoneInfo("Asia/Shanghai")
 SYM = "RB888"
 
 
-def _daily(amp, close, vol):
+def _daily(amp, close, vol, lret=None):
+    """``lret`` 必须由 _daily_frame 在真实价空间算好（CL-20261108-25）；
+    这里默认给 0 填充，仅簇冲击用例需要显式传入。"""
     return pd.DataFrame({"symbol": SYM, "td": TD, "amp": amp,
-                         "c": close, "vol": vol})
+                         "c": close, "vol": vol,
+                         "lret": [0.0] * len(TD) if lret is None else lret})
 
 
 # ---------------------------------------------------------------- hvol
@@ -60,12 +63,14 @@ def test_hvol_lag1_still_fires_on_previous_day():
 # ---------------------------------------------------------------- 簇冲击
 def test_cluster_shock_lag0_uses_today():
     """``_cluster_shock`` 的返回是 {簇名: 封禁日集合}，不是按品种。"""
-    d = _daily([0.01] * N, [100.0] * (N - 1) + [130.0], [0.01] * N)
+    d = _daily([0.01] * N, [100.0] * N, [0.01] * N,
+               lret=[0.0] * (N - 1) + [0.5])
     assert (N - 1) in _cluster_shock(d, 0).get("黑色", set())
 
 
 def test_cluster_shock_lag1_ignores_today():
-    d = _daily([0.01] * N, [100.0] * (N - 1) + [130.0], [0.01] * N)
+    d = _daily([0.01] * N, [100.0] * N, [0.01] * N,
+               lret=[0.0] * (N - 1) + [0.5])
     assert (N - 1) not in _cluster_shock(d, 1).get("黑色", set())
 
 
