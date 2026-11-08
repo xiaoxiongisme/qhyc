@@ -1,12 +1,15 @@
 """融合策略微信推送盈亏金额契约（信号估算口径，非实际成交）。
 
-⚠ 2026-11-08 / CL-20261108-18：本文件是**僵尸测试**，整组 skip，不得删除。
-``68bfe82``（2026-11-06/07 同步 130 个生产 hotfix）已把「推送盈亏金额」整体下线：
-``app/scheduler.py`` 中 ``_MULT_CACHE`` / ``_MULT_WARNED`` / ``_pnl_yuan`` 均已不存在，
-``pnl_yuan`` 在 app/ 与 scripts/ 全仓 0 命中。此前 CI 在这 3 个用例的 autouse
-fixture 阶段就 AttributeError（3 errors），是 CI 常年判红的存量欠债。
-不得以「让测试变绿」为由删文件或放宽断言；功能若要恢复或测试若要重写，
-须先关闭 CL-20261108-18 并重新定义契约。
+CL-20261108-18：``68bfe82``（2026-11-06/07 同步 130 个生产 hotfix）曾把
+「推送盈亏金额」整体下线，本文件一度成为僵尸测试（3 errors）。2026-11-08
+用户拍板**恢复功能**，已按 ``68bfe82^`` 原契约原样复原：
+  · ``_pnl_yuan`` = sign × (px − entry) × 乘数 × 手数，毛盈亏、未含费用；
+  · 乘数唯一真源 ``dim_variety``（经 ``barstore.variety_spec``），
+    取不到返回 None，**绝不按 1.0 估算**；
+  · ``_fmt_money`` 输出 +/- 千分位整数元；
+  · 推送正文含「估算浮盈合计」「平仓估算盈亏」与「非实际成交账户盈亏」免责声明。
+
+⚠ 三个用例的断言自 dcb1d9b 起一字未改，恢复只动生产实现，不放宽契约。
 """
 from __future__ import annotations
 
@@ -16,14 +19,11 @@ import pytest
 
 import app.scheduler as sched
 
-pytestmark = pytest.mark.skip(
-    reason="CL-20261108-18: 推送盈亏金额功能已于 68bfe82 下线，"
-           "本文件测的 _pnl_yuan/_MULT_CACHE 已不存在，待重新定义契约")
-
-
 @pytest.fixture(autouse=True)
 def _clear_pnl_caches():
-    # 符号可能已随功能下线而消失；用 getattr 容错，避免 skip 前 fixture 先炸。
+    # 缓存是模块级 dict/set，用例之间必须清空，否则 monkeypatch 的 variety_spec
+    # 会被上一个用例的缓存命中（假绿）。getattr 容错保留：符号若再次下线，
+    # 这里不该比断言先炸。
     for name in ("_MULT_CACHE", "_DEC_CACHE", "_MULT_WARNED", "_DEC_WARNED"):
         obj = getattr(sched, name, None)
         if obj is not None and hasattr(obj, "clear"):

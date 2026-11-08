@@ -258,6 +258,51 @@ def _fmt_num(x, nd: int = 1) -> str:
     return f"{v:,.{nd}f}"
 
 
+# —— 推送盈亏金额（CL-20261108-18，按 68bfe82^ 原契约恢复）——
+# 68bfe82 同步 130 个生产 hotfix 时把这组符号整体下线，但契约测试未同步清理，
+# 造成 CI 常年 3 errors。2026-11-08 用户拍板恢复功能，原样复原，不改口径。
+_MULT_CACHE: dict[str, float | None] = {}
+_MULT_WARNED: set[str] = set()
+
+
+def _multiplier(sym: str) -> float | None:
+    """合约乘数唯一真源 = dim_variety；缺失返回 None，绝不用 1.0 估算盈亏。"""
+    code = str(sym or "").rstrip("0123456789").upper()
+    if not code:
+        return None
+    if code in _MULT_CACHE:
+        return _MULT_CACHE[code]
+    mult = None
+    try:
+        from app.data.barstore import variety_spec
+        mult = float(variety_spec(code)["multiplier"])
+    except Exception as e:  # noqa: BLE001  推送展示失败不阻断交易信号
+        if code not in _MULT_WARNED:
+            logger.warning("[scheduler] 取 {} 的合约乘数失败，盈亏金额不估算: {}", code, e)
+            _MULT_WARNED.add(code)
+    _MULT_CACHE[code] = mult
+    return mult
+
+
+def _pnl_yuan(sym: str, side: str, entry, px, lots) -> float | None:
+    """按信号价估算毛盈亏（元），未含手续费/滑点，不代表实际成交账户。"""
+    if side not in ("LONG", "SHORT") or entry is None or px is None:
+        return None
+    mult = _multiplier(sym)
+    if mult is None:
+        return None
+    try:
+        sign = 1.0 if side == "LONG" else -1.0
+        n = int(lots) if lots is not None else 1
+        return sign * (float(px) - float(entry)) * mult * n
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_money(x) -> str:
+    return "-" if x is None else f"{float(x):+,.0f}元"
+
+
 def _px_of(sym: str, val) -> str:
     """按品种最小变动价位给价（真源 dim_variety.tick_size；取不到才自适应兜底）。"""
     if val is None:
@@ -559,6 +604,8 @@ def _heartbeat_rows(results: list[dict], names: dict[str, str], now: datetime,
             "entry": entry,
             "px": px,
             "pnl": pnl,
+            "pnl_yuan": _pnl_yuan(sym, side, entry, px,
+                                  int(r["lots"]) if r.get("lots") is not None else 1),
             "stop": r.get("cur_stop"),
             "be_trigger": r.get("be_trigger"),
             "be_done": bool(r.get("be_done")),
@@ -585,7 +632,8 @@ def _row_line(r: dict, show_levels: bool) -> str:
     sym = r["symbol"]
     pnl = f"{r['pnl']:+.1%}" if r["pnl"] is not None else "-"
     line = (f"{r['icon']} {r['label']} "
-            f"{_px_of(sym, r['entry'])}→{_px_of(sym, r['px'])} {pnl}")
+            f"{_px_of(sym, r['entry'])}→{_px_of(sym, r['px'])} "
+            f"{pnl} / {_fmt_money(r.get('pnl_yuan'))}")
     # 同 C1：0 是有意义的「清仓」，不能被 `or 1` 吞掉
     if (int(r["lots"]) if r.get("lots") is not None else 1) > 1:
         line += f" ×{int(r['lots'])}手"          # P1 加码：标明已加到手数
@@ -624,6 +672,11 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
     lines = [f"## {head} {now:%m-%d %H:%M}", ""]
     if rows:
         seg = f"持仓 **{len(rows)}** 个（多{n_long} 空{n_short}）"
+        pnl_values = [r.get("pnl_yuan") for r in rows if r.get("pnl_yuan") is not None]
+        if pnl_values:
+            seg += f" ｜ 估算浮盈合计 **{_fmt_money(sum(pnl_values))}**"
+            if len(pnl_values) < len(rows):
+                seg += f"（{len(pnl_values)}/{len(rows)}个可估算）"
         if data_asof:
             seg += f" ｜ 数据截至 {data_asof}"
         lines.append(seg)
@@ -644,6 +697,11 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
                 entry_px = sig.get("new_entry") or sig.get("close")
                 line = f"{icon} {sig['label']}　{a} @ {_px_of(sym, entry_px)}"
                 lines.append(line)
+                if sig.get("pnl_yuan") is not None:
+                    pnl_pct = f"{sig['pnl']:+.1%}" if sig.get("pnl") is not None else "-"
+                    lines.append(
+                        f"　　平仓估算盈亏 **{_fmt_money(sig['pnl_yuan'])}**（{pnl_pct}，未含费用）"
+                    )
                 if sig.get("levels"):
                     lv = sig["levels"]
                     lines.append(
@@ -691,6 +749,7 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
             lines.append(f"…另有 {len(rows) - max_rows} 个未列")
         lines.append("")
         lines.append("> ⛔止损=入场∓2×ATR 与吊灯止损取更紧者；🎯触发保本后止损提到成本价。")
+        lines.append("> 金额按信号价×合约乘数×手数估算，未含手续费/滑点，非实际成交账户盈亏。")
     elif not signals and not changes:
         lines.append("当前无持仓、无信号。")
 
@@ -1071,6 +1130,9 @@ def _fusion_scan_job() -> None:
                         elif db == "SHORT":
                             pnl = (db_entry - px) / db_entry
                     new_entry = r.get("entry_px") if eng != "FLAT" else None
+                    old_lots = int(old.lots) if (old is not None and old.lots is not None) else 1
+                    pnl_yuan = (_pnl_yuan(sym, db, db_entry, px, old_lots)
+                                if db != "FLAT" else None)
                     upsert_position(s, sym, eng, entry_price=new_entry or px, entry_at=now,
                                     lots=r.get("lots"))
                     sig = {
@@ -1082,6 +1144,8 @@ def _fusion_scan_job() -> None:
                         "entry": db_entry,
                         "new_entry": new_entry,
                         "pnl": pnl,
+                        "pnl_yuan": pnl_yuan,
+                        "lots": old_lots,
                         "to": eng,
                     }
                     if (f.push_stop_levels and eng != "FLAT"

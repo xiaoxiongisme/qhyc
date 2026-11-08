@@ -1226,7 +1226,88 @@ def _c_ci_same_source_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。CI 同源断言未真实生效，E3 结论不可信（CL-20261108-17）")
 
 
+def _c_ops_push_pnl_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-18：推送盈亏金额必须真实接线，且契约测试不得再被 skip。
+
+    历史事故：``68bfe82`` 把功能整体下线却留下契约测试，CI 常年 3 errors；
+    P2-4 曾只能整组 ``pytest.mark.skip``。2026-11-08 用户拍板恢复后，
+    用「AST 真实引用 + 直接执行 pytest」钉住，防止再次静默退化。
+
+    衡量此刻的行为，不查历史流水：
+      · scheduler 定义了 _multiplier / _pnl_yuan / _fmt_money 三个符号；
+      · _pnl_yuan 在源码中被**真实调用** ≥2 处（防「定义了没人用」）；
+      · 契约测试文件不含 pytest.mark.skip（防僵尸化）；
+      · 直接执行该测试文件：rc=0、3 passed、零 skipped。
+    """
+    import ast
+    import subprocess
+
+    label = "推送盈亏金额已接线且契约测试真实通过（CL-20261108-18）"
+    root = Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    observed: list[str] = []
+
+    sched = root / "app" / "scheduler.py"
+    if not sched.is_file():
+        bad.append("app/scheduler.py 缺失")
+    else:
+        try:
+            src = sched.read_text(encoding="utf-8")
+            tree = ast.parse(src)
+            defined = {n.name for n in ast.walk(tree)
+                       if isinstance(n, ast.FunctionDef)}
+            need = ("_multiplier", "_pnl_yuan", "_fmt_money")
+            miss = [n for n in need if n not in defined]
+            observed.append("symbols=" + ("ok" if not miss else f"missing{miss}"))
+            if miss:
+                bad.append(f"推送盈亏符号缺失 {miss}")
+            calls = sum(1 for n in ast.walk(tree)
+                        if isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Name)
+                        and n.func.id == "_pnl_yuan")
+            observed.append(f"_pnl_yuan_calls={calls}")
+            if calls < 2:
+                bad.append(f"_pnl_yuan 真实调用仅 {calls} 处（应覆盖持仓行与信号两处）")
+        except Exception as exc:                              # noqa: BLE001
+            bad.append(f"scheduler.py 解析失败：{type(exc).__name__}: {exc}")
+
+    t = root / "tests" / "test_fusion_push_pnl.py"
+    if not t.is_file():
+        bad.append("tests/test_fusion_push_pnl.py 缺失")
+    else:
+        tsrc = t.read_text(encoding="utf-8")
+        if "pytest.mark.skip" in tsrc or "pytestmark" in tsrc:
+            bad.append("契约测试又被整组 skip（僵尸测试复发）")
+        else:
+            observed.append("test_skip=none")
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", str(t), "-q", "-rs",
+             "-p", "no:cacheprovider"],
+            cwd=str(root), capture_output=True, text=True, timeout=120)
+        lines = [x for x in proc.stdout.strip().splitlines() if x.strip()]
+        tail = lines[-1] if lines else "(no stdout)"
+        observed.append(f"pytest_rc={proc.returncode} {tail[:90]}")
+        if proc.returncode != 0:
+            bad.append(f"契约测试 rc={proc.returncode}：{tail[:160]}")
+        m = re.search(r"(\d+) passed", proc.stdout)
+        if not m or int(m.group(1)) < 3:
+            bad.append("契约测试 passed <3（疑似被掏空或 0 用例假绿）")
+        if re.search(r"\d+ skipped", proc.stdout):
+            bad.append("契约测试出现 skipped")
+    except Exception as exc:                                  # noqa: BLE001
+        bad.append(f"契约测试执行失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。推送盈亏金额接线不完整或契约被跳过（CL-20261108-18）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
+    # CL-20261108-18：恢复推送盈亏金额后，防止功能再下线 / 契约测试再僵尸化。
+    ("OPS-PUSH-PNL-WIRED", "推送盈亏金额已接线且契约测试真实通过（CL-20261108-18）",
+     "block", _c_ops_push_pnl_wired),
     # P2-4 E3：CI 门禁复活 + data_same_source / signal_parity 真实接线并执行。
     ("CI-SAME-SOURCE-WIRED", "CI 同源断言已接线且真实通过（E3 / P2-4）",
      "block", _c_ci_same_source_wired),
