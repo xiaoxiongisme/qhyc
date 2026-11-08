@@ -46,6 +46,8 @@ DISK_WARN = 85.0           # %
 DISK_CRIT = 93.0           # %
 DATA_LAG_WARN = 2          # 天
 PUSH_SILENCE_WARN = 24     # 小时
+MARKET_LIVE_H = 6          # 市场数据 6h 内有更新 ⇒ 视为交易时段（休市静默不算故障）
+SIGNAL_STALL_WARN = 3      # 小时；交易时段内无任何推送记录超过该值 ⇒ 链路停摆
 COOLDOWN_SEC = 3600        # 同类告警冷却 1 小时
 COOLDOWN_CRIT = 1800       # 严重告警冷却 30 分钟
 
@@ -241,20 +243,60 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
         except ValueError as exc:
             logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
-    # 5. 推送活性（仅交易日/有数据时检查：无数据时本就静默）
+    # 5. 推送活性
+    #
+    # ★ 2026-11-08（CL-20261108-23）：原判据「delivered 静默 > 24h 即告警」不区分休市，
+    #   每逢周末/长假必然误报——2026-11-08 22:30 这次「已 60 小时无成功推送」就是
+    #   周五 11-06 10:03 后无交易日 + 当日推送被 pushplus 限流叠加的产物。
+    #   改为「市场数据仍在更新时才算链路故障」：以 minute_bar 最新桶的年龄作休市代理，
+    #   休市期间静默属正常，不下结论。
+    now_utc = datetime.now(timezone.utc)
+    market_age_h = None
+    ok, out = psql_fn(
+        "SELECT max(ts)::text FROM minute_bar WHERE ts > now() - interval '10 days'")
+    if ok and out.strip() and out.strip() != "None":
+        try:
+            mt = datetime.fromisoformat(out.strip())
+            if mt.tzinfo is None:
+                mt = mt.replace(tzinfo=SH)
+            market_age_h = (now_utc - mt.astimezone(timezone.utc)).total_seconds() / 3600
+            m["market_age_h"] = round(market_age_h, 1)
+        except ValueError as exc:
+            logger.debug("[silent-swallow] market_age 解析失败: %s", exc, exc_info=True)
+    # 市场 6 小时内有过新数据 ⇒ 处于交易时段（含夜盘），推送就应该在跑
+    market_live = market_age_h is not None and market_age_h <= MARKET_LIVE_H
+
     ok, out = psql_fn(
         "SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered")
     m["last_push_at"] = out.strip() if ok and out.strip() else None
     if m["last_push_at"] and m["last_push_at"] not in ("", "None"):
         try:
             t = datetime.fromisoformat(m["last_push_at"]).astimezone(timezone.utc)
-            silence_h = (datetime.now(timezone.utc) - t).total_seconds() / 3600
+            silence_h = (now_utc - t).total_seconds() / 3600
             m["push_silence_h"] = round(silence_h, 1)
-            if silence_h > PUSH_SILENCE_WARN:
+            if silence_h > PUSH_SILENCE_WARN and market_live:
                 issues.append(("warn", "push_silence",
-                               f"已 {silence_h:.0f} 小时无成功推送（信号链路可能停摆）"))
+                               f"已 {silence_h:.0f} 小时无成功推送（市场数据仍在更新，"
+                               f"最新数据仅 {market_age_h:.1f} 小时前 → 推送通道疑似故障）"))
         except ValueError as exc:
             logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
+
+    # 5b. 信号链路活性：交易时段内连「推送尝试」都没有，说明调度/信号计算停了。
+    #     这与「推送通道失败」是两种故障，必须分开报——通道故障有留痕、链路停摆没有。
+    if market_live:
+        ok, out = psql_fn(
+            "SELECT max(pushed_at)::text FROM fusion_push_log")
+        if ok and out.strip() and out.strip() != "None":
+            try:
+                at = datetime.fromisoformat(out.strip()).astimezone(timezone.utc)
+                attempt_age_h = (now_utc - at).total_seconds() / 3600
+                m["signal_attempt_age_h"] = round(attempt_age_h, 1)
+                if attempt_age_h > SIGNAL_STALL_WARN:
+                    issues.append(("crit", "signal_stall",
+                                   f"信号链路已 {attempt_age_h:.1f} 小时无任何推送记录"
+                                   f"（市场数据仍在更新 → 调度/信号计算疑似停摆）"))
+            except ValueError as exc:
+                logger.debug("[silent-swallow] attempt_age 解析失败: %s", exc, exc_info=True)
 
     return {"metrics": m, "issues": issues}
 
@@ -287,6 +329,9 @@ def render_daily(metrics, issues) -> str:
                      f"（滞后 {metrics.get('data_lag_days')} 天）")
     if metrics.get("push_silence_h") is not None:
         lines.append(f"- 距上次成功推送：{metrics.get('push_silence_h')} 小时")
+    if metrics.get("market_age_h") is not None:
+        lines.append(f"- 距最新行情数据：{metrics.get('market_age_h')} 小时"
+                     f"（> {MARKET_LIVE_H}h 视为休市，静默不告警）")
     if issues:
         lines += ["", "**当前未恢复的问题**："] + [f"- {d}" for _, _, d in issues]
     else:

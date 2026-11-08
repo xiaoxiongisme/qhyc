@@ -29,6 +29,24 @@ CST = timezone(timedelta(hours=8))
 # 冷却：同一告警键在窗口内只推送一次，避免刷屏
 _LAST_SENT: dict[str, float] = {}
 
+# 日配额计数（进程内；重启清零可接受——单次重启不会额外放大推送量）
+_DAILY_BUDGET: dict = {"day": None, "used": 0}
+
+
+def _budget_take(cfg: "AlertConfig") -> bool:
+    """日推送配额闸门。返回 False 表示今日额度已用尽，本次不再推送。"""
+    today = datetime.now(CST).date()
+    if _DAILY_BUDGET.get("day") != today:
+        _DAILY_BUDGET["day"] = today
+        _DAILY_BUDGET["used"] = 0
+    limit = int(getattr(cfg, "max_per_day", 0) or 0)
+    if limit <= 0:
+        return True
+    if _DAILY_BUDGET["used"] >= limit:
+        return False
+    _DAILY_BUDGET["used"] += 1
+    return True
+
 
 @dataclass
 class AlertConfig:
@@ -43,6 +61,11 @@ class AlertConfig:
     push_silence_hours: int = 36       # 预测/推送静默告警阈值（小时）
     db_restart_alert_min: int = 10     # DB uptime < 该分钟数 → 疑似崩溃重启
     cooldown_sec: int = 1800
+    # ★ 2026-11-08（CL-20261108-23）：单日推送上限。
+    #   pushplus 免费额度约 200 条/日，一旦击穿返回 code=900「用户账号使用受限」，
+    #   **与告警共用同一 token 的交易信号会一并静默**（11-06 实测 60 小时）。
+    #   故给运维告警设硬闸门，余量留给信号推送。
+    max_per_day: int = 80
     notify: bool = True                # False = 只记日志不推送
     # 新鲜度巡检表（2026-10-08 大幅扩充）。
     #
@@ -117,6 +140,7 @@ def alert_config_from_env() -> AlertConfig:
         push_silence_hours=_i("ALERT_PUSH_SILENCE_HOURS", 36),
         db_restart_alert_min=_i("ALERT_DB_RESTART_MIN", 10),
         cooldown_sec=_i("ALERT_COOLDOWN_SEC", 1800),
+        max_per_day=_i("ALERT_MAX_PER_DAY", 80),
         notify=_b("ALERT_NOTIFY", True),
     )
 
@@ -389,12 +413,28 @@ def send_alert(title: str, content: str, cfg: AlertConfig | None = None,
     logger.warning("[alert] {0} | {1}".format(title, content))
     if not cfg.notify or not cfg.enabled:
         return False, "告警推送已关闭或配置未启用"
+    if not _budget_take(cfg):
+        logger.warning("[alert] 今日推送配额已用尽（上限 {0} 条），本次仅记日志不推送: {1}"
+                       .format(cfg.max_per_day, title))
+        return False, "日推送配额已用尽（上限 {0} 条）".format(cfg.max_per_day)
     try:
         from app.notify.pushplus import send_notify
         ok, msg = send_notify(title, content)
         return bool(ok), msg
     except Exception as e:
         return False, "推送通道异常: {0}".format(str(e)[:160])
+
+
+def _render_digest(findings: list[dict]) -> tuple[str, str]:
+    """把一轮巡检的全部发现合并成一条消息（标题, 正文）。"""
+    crit = any(f.get("level") == "CRIT" for f in findings)
+    level = "CRIT" if crit else "WARN"
+    title = "[qhyc] {0} 告警汇总 {1} 项".format(level, len(findings))
+    lines = []
+    for f in findings:
+        tag = "**严重**" if f.get("level") == "CRIT" else "警告"
+        lines.append("- {0} `{1}`：{2}".format(tag, f.get("key", "?"), f.get("msg", "")))
+    return title, "\n".join(lines)
 
 
 def check_all(session=None, cfg: AlertConfig | None = None) -> dict:
@@ -426,10 +466,17 @@ def check_all(session=None, cfg: AlertConfig | None = None) -> dict:
                 logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
 
     alerts = []
-    for f in findings:
-        ok, note = send_alert("[qhyc] {0} {1}".format(f["level"], f["key"]),
-                              f["msg"], cfg, key=f["key"])
-        alerts.append({"key": f["key"], "level": f["level"], "sent": ok, "note": note})
+    if findings:
+        # ★ 2026-11-08（CL-20261108-23）：一轮巡检合并为**单条 digest**。
+        #   原先每个 finding 单独发送：6 个数据源同时滞后 = 6 条/轮 × 48 轮/日 ≈ 288 条/日，
+        #   2026-11-06 实测当天推送 206 条 [alert]，击穿 pushplus 额度后返回
+        #   code=900「用户账号使用受限」，把共用同一 token 的**交易信号**一起打成静默
+        #   （fusion_push_log 11-06 11:01 起 7 条全部未送达，直到 11-08 才恢复）。
+        #   合并后单轮上限 1 条，信息不丢（逐项列出，key 仍在正文里可检索）。
+        title, content = _render_digest(findings)
+        ok, note = send_alert(title, content, cfg, key="digest")
+        alerts = [{"key": f["key"], "level": f["level"], "sent": ok, "note": note}
+                  for f in findings]
     crit = sum(1 for f in findings if f["level"] == "CRIT")
     return {
         "enabled": True, "findings": findings, "alerts": alerts,
