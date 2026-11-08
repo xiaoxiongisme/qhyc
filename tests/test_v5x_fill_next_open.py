@@ -117,12 +117,11 @@ def test_next_open_fills_at_next_bar_open_plus_one_tick():
     assert repriced
 
     opens = bars["open"].to_numpy(dtype=float)
-    closes_a = bars["close"].to_numpy(dtype=float)
     for tr in repriced:
         i, j = tr["signal_i"], tr["fill_i"]
         assert j == i + 1, "next_open 必须成交在信号根的下一根"
         want = opens[j] + tr["dir"] * 2.0
-        assert tr["P"] == pytest.approx(want, abs=1e-9), "开仓价 = 下一根开盘 + dir*tick"
+        assert tr["P0"] == pytest.approx(want, abs=1e-9), "首仓价 = 下一根开盘 + dir*tick"
         # 平仓同理，反向加滑点
         k = tr["exit_i"]
         assert k == tr["fill_i"] + 1 or k > tr["signal_i"]

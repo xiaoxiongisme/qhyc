@@ -227,6 +227,9 @@ def reprice_orders(
                 net=net, gross=gross,
                 r=(net / risk) if risk > 0 else float("nan"),
                 reason=str(od.get("reason", "stop")),
+                # P0 = 首仓成交价（P 是含加码的均价）；测试与审计要靠它区分
+                # 「成交价对不对」和「加码摊平后均价对不对」
+                P0=pos["entry_px"],
                 signal_i=pos["entry_i"], fill_i=pos["entry_j"], exit_i=j,
             ))
             pos = None
