@@ -87,8 +87,8 @@ def _run(cmd: list[str], cwd: Path | None = None, check: bool = True,
     return (p.stdout or "") + (p.stderr or "")
 
 
-def _ssh(script: str, check: bool = True) -> str:
-    return _run(["ssh", PROD_HOST, script], check=check)
+def _ssh(script: str, check: bool = True, timeout: int = 120) -> str:
+    return _run(["ssh", PROD_HOST, script], check=check, timeout=timeout)
 
 
 def _banner(t: str) -> None:
@@ -289,8 +289,18 @@ def main() -> int:
     files = [f for f in changed.splitlines() if f.strip()]
     touched_app = [f for f in files if f.startswith("app/")]
     touched_mig = [f for f in files if f.startswith("migrations/")]
-    if touched_app and not a.no_restart:
-        print(f"app/ 有 {len(touched_app)} 个文件变更 → 双重启 {SCHED_SVC} + {API_CONTAINER}")
+    # 上一次发布若在第 6 步中途失败（例如脚本自身抛异常），代码已经 pull 了但
+    # 部署标记没写、api 没重启。重跑本脚本时 changed 为空，若无这个条件就会
+    # 误判「无需重启」，把半成品留到第二天。标记缺失 = 部署未收口，必须补完。
+    mark_now = _ssh(f"cd {PROD_REPO} && head -1 {DEPLOY_MARK} 2>/dev/null",
+                    check=False).strip()
+    mark_pending = not mark_now.startswith(head)
+    if mark_pending:
+        print(f"部署标记未对齐（当前 {mark_now!r}，应为 {head}）→ 视为上次发布未收口")
+    need_restart = bool(touched_app) or mark_pending
+    if need_restart and not a.no_restart:
+        print(f"{'app/ 有 ' + str(len(touched_app)) + ' 个文件变更' if touched_app else '补完上次未收口的部署'}"
+              f" → 双重启 {SCHED_SVC} + {API_CONTAINER}")
         _ssh(f"sudo systemctl restart {SCHED_SVC} && sleep 6 && "
              f"systemctl is-active {SCHED_SVC}")
         if a.emergency_skip_api:
@@ -308,11 +318,11 @@ def main() -> int:
                 print(f"✗ {API_CONTAINER} 重启后未处于 Up：{st!r}（立刻人工恢复）")
                 return 2
             print(f"  {API_CONTAINER}: {st}")
-    elif touched_app:
-        print(f"app/ 有变更，但 --no-restart：**{API_CONTAINER} 与 {SCHED_SVC} "
-              "仍在跑旧代码**，记得手动双重启")
+    elif need_restart:
+        print(f"需要重启但用了 --no-restart：**{API_CONTAINER} 与 {SCHED_SVC} "
+              "可能在跑旧代码**，记得手动双重启")
     else:
-        print("未触及 app/，无需重启服务")
+        print("运行态与部署标记均已收口，无需重启服务")
     if touched_mig:
         print(f"⚠ migrations/ 有 {len(touched_mig)} 个新迁移，**未自动执行**：")
         for f in touched_mig:
