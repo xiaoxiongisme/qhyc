@@ -38,7 +38,7 @@ V5X 的 ``td_assign``：夜盘（``hour >= 18``）归**次一交易日**。qhyc 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -371,10 +371,14 @@ def build_ctx(md: V5XMarketData, symbol: str, td) -> DailyCtx:
     归一成 ``datetime.date`` 再查表 —— 供数层的 dict 全部以 date 为 key。
     类型不一致会让三道门（hvol / blocked / regime）恒 miss，而且不报错。
     """
-    if isinstance(td, date):
-        k = td
-    elif isinstance(td, np.datetime64):
+    # ⚠ 判断顺序不能反：``datetime`` 与 ``pd.Timestamp`` 都是 ``date`` 的子类，
+    #   先写 ``isinstance(td, date)`` 会把 Timestamp 原样当成 key → 查表 miss。
+    if isinstance(td, np.datetime64):
         k = pd.Timestamp(td).date()
+    elif isinstance(td, datetime):
+        k = td.date()
+    elif isinstance(td, date):
+        k = td
     else:
         k = pd.Timestamp(td).date()
     z = np.nan
