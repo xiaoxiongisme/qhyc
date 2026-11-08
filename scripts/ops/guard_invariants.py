@@ -917,6 +917,170 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。成交口径接线被回退或改坏，回测结论不可信（CL-20261108-11）")
 
 
+def _c_factor_z_ts_distinct(c: Ctx) -> tuple[bool, str, str, str]:
+    """A1 / CL-20261108-20：横截面 z 与时序 z 必须是两个因子、两种语义。
+
+    为什么这条值得一条 block 断言
+    ----------------------------
+    `member_net_z`（横截面 z，groupby trade_date）长期被当成「单品种择时门」使用，
+    拿错语义不报错、只静默失效。实测 38 白名单近 365 日：
+    **19/38 个品种 |z|>=1 占比为 0%**（avg|z| 0.150~5.858），门控 100% 误杀。
+    这种错配属于「同名不同义」——与 `dim_variety.is_active` 同一类坑，
+    只靠 code review 挡不住，必须机器判定「两种 z 真的不是同一个东西」。
+
+    断言分两层，全部衡量「此刻的行为」：
+      · 行为级（零 DB）：AST 抽出 `_zscore` 真身，用确定性序列验证
+        ① 横截面模式：每个 trade_date 的 z 均值≈0、std≈1；
+        ② 时序模式：前 min_periods-1 期必须无值（不许拿不足样本硬算）；
+        ③ 两模式在同一 (symbol, date) 上 >=90% 不相等（防又合并回一套）；
+        ④ **无前视**：只用前 60 期算出的 z 与用全量算出的前 60 期逐位相同
+           （防「用全样本均值/标准差」这种最隐蔽的前视）；
+      · 数据级：`member_net_ts_z` 已注册（version=1.1）、近 90 日有值，
+        且逐品种 |z|>=1 占比为 0 的品种数 < 一半（与横截面 19/38 形成对照）。
+    """
+    label = "因子 z 语义可辨：member_net_z=横截面 / member_net_ts_z=时序"
+    bad: list[str] = []
+    observed: list[str] = []
+
+    # ---------- ① 行为级：AST 抽出 _zscore 真身（不 import 整个脚本）----------
+    try:
+        import ast
+        from datetime import date as _date, timedelta as _td
+
+        import numpy as np
+        import pandas as pd
+
+        path = (Path(__file__).resolve().parents[2] / "scripts"
+                / "compute_factor_value.py")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        node = next((nd for nd in tree.body
+                     if isinstance(nd, ast.FunctionDef) and nd.name == "_zscore"), None)
+        if node is None:
+            return (False, label, "compute_factor_value.py 找不到 _zscore",
+                    "_zscore 缺失说明 z 口径实现被删/改名（CL-20261108-20）")
+        consts = {"TS_Z_WINDOW": 60, "TS_Z_MIN_PERIODS": 20}
+        for nd in tree.body:
+            if (isinstance(nd, ast.Assign) and len(nd.targets) == 1
+                    and isinstance(nd.targets[0], ast.Name)
+                    and nd.targets[0].id in consts):
+                try:
+                    consts[nd.targets[0].id] = int(ast.literal_eval(nd.value))
+                except Exception:                            # noqa: BLE001
+                    pass
+        ns: dict = {"pd": pd, "np": np, **consts}
+        exec(compile(ast.Module(body=[node], type_ignores=[]),
+                     "<_zscore>", "exec"), ns)               # noqa: S102
+        _zscore = ns["_zscore"]
+        min_p = int(consts["TS_Z_MIN_PERIODS"])
+        observed.append(f"ts_window={consts['TS_Z_WINDOW']} min_periods={min_p}")
+
+        n_days = 90
+        rows = []
+        for k, sym in enumerate(("A888", "B888", "C888")):
+            base = 100.0 * (k + 1)
+            for d in range(n_days):
+                # A 逐日 +1 陡升，B/C 近乎横盘 -> 两种 z 必然给出不同结论
+                v = base + d * (1.0 if k == 0 else 0.1) + (d % 7) * 0.5
+                rows.append({"symbol": sym,
+                             "trade_date": _date(2026, 1, 1) + _td(days=d),
+                             "raw": float(v)})
+        df = pd.DataFrame(rows)
+
+        cs = _zscore(df, "raw", mode="cross_section")
+        ts = _zscore(df, "raw", mode="time_series")
+        d0 = _date(2026, 1, 1)
+        d59 = d0 + _td(days=59)
+        _df = df[(df["trade_date"] == d0)]
+        d0_cs = _df.merge(cs[["symbol", "trade_date", "z"]],
+                          on=["symbol", "trade_date"])["z"]
+        if abs(float(d0_cs.mean())) > 1e-9 or abs(float(d0_cs.std(ddof=0)) - 1.0) > 1e-6:
+            bad.append("横截面模式未按 trade_date 标准化（day0 mean/std 偏离 0/1）")
+        else:
+            observed.append("cs_day0_mean0_std1")
+
+        early = ts[ts["trade_date"] < d0 + _td(days=min_p - 1)]
+        if early["z"].notna().any():
+            bad.append(f"时序模式在 min_periods={min_p} 之前就给了 z（样本不足硬算）")
+        else:
+            observed.append(f"ts_first_{min_p - 1}_null")
+
+        a = cs.set_index(["symbol", "trade_date"])["z"]
+        b = ts.set_index(["symbol", "trade_date"])["z"]
+        both = a.notna() & b.notna()
+        if not bool(both.any()):
+            bad.append("两模式无可比样本")
+        else:
+            diff_ratio = float((abs(a[both] - b[both]) > 1e-9).sum()) / int(both.sum())
+            observed.append(f"cs_vs_ts_diff={diff_ratio:.3f}")
+            if diff_ratio < 0.9:
+                bad.append(f"横截面 z 与时序 z 几乎相同（差异比 {diff_ratio:.2f} < 0.9）"
+                           "——疑似又合并回同一套实现")
+
+        part_ts = _zscore(df[df["trade_date"] <= d59], "raw", mode="time_series")
+        j = part_ts.set_index(["symbol", "trade_date"])["z"]
+        k2 = ts.set_index(["symbol", "trade_date"])["z"]
+        idx = j.index.intersection(k2.index)
+        idx = [t for t in idx if t[1] <= d59]
+        if not idx:
+            bad.append("无前视校验无样本")
+        else:
+            m = float(np.nanmax(np.abs(j.loc[idx].to_numpy(float)
+                                      - k2.loc[idx].to_numpy(float))))
+            observed.append(f"no_lookahead_maxdiff={m:.2e}")
+            if not np.isfinite(m) or m > 1e-9:
+                bad.append(f"时序模式存在前视（截断重算 maxdiff={m:.2e}）"
+                           "——窗口不得依赖未来样本")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"行为级对拍异常 {type(exc).__name__}: {exc}")
+
+    # ---------- ② 数据级：注册 + 落库 + 分布对照 ----------
+    try:
+        reg = {r[0]: (r[1], r[2]) for r in c.rows(
+            "SELECT factor_id, version, enabled FROM l2_adj.factor_registry "
+            "WHERE factor_id IN ('member_net_z','member_net_ts_z')")}
+        observed.append(f"registry={sorted(reg)}")
+        if set(reg) != {"member_net_z", "member_net_ts_z"}:
+            bad.append(f"factor_registry 缺注册项：实得 {sorted(reg)}（migrations/058）")
+        elif str(reg["member_net_ts_z"][0]) != "1.1":
+            bad.append(f"member_net_ts_z version={reg['member_net_ts_z'][0]!r} != '1.1'")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"注册表检查失败：{type(exc).__name__}: {exc}")
+
+    try:
+        n_ts = int(c.scalar(
+            "SELECT count(*) FROM l2_adj.factor_value "
+            "WHERE factor_id='member_net_ts_z' AND trade_date >= CURRENT_DATE - 90") or 0)
+        observed.append(f"ts_rows_90d={n_ts}")
+        if n_ts <= 0:
+            bad.append("member_net_ts_z 近 90 日 0 行（口径注册了但从未计算）")
+        else:
+            row = c.rows("""
+                WITH w AS (SELECT variety_code||'888' AS s FROM l3_ref.tradable_variety
+                           WHERE effective_from <= CURRENT_DATE
+                             AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)),
+                v AS (SELECT f.symbol, f.z_value FROM l2_adj.factor_value f
+                        JOIN w ON w.s = f.symbol
+                       WHERE f.factor_id='member_net_ts_z'
+                         AND f.trade_date >= CURRENT_DATE - 90),
+                g AS (SELECT symbol, count(*) FILTER (WHERE abs(z_value) >= 1) AS k
+                        FROM v GROUP BY symbol)
+                SELECT count(*), count(*) FILTER (WHERE k = 0) FROM g
+            """)[0]
+            n_sym, n_zero = int(row[0]), int(row[1])
+            observed.append(f"ts_syms={n_sym} zero_ratio_syms={n_zero}")
+            if n_sym == 0:
+                bad.append("member_net_ts_z 未覆盖白名单任何品种")
+            elif n_zero * 2 >= n_sym:
+                bad.append(f"{n_zero}/{n_sym} 个品种 |z|>=1 占比为 0 —— 时序 z 退化"
+                           "（横截面 z 的历史症状是 19/38）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"分布检查失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。横截面 z / 时序 z 语义再次混用，单品种择时门会静默失效（CL-20261108-20）")
+
+
 def _c_bt_gap_filter_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """E1-C / CL-20261108-15：0.5 ATR 不利跳空过滤必须真实接线。
 
@@ -1776,6 +1940,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 防「字段建了没人读」「盘中击穿静默失效」「低波动被误判成停板」三种假绿。
     ("BT-B1-PENALTY-WIRED", "B1 执行惩罚真实接线（盘中击穿/一字K/保证金/未收盘K）",
      "block", _c_bt_b1_penalty_wired),
+    # A1 / CL-20261108-20：`member_net_z` 是**横截面** z（品种间排序），却被当
+    # 单品种择时门用，实测 19/38 品种 |z|>=1 占比为 0%（静默 100% 误杀）。
+    # 断言同时验「两种 z 真不是一回事」（含无前视）与「时序 z 已注册并有数据」。
+    ("FACTOR-Z-TS-DISTINCT", "横截面 z 与时序 z 语义可辨且时序 z 已落库",
+     "block", _c_factor_z_ts_distinct),
 ]
 
 

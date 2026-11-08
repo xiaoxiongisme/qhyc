@@ -11,6 +11,16 @@
 输出：factor_value(factor_id, trade_date, symbol, raw_value, z_value, available_at, version)
 symbol 统一归一到 888 主力连续代码（与 factor_ic_scan._to_main 一致）。
 
+★ 两种 z 语义（A1 / CL-20261108-20）——**同一个字段名不能当两种语义用**
+   · 横截面 z（cross_section）：`groupby(trade_date)` 标准化，衡量「某品种在今天
+     全池里排第几」→ 只适用于**品种间排序/选品**。
+   · 时序 z（time_series）：`groupby(symbol)` + 滚动窗口标准化，衡量「某品种
+     今天相对它自己的历史有多极端」→ 适用于**单品种择时/门控**。
+   历史上 `member_net_z` 只有横截面版本，却被当成单品种门使用：实测 38 白名单
+   近 365 日有 **19/38 个品种 |z|>=1 占比为 0%**（avg|z| 0.150~5.858），门控
+   100% 误杀且不报错。故本脚本**新增** `member_net_ts_z`（时序 z），
+   `member_net_z` 横截面语义**原样保留**，两者并存、各自命名可辨。
+
 用法：
   python scripts/compute_factor_value.py --since 2024        # 本地落库（默认 upsert）
   python scripts/compute_factor_value.py --since 2015 --dry-run   # 只统计不写库
@@ -38,6 +48,14 @@ from factor_ic_scan import pick_symbols, load_symbol_bars, build_factors, _to_ma
 from pgconn import add_conn_args, conn_from_args
 
 VERSION = "1.0"
+#: 时序 z 因子的 version 标记：与横截面 z 同表不同口径，必须能从行上区分。
+#: 只影响 factor_id 以 ``_ts_z`` 结尾的行，既有横截面行的 version 保持 1.0 不变。
+TS_VERSION = "1.1"
+#: 时序 z 的滚动窗口与最小样本（与 V5X M5 门的 60 日窗对齐）。
+#: min_periods=20 是对「新品种上市初期」的折中：少于 20 期算出的 z 方差极不稳，
+#: 宁可不给值（NaN 行直接跳过），也不要给一个假 z。
+TS_Z_WINDOW = 60
+TS_Z_MIN_PERIODS = 20
 A_FACTORS = ["f_vwap_dev", "f_close_loc", "f_close_loc14", "f_mom_1h", "f_mom_4h",
              "f_vol_surge", "f_oi_dir", "f_atr_pct", "f_range_comp", "f_gap", "f_amt_conc"]
 
@@ -80,37 +98,76 @@ def _to_float_df(df):
     return df
 
 
-def _zscore(frame, val_col):
-    """frame: (symbol, trade_date, val_col) -> 追加 z 列（按交易日横截面）"""
+def _zscore(frame, val_col, mode="cross_section", window=TS_Z_WINDOW,
+            min_periods=TS_Z_MIN_PERIODS):
+    """给 frame 追加 z 列。
+
+    Args:
+        mode: ``"cross_section"``（默认，历史语义）= 按 ``trade_date`` 分组标准化，
+              衡量品种在全池中的相对位置，**只用于品种间排序**；
+              ``"time_series"`` = 按 ``symbol`` 分组、滚动 ``window`` 期标准化，
+              衡量该品种相对自身历史的偏离，**用于单品种择时/门控**。
+        window, min_periods: 仅 time_series 生效。
+
+    两种模式的**输出列名相同（z）**，语义完全不同 —— 这正是历史的坑：
+    消费方只要不看 factor_id 后缀（``_z`` vs ``_ts_z``）就会拿错。因此
+    ``add()`` 必须显式指定 ``ts_fid``，不允许「同一个 fid 出两种 z」。
+    """
     out = frame.dropna(subset=[val_col]).copy()
     if out.empty:
         out["z"] = np.nan
         return out
 
-    def _z(x):
-        s = x.std(ddof=0)
-        if s is None or pd.isna(s) or s == 0:
-            return pd.Series(np.nan, index=x.index)
-        return (x - x.mean()) / s
+    if mode == "cross_section":
+        def _z(x):
+            s = x.std(ddof=0)
+            if s is None or pd.isna(s) or s == 0:
+                return pd.Series(np.nan, index=x.index)
+            return (x - x.mean()) / s
 
-    out["z"] = out.groupby("trade_date")[val_col].transform(_z)
+        out["z"] = out.groupby("trade_date")[val_col].transform(_z)
+        return out
+
+    if mode != "time_series":
+        raise ValueError(f"未知 _zscore mode={mode!r}（只支持 cross_section / time_series）")
+
+    # 时序 z：必须按时间升序，否则 rolling 窗口取到的是「未来」。
+    out = out.sort_values(["symbol", "trade_date"]).reset_index(drop=True)
+
+    def _ts(x: pd.Series) -> pd.Series:
+        m = x.rolling(window, min_periods=min_periods).mean()
+        sd = x.rolling(window, min_periods=min_periods).std(ddof=0)
+        sd = sd.where(sd > 0)          # 窗口内零方差 → NaN，不给「假 0」
+        return (x - m) / sd
+
+    out["z"] = out.groupby("symbol", group_keys=False)[val_col].transform(_ts)
     return out
 
 
 def compute_b(cur):
     rows = []
 
-    def add(fid, raw_frame, val_col):
+    def add(fid, raw_frame, val_col, ts_fid: str | None = None):
+        """落一条因子的横截面 z；``ts_fid`` 非空时**额外**落一条时序 z。
+
+        ★ A1 / CL-20261108-20：同一份 raw 序列可以用两种 z，但**必须是两个
+          factor_id**（``xxx_z`` 横截面 / ``xxx_ts_z`` 时序），绝不允许同一个
+          fid 里混两种语义——那正是历史坑的成因。raw_value 两种口径相同。
+        """
         rf = raw_frame.rename(columns={val_col: "raw"}).copy()
         rf["raw"] = pd.to_numeric(rf["raw"], errors="coerce")
         rf["symbol"] = rf["symbol"].map(_to_main)
         rf = rf.dropna(subset=["symbol", "raw"])
         rf["trade_date"] = pd.to_datetime(rf["trade_date"]).dt.date
-        zz = _zscore(rf, "raw")
-        for (sym, date), raw, z in zip(zip(zz["symbol"], zz["trade_date"]), zz["raw"], zz["z"]):
-            if pd.isna(z):
+        for _fid, _mode in ((fid, "cross_section"), (ts_fid, "time_series")):
+            if _fid is None:
                 continue
-            rows.append((fid, date, sym, float(raw), float(z)))
+            zz = _zscore(rf, "raw", mode=_mode)
+            for (sym, date), raw, z in zip(zip(zz["symbol"], zz["trade_date"]),
+                                           zz["raw"], zz["z"]):
+                if pd.isna(z):
+                    continue
+                rows.append((_fid, date, sym, float(raw), float(z)))
 
     # 1) basis_rate_z：基差率（dom 优先，缺则用 near）
     cur.execute("SELECT report_date, symbol, dom_basis_rate, near_basis_rate FROM spot_basis")
@@ -143,7 +200,12 @@ def compute_b(cur):
     mp["volc"] = mp["v5"] / (mp["v5"] + mp["v10"] + mp["v15"] + mp["v20"]).replace(0, np.nan)
     mp["net_prev"] = mp.sort_values("report_date").groupby("symbol")["net"].shift(1)
     mp["trend"] = mp["net"] - mp["net_prev"]
-    add("member_net_z", mp[["report_date", "symbol", "net"]].rename(columns={"report_date": "trade_date"}), "net")
+    # ★ A1 / CL-20261108-20：member_net 同时产出两种 z。
+    #   member_net_z    = 横截面 z（品种间排序用，历史语义不变）
+    #   member_net_ts_z = 时序 z（单品种择时/门控用，相对自身 60 期历史）
+    add("member_net_z",
+        mp[["report_date", "symbol", "net"]].rename(columns={"report_date": "trade_date"}),
+        "net", ts_fid="member_net_ts_z")
     add("member_ls_z", mp[["report_date", "symbol", "ls"]].rename(columns={"report_date": "trade_date"}), "ls")
     add("vol_concentration_z", mp[["report_date", "symbol", "volc"]].rename(columns={"report_date": "trade_date"}), "volc")
     add("member_trend_z", mp[["report_date", "symbol", "trend"]].rename(columns={"report_date": "trade_date"}), "trend")
@@ -245,6 +307,15 @@ def compute_c(cur, since):
 
 
 # ---------------------------------------------------------------- 落库
+def _row_version(fid: str) -> str:
+    """按因子命名决定 version：``*_ts_z`` 是时序 z 口径（1.1），其余仍是 1.0。
+
+    只影响新写入的行；既有横截面行的 version 不会被本函数改动，因此
+    「1.0 = 横截面 z」这条历史约定对老数据依然成立。
+    """
+    return TS_VERSION if str(fid).endswith("_ts_z") else VERSION
+
+
 def upsert(cur, rows):
     # 实际表列：factor_id, trade_date, symbol, raw_value, z_value, available_at,
     # version, created_at(NOT NULL DEFAULT now())。INSERT 仅显式给前 7 列，
@@ -257,7 +328,7 @@ def upsert(cur, rows):
         raw_value = EXCLUDED.raw_value, z_value = EXCLUDED.z_value,
         available_at = EXCLUDED.available_at, version = EXCLUDED.version
     """
-    data = [(r[0], r[1], r[2], r[3], r[4], r[1], VERSION) for r in rows]
+    data = [(r[0], r[1], r[2], r[3], r[4], r[1], _row_version(r[0])) for r in rows]
     execute_values(cur, sql, data, page_size=5000)
 
 
