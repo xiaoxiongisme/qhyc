@@ -1347,6 +1347,74 @@ def _c_bt_v5x_fill_mode(c: Ctx) -> tuple[bool, str, str, str]:
         + "。V5X 与 fusion 成交口径分叉，两份回测不可比（CL-20261109-05）")
 
 
+def _c_v5x_p6_sessions(c: Ctx) -> tuple[bool, str, str, str]:
+    """P6 会话末根集合必须是「常态末根」，不能被残缺历史污染（CL-20261109-10）。
+
+    为什么这条值得 block
+
+    旧实现取「每个交易日最后一根 bar 的小时」再跨日**取并集**，于是历史上任何
+    一天出现过的末根小时都被永久视为会话末根。实测 38 池里有 30+ 品种的并集
+    混进了 ``9/10/11/13/14`` —— **9:00 与 13:00 是日盘开盘第一根**。后果：
+
+      · ``SF888 / SM888`` 十年**一笔未成交**（并集覆盖整个日盘）；
+      · 全池 net +259,729 → 修正后 +342,152（+32%）；
+      · 更阴的是**窗口依赖**：同一品种，实盘只载近几个月历史（并集干净）、
+        回测载 12 年（并集脏），两边跑出的信号天然不一致，而代码看起来一模一样。
+
+    断言用合成 K 直接量行为（零 DB、零时间衰减）：
+      1. 某日缺日盘/夜盘末根 → 结果仍是常态 ``{15, 23}``（众数而非并集）；
+      2. 会话**开始**小时（9/13/21）绝不出现在集合里；
+      3. 集合大小 ≤ 2（一个交易日最多两个会话段）。
+    """
+    label = "P6 会话末根集合取常态末根（众数，非历史并集）"
+    try:
+        import numpy as np
+        import pandas as pd
+
+        from app.strategies.v5x.context import _sess_last_hours
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "V5X 上下文模块不可导入（CL-20261109-10）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+
+    def _f(spec: dict) -> pd.DataFrame:
+        rows = [{"symbol": "RB888", "bucket": pd.Timestamp(f"{d} {h:02d}:00")}
+                for d, hours in spec.items() for h in hours]
+        return pd.DataFrame(rows)
+
+    def _days(spec: dict):
+        ks = list(spec)
+        return np.array([np.datetime64(d, "D") for d in ks]
+                        + [np.datetime64(pd.Timestamp(ks[-1]) + pd.Timedelta(days=3), "D")])
+
+    full = [9, 10, 11, 13, 14, 15, 22, 23]
+    spec = {
+        "2026-01-05": full,
+        "2026-01-06": [9, 10, 11, 22, 23],            # 缺日盘末根
+        "2026-01-07": [9, 10, 11, 13, 14, 15, 22],    # 缺夜盘末根
+        "2026-01-08": [9, 10],                        # 早年残缺：只有开盘两根
+        "2026-01-09": full,
+    }
+    try:
+        got = _sess_last_hours(_f(spec), _days(spec))["RB888"]
+        observed.append(f"hours={sorted(got)}")
+        if got != frozenset({15, 23}):
+            bad.append(f"末根集合={sorted(got)}，应为 [15, 23]（被残缺日污染）")
+        if got & {9, 13, 21}:
+            bad.append(f"会话开始小时出现在禁开仓集合：{sorted(got & {9, 13, 21})}")
+        if len(got) > 2:
+            bad.append(f"末根集合大小 {len(got)} > 2（一个交易日最多两段）")
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"行为级对拍异常 {type(exc).__name__}: {exc}", (
+            "_sess_last_hours 未按预期工作（CL-20261109-10）")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。P6 会把整个日盘禁开仓，且实盘/回测随窗口长度不同而分叉（CL-20261109-10）")
+
+
 def _c_factor_z_ts_distinct(c: Ctx) -> tuple[bool, str, str, str]:
     """A1 / CL-20261108-20：横截面 z 与时序 z 必须是两个因子、两种语义。
 
@@ -3364,6 +3432,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 「默认口径」「真实接线」「close 零回归」「next_open 确实落在下一根开盘」。
     ("BT-V5X-FILL-MODE-WIRED", "V5X 回测成交口径接 E1-C（默认 next_open / close 零回归）",
      "block", _c_bt_v5x_fill_mode),
+    # CL-20261109-10：P6 会话末根集合被历史并集污染，9:00/13:00 被当成末根，
+    # SF/SM 十年零成交，且实盘/回测随载入窗口长度分叉。
+    ("V5X-P6-SESSIONS", "P6 会话末根取常态末根（非历史并集）", "block",
+     _c_v5x_p6_sessions),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
