@@ -132,13 +132,32 @@ ORDER BY symbol, bucket
 """)
 
 
+#: 单次 SQL 的品种批大小。生产库 ``/dev/shm`` 只有 64MB（docker 默认），
+#: 38 品种 × 12 年一次 JOIN 会把并行 worker 的 shm 段撑爆：
+#: ``could not resize shared memory segment ... No space left on device``。
+#: 分批 + 关并行是最小代价的解法（实测 2026-11-08）。
+_BAR_BATCH = 8
+
+
 def _load_bars(session, symbols: list[str], start: date, end: date,
                src: str) -> pd.DataFrame:
     sql = _SQL_BA if src in ("bar_60m_ba", "ba", "back_adj") else _SQL_RAW
-    rows = session.execute(sql, {"syms": list(symbols), "a": start,
-                                 "b": end}).fetchall()
-    df = pd.DataFrame(rows, columns=["symbol", "bucket", "open", "high", "low",
-                                     "close", "volume", "raw_c"])
+    cols = ["symbol", "bucket", "open", "high", "low", "close", "volume", "raw_c"]
+    try:
+        # SET LOCAL 只影响当前事务；并行 worker 的 shm 申请是这次 DiskFull 的真凶
+        session.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    except Exception:                                        # noqa: BLE001
+        pass                                                 # 只读副本上可能无权
+    frames: list[pd.DataFrame] = []
+    for i in range(0, len(symbols), _BAR_BATCH):
+        chunk = list(symbols[i:i + _BAR_BATCH])
+        rows = session.execute(sql, {"syms": chunk, "a": start,
+                                     "b": end}).fetchall()
+        if rows:
+            frames.append(pd.DataFrame(rows, columns=cols))
+    if not frames:
+        return pd.DataFrame(columns=cols)
+    df = pd.concat(frames, ignore_index=True)
     for c in ("open", "high", "low", "close", "volume", "raw_c"):
         df[c] = pd.to_numeric(df[c], errors="coerce").astype(float)
     return df
