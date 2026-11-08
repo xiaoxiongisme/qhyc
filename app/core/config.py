@@ -523,6 +523,33 @@ class FactorBiasConfig(BaseModel):
     max_weight_registry_sum: float = 1.0
 
 
+class StrategyOverrideConfig(BaseModel):
+    """单条策略的 config 覆盖层（``strategies.<key>``）。
+
+    ★ 2026-11-09 接线（CL-20261108-09）
+    ---------------------------------
+    此前 ``YamlConfig`` 里根本没有 ``strategies`` 字段，而
+    ``app/strategies/registry.py::params_for`` 用
+    ``getattr(get_settings(), "strategies", None)`` 取覆盖 —— 恒为 ``None``，
+    于是 ``app/scheduler.py::_fusion_params`` 的注释与告警文案
+    （「只有 config 显式写了 ``strategies.<key>.params`` 才会覆盖」）
+    **是与事实相反的说明**：按注释去改配置调参，会静默无效。
+
+    这正是本项目最隐蔽的失效模式（口径只存在于注释里）。补上字段后：
+
+      · ``enabled``：覆盖注册表默认启用状态（``None`` = 不表态，沿用注册表）；
+      · ``params``：按**字段名**覆盖策略参数（V3.4 走 ``FusionConfig`` 字段名）；
+        未知字段由 ``_fusion_params`` 丢弃并记 error，不静默接受拼错的参数名。
+
+    ⚠ 接线本身当前中性：生产 ``config/cloud.yaml`` 没有 ``strategies`` 段
+      → 覆盖为空 → 生效参数与代码默认逐位一致（``OPS-FUSION-PROFILE-PINNED``
+      仍 PASS）。它只是让「将来真要调参」这条路真的通。
+    """
+
+    enabled: bool | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
 class YamlConfig(BaseModel):
     app: AppYAML = Field(default_factory=AppYAML)
     database: DbYAML = Field(default_factory=DbYAML)
@@ -540,6 +567,8 @@ class YamlConfig(BaseModel):
     rank_position: RankPositionConfig = Field(default_factory=RankPositionConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     factor_bias: FactorBiasConfig = Field(default_factory=FactorBiasConfig)
+    # 策略参数/启用状态覆盖层（CL-20261108-09）。缺省为空 = 全部沿用注册表默认。
+    strategies: dict[str, StrategyOverrideConfig] = Field(default_factory=dict)
 
 
 @lru_cache(maxsize=1)
@@ -660,6 +689,18 @@ class Settings(BaseModel):
     @property
     def factor_bias(self) -> "FactorBiasConfig":
         return self.yaml.factor_bias
+
+    @property
+    def strategies(self) -> dict[str, dict]:
+        """策略覆盖层，**转成纯 dict** 供 registry 使用（CL-20261108-09）。
+
+        ★ 必须 dump 成原生 dict：``registry.params_for`` / ``enabled_keys`` 用
+          ``isinstance(ov, dict)`` 判类型，直接给 pydantic 模型会**静默跳过覆盖**
+          —— 那等于把「死代码」换成「看起来通了但依然不生效」，更难查。
+        ``exclude_none=True`` 让 ``enabled: null`` 不覆盖注册表默认值。
+        """
+        return {k: v.model_dump(exclude_none=True)
+                for k, v in self.yaml.strategies.items()}
 
     @property
     def pushplus_token(self) -> str:
