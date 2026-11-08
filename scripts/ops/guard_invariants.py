@@ -43,7 +43,7 @@ import re
 import sys
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -263,15 +263,42 @@ def _c_scope_view_healthy(c: Ctx) -> tuple[bool, str, str, str]:
 
 # ---------------------------------------------------------------- 数据新鲜度
 def _c_l0_layers_fresh(c: Ctx) -> tuple[bool, str, str, str]:
-    """各 layer 相对 L1 主连最新桶的落后小时数。
+    """各 layer 是否与 L1 主连落在同一交易日（CL-20261109-03 改口径）。
 
     ★ 只用窗口查询 + 单列聚合：2026-11-07 21:58 一次
       `SELECT layer,max(ts),count(DISTINCT symbol) FROM l0_raw.minute_bar GROUP BY 1`
       （6145 万行全表聚合）曾把生产 PostgreSQL 打到 OOM 被内核 kill。
+
+    原实现比较「落后小时数 > 36h」，会被休市期的零星桶骗到：2026-11-09 00:00
+    `l1_mkt.bar_60m` 有 3 品种/125 手（正常时段 11 品种）的残留桶，把基准拽到
+    周一凌晨，而 contract/index 正常停在周五夜盘 02:30 → 判 «落后 46h» 的假红。
+
+    改为交易日口径：两侧时间戳先映射到所属交易日（夜盘 00:00-03:00 归前一交易日，
+    周末/节假日归最近交易日），再看中间缺了几个交易日。同一交易日内不再按小时卡——
+    36h 阈值本来就容忍盘中滞后，同一交易日最多跨 ~15h，不可能越线。
+    盘中停采由 ops_monitor 的 market_age_h 负责，不在这里重复。
     """
     base = c.scalar("SELECT max(bucket) FROM l1_mkt.bar_60m WHERE symbol ~ '^[A-Za-z]+888$'")
     if base is None:
         return False, "L1 主连有数据", "max(bucket)=NULL", "L1 空表，无法建立新鲜度基准"
+
+    days = [r[0] for r in c.rows(
+        "SELECT DISTINCT trade_date FROM futures_rule "
+        "WHERE trade_date <= CURRENT_DATE ORDER BY trade_date DESC LIMIT 120")]
+
+    def _trade_day(ts):
+        d = ts.date() if hasattr(ts, "date") else ts
+        if hasattr(ts, "hour") and ts.hour < 3:      # 夜盘跨零点归前一自然日
+            d = d - timedelta(days=1)
+        prev = None
+        for x in sorted(days):
+            if x <= d:
+                prev = x
+            else:
+                break
+        return prev
+
+    base_day = _trade_day(base) if days else None
     bad, seen = [], []
     for layer in ("continuous", "contract", "index"):
         mx = c.scalar(
@@ -281,11 +308,23 @@ def _c_l0_layers_fresh(c: Ctx) -> tuple[bool, str, str, str]:
             bad.append(f"{layer}=窗口内无数据")
             seen.append(f"{layer}=none")
             continue
-        lag = (base - mx).total_seconds() / 3600.0
-        seen.append(f"{layer}={lag:.1f}h")
-        if lag > 36.0:
-            bad.append(f"{layer} 落后 {lag:.0f}h")
-    return not bad, "各 layer 落后 L1 <= 36h", "; ".join(seen), (
+        if base_day is None:
+            # 交易日真源不可用 → 退回旧的 36h 口径（宁可误报，不可漏报）
+            lag = (base - mx).total_seconds() / 3600.0
+            seen.append(f"{layer}={lag:.1f}h(降级)")
+            if lag > 36.0:
+                bad.append(f"{layer} 落后 {lag:.0f}h")
+            continue
+        own_day = _trade_day(mx)
+        if own_day is None:
+            bad.append(f"{layer} 最新 {mx} 早于交易日窗口")
+            seen.append(f"{layer}=out-of-window")
+            continue
+        gap = sum(1 for x in days if own_day < x <= base_day)
+        seen.append(f"{layer}=gap{gap}d")
+        if gap > 0:
+            bad.append(f"{layer} 缺 {gap} 个交易日（最新 {mx} vs 基准 {base}）")
+    return not bad, "各 layer 与 L1 主连同一交易日（交易日缺口 0）", "; ".join(seen), (
         "断层：" + "; ".join(bad) if bad else "")
 
 
@@ -312,30 +351,42 @@ def _c_calendar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     的 distinct trade_date（akshare futures_rule 播种）+
     ``cfg_calendar_seed_meta.seeded_through``，由 ``seed_futures_rule`` 每日 08:00 刷新。
 
-    断言只看此刻：日历覆盖上界 vs L0 continuous 层最新数据日。容差 1 天是因为
-    周五夜盘会跨到周六凌晨（``ts::date`` 落在周六，但日历里周六不是交易日），
-    不留这 1 天会每个周一都误报。窗口化查询，禁止对 l0_raw 全表聚合。
+    断言只看此刻：日历覆盖上界 vs **真实成交日**。基准取 ``daily_bar.max(trade_date)``
+    而不是 ``l0_raw.minute_bar.max(ts)::date``——后者会被休市期的零星桶骗到：
+    2026-11-09 00:00 有 3 品种/125 手的残留 tick，把「最新数据日」拽到周一凌晨，
+    日历明明正确覆盖到 11-06，却被判「落后 3 天」（CL-20261109-03）。
+    容差 0：日线日期本身就是交易日，不需要为跨夜盘留 1 天。
     """
     seeded = c.scalar(
         "SELECT value FROM cfg_calendar_seed_meta WHERE key='seeded_through'")
     cal_max = c.scalar("SELECT max(trade_date) FROM futures_rule")
-    l0_day = c.scalar(
-        "SELECT max(ts)::date FROM l0_raw.minute_bar "
-        "WHERE layer='continuous' AND ts >= now() - interval '14 days'")
+    data_day = c.scalar("SELECT max(trade_date) FROM daily_bar")
+    degraded = False
+    if data_day is None:
+        # daily_bar 空表/迁移期 → 退回 L0，但只认窗口内、且映射回最近交易日
+        degraded = True
+        raw = c.scalar(
+            "SELECT max(ts)::date FROM l0_raw.minute_bar "
+            "WHERE layer='continuous' AND ts >= now() - interval '14 days'")
+        if raw is not None and cal_max is not None:
+            data_day = min(raw, cal_max)
+        else:
+            data_day = raw
     try:
         st = date.fromisoformat(str(seeded)[:10]) if seeded else None
     except ValueError:
         st = None
-    if st is None or cal_max is None or l0_day is None:
-        return False, "官方日历覆盖到 L0 最新数据日", (
-            f"seeded={seeded} cal_max={cal_max} l0={l0_day}"), (
+    if st is None or cal_max is None or data_day is None:
+        return False, "官方日历覆盖到真实成交日", (
+            f"seeded={seeded} cal_max={cal_max} data_day={data_day}"), (
             "日历真源缺失 → extend_index_8888 的坏日门无法判定，"
             "先跑 scripts/seed_futures_rule.py")
     cover = max(st, cal_max)
-    lag = (l0_day - cover).days
-    ok = lag <= 1
-    return ok, "官方日历覆盖到 L0 最新数据日（容差 1 天跨夜盘）", (
-        f"seeded={st} cal_max={cal_max} l0={l0_day} lag={lag}d"), (
+    lag = (data_day - cover).days
+    ok = lag <= 0
+    src = "l0(降级)" if degraded else "daily_bar"
+    return ok, "官方日历覆盖到真实成交日（容差 0）", (
+        f"seeded={st} cal_max={cal_max} data_day={data_day}({src}) lag={lag}d"), (
         "" if ok else
         f"官方日历落后 {lag} 天 → 指数扩展的坏日门会静默失效（CL-20261107-18）")
 
@@ -2375,8 +2426,10 @@ def _c_ops_fresh_trade_day(c: Ctx) -> tuple[bool, str, str, str]:
         wired = False
         for node in ast.walk(tree):
             if isinstance(node, ast.Compare):
+                # 可能是 data_lag_trade_days（Name）或 cfg.data_lag_trade_days（Attribute）
                 names = {x.id for x in ast.walk(node) if isinstance(x, ast.Name)}
-                if "data_lag_trade_days" in names:
+                attrs = {x.attr for x in ast.walk(node) if isinstance(x, ast.Attribute)}
+                if "data_lag_trade_days" in names | attrs:
                     wired = True
                     break
         observed.append("判据引用 data_lag_trade_days={0}".format(wired))
