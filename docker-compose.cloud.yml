@@ -91,8 +91,14 @@ services:
       - ./migrations:/app/migrations:ro
       # 2026-11-07 Q3: conftest.py 归档删除，挂载同步移除（原 - ./conftest.py:/app/conftest.py:ro）
       - ./pytest.ini:/app/pytest.ini:ro
-      # ⚠ config 暂不挂载：保留镜像内 cloud 配置（含云端实测调校值），避免仓库 config
-      #   覆盖线上定制；确需 git 化管理 config 时再挂 ./config:ro 并核对 cloud.yaml 一致。
+      # 2026-11-08（CL-20261107-08 / P1-4）：改为只读挂载宿主 config/。
+      # 原注释「暂不挂载，保留镜像内 cloud 配置，避免仓库 config 覆盖线上定制」
+      # 的前提已不成立：config/cloud.yaml 被 .gitignore:49 排除、根本不进仓库，
+      # 宿主这份就是线上调校版（实测 2026-11-08 宿主与容器 sha1 同为 0045e944…，
+      # 53 个主连）。不挂反而让容器吃镜像里的旧副本，每次重建/重启都可能悄悄
+      # 回退——2026-11-07 曾靠 docker exec cat > 临时覆盖，既不可审计也不可持久。
+      # 审计链：cloud.example.yaml 入库 + 改造台账记 diff；宿主 cloud.yaml 由运维维护。
+      - ./config:/app/config:ro
     ports:
       # 安全：仅绑宿主环回（与本地 compose 同策略）。API 在 key 为占位符时不鉴权，
       # 绑 0.0.0.0 等于把 13 个 POST 写端点暴露到公网。外部访问走 ssh -L 或反向代理。
