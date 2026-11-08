@@ -976,7 +976,144 @@ def _c_bt_walkforward_same_source(c: Ctx) -> tuple[bool, str, str, str]:
         + "。walk-forward 会静默返回无数据或读到废弃链（CL-20261108-13）")
 
 
+def _c_bt_exec_fork_declared(c: Ctx) -> tuple[bool, str, str, str]:
+    """P2-3 E1-A/E1-B / CL-20261108-14：执行分叉声明必须与当前行为一致。
+
+    衡量的都是「此刻的行为」，防声明表沦为过期文档：
+      · 声明表 6 条齐全、状态合法、每条有证据 / 处置 / 关联键（防空声明）；
+      · 6 个默认值任一被改动都会让实测证据失效，必须逐项核实；
+      · 直接对契约层纯函数 fill_price 做多空逐位对拍（close / next_open /
+        末尾边界），并与 _simulate_trades 的合成 K 结果比对；
+      · AST 确认 _simulate_trades 确实 import 并委托契约层（防「抽了没人用」）；
+      · 白名单条目 is_allowed=True，延后条目归因到 CL-20261108-08。
+    """
+    label = "执行分叉声明契约与当前行为一致（E1-A/E1-B）"
+    try:
+        import ast
+        import pandas as pd
+        from app.backtest import fusion_backtest as fb
+        from app.contracts import execution as ec
+        from app.core.config import get_settings
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "契约层或回测模块不可导入 → 分叉声明断言不可用（CL-20261108-14）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+
+    # ① 声明表自身完整性
+    ok, problems = ec.validate_fork_declaration()
+    observed.append(f"declaration_ok={ok} forks={len(ec.EXECUTION_FORKS)}")
+    bad.extend(problems)
+
+    # ② 默认值：任一变化都会让声明表里的实测证据失效
+    bp = fb.FusionBacktestParams()
+    try:
+        cfg = get_settings().fusion
+    except Exception as exc:                              # noqa: BLE001
+        cfg = None
+        bad.append(f"FusionConfig 不可读：{type(exc).__name__}: {exc}")
+    checks = (
+        ("fill_mode", getattr(bp, "fill_mode", None), "close"),
+        ("max_hold_bars", getattr(bp, "max_hold_bars", None), 0),
+        ("lookback_bars", getattr(bp, "lookback_bars", None), 0),
+        ("max_bars", getattr(bp, "max_bars", None), 800),
+        ("max_hold_days", getattr(cfg, "max_hold_days", None) if cfg else None, 365),
+        ("entry_gate_profile",
+         getattr(cfg, "entry_gate_profile", None) if cfg else None, "off"),
+    )
+    for name, got, want in checks:
+        observed.append(f"{name}={got!r}")
+        if got != want:
+            bad.append(f"{name}={got!r} != 声明基线 {want!r} → 分叉证据需重新量化")
+
+    # ③ 纯函数行为级对拍（合成 8 根 K，与 BT-FILL-MODE-WIRED 同网格）
+    n = 8
+    opens = [100.0 + 10.0 * i for i in range(n)]
+    closes = [103.0 + 10.0 * i for i in range(n)]
+    cases = (
+        ("close", 0.0, 1.0, True, 1, (113.0, 1)),
+        ("close", 0.0, 1.0, False, 4, (143.0, 4)),
+        ("next_open", 2.0, 1.0, True, 1, (122.0, 2)),
+        ("next_open", 2.0, 1.0, False, 4, (148.0, 5)),
+        ("next_open", 2.0, -1.0, True, 1, (118.0, 2)),
+        ("next_open", 2.0, -1.0, False, 4, (152.0, 5)),
+        ("next_open", 2.0, 1.0, False, n - 1, (171.0, n - 1)),  # 末尾无 i+1
+    )
+    try:
+        for mode, tick, dirn, is_open, i, want in cases:
+            got = ec.fill_price(i, dirn, is_open, closes, opens, n, mode, tick)
+            if abs(got[0] - want[0]) > 1e-9 or got[1] != want[1]:
+                bad.append(f"fill_price({mode},dirn={dirn},open={is_open},i={i})"
+                           f"={got} != {want}")
+        observed.append(f"pure_fn_cases={len(cases)}")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"纯函数对拍异常：{type(exc).__name__}: {exc}")
+
+    # ④ 接线：_simulate_trades 的合成 K 结果必须与纯函数一致，且源码确实委托
+    try:
+        dts = pd.date_range("2026-01-01", periods=n, freq="h")
+
+        def frame(side: int):
+            return pd.DataFrame({
+                "dt": dts, "open": opens, "close": closes,
+                "state": [0, side, side, side, 0, 0, 0, 0],
+                "lots": [0, 1, 1, 1, 0, 0, 0, 0],
+                "atr": [1.0] * n,
+            })
+
+        tr = fb._simulate_trades(
+            frame(1),
+            fb.FusionBacktestParams(fill_mode="next_open", tick_size=2.0),
+            symbol=None)
+        if len(tr) != 1:
+            bad.append(f"接线对拍期望 1 笔，实得 {len(tr)}")
+        else:
+            t = tr[0]
+            if (abs(t["entry_px"] - 122.0) > 1e-9
+                    or abs(t["exit_px"] - 148.0) > 1e-9):
+                bad.append(f"_simulate_trades 成交价 {t['entry_px']}/{t['exit_px']} "
+                           f"!= 契约纯函数 122/148")
+            else:
+                observed.append("wired=122/148")
+        src = (Path(__file__).resolve().parents[2] / "app" / "backtest"
+               / "fusion_backtest.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        imported = any(
+            isinstance(nd, ast.ImportFrom)
+            and (nd.module or "") == "app.contracts.execution"
+            for nd in ast.walk(tree))
+        called = any(
+            isinstance(nd, ast.Call) and isinstance(nd.func, ast.Name)
+            and nd.func.id == "_contract_fill_price"
+            for nd in ast.walk(tree))
+        observed.append(f"import_contract={imported} delegate={called}")
+        if not imported:
+            bad.append("fusion_backtest 未从契约层 import（纯函数被绕过）")
+        if not called:
+            bad.append("_fill_price 未委托契约层纯函数（抽了但没人用）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"接线检查异常：{type(exc).__name__}: {exc}")
+
+    # ⑤ 白名单 / 延后条目归因
+    for key in ("max_hold", "window", "entry_gates", "ops_risk"):
+        if not ec.ExecutionContract.is_allowed(key):
+            bad.append(f"白名单条目 {key} 缺理由或状态不对")
+    unres = [f.key for f in ec.ExecutionContract.unresolved()]
+    observed.append(f"unresolved={unres}")
+    if unres != ["stop_loss"]:
+        bad.append(f"延后条目应为 [stop_loss]，实得 {unres}（B1 归因丢失）")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。执行分叉声明已与当前行为脱节，E1 结论不可信（CL-20261108-14）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
+    # P2-3 E1-A/E1-B：6 处分叉用声明式白名单钉住，且断言逐项核实「声明仍成立」。
+    # 特别防「参数默认值被改了但声明表没更新」——E1 结论全部建立在实测数值上。
+    ("BT-EXEC-FORK-DECLARED", "执行分叉声明契约与当前行为一致（E1-A/E1-B）",
+     "block", _c_bt_exec_fork_declared),
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
     # info 级：cloud.yaml 是**采集口径**（归档定案：L0/日线对所有品种生效，

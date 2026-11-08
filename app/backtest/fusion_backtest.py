@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import select, text
 
+from app.contracts.execution import fill_price as _contract_fill_price
 from app.core.config import get_settings
 from app.core.logging import logger
 from app.models import HourlyBar
@@ -317,19 +318,14 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         return v
 
     def _fill_price(i: int, dirn: float, is_open: bool) -> tuple[float, int]:
-        """(成交价, 成交 bar 索引)。
+        """薄封装：委托契约层纯函数 app.contracts.execution.fill_price（E1-B）。
 
-        close 模式：恒返回 (closes[i], i)，与改动前逐位一致。
-        next_open 模式：bar i 收盘出信号，bar i+1 开盘成交。开仓按 +dirn×tick、
-        平仓按 -dirn×tick 加不利滑点（多头买入 +tick / 多头卖出 -tick，空头反之）。
-        末尾没有 i+1 时退回 closes[i]，仍加滑点，避免凭空多一根 K。
+        实现只有一份，守卫可直接对纯函数做行为级逐位对拍；未来 E1-D 实盘影子
+        对账可复用同一函数。本闭包只注入本轮的 closes / opens / fill_mode / tick。
+        ⚠ close 分支在纯函数里恒返回 (closes[i], i)，与历史基线逐位一致。
         """
-        if fill_mode == "close":
-            return float(closes[i]), i
-        j = i + 1
-        base = float(opens[j]) if j < n_bars else float(closes[i])
-        sign = dirn if is_open else -dirn
-        return base + sign * tick, min(j, n_bars - 1)
+        return _contract_fill_price(i, dirn, is_open, closes, opens,
+                                    n_bars, fill_mode, tick)
 
     def _trade(lt: dict, exit_px: float, exit_i: int,
                open_pos: bool = False) -> dict:
