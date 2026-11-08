@@ -72,6 +72,15 @@ bash scripts/cloud_preflight/run_preflight.sh real --symbol RB888 --freqs min15,
    `min60 seg19=2026-11-04 22:00+08`、`min30 seg19=21:30+08`，
    `l2_adj.bar_60m_ba@22:00` 的 `adj_offset` 80→320、close 8066→8306，
    −240 断层抹平，且 15:00 那根仍为 80（无 +240 假跳空）。
+5. ✅ **C2 已验收（2026-11-08，CL-20261107-16）**：`migrations/056` 让
+   `p_positivity=false`（生产默认）的 `low_off` / `shift_calc` 走
+   `AND 'f'::boolean` 常数折叠直接短路，true 分支改 `LEFT JOIN full_segs` 区间连接
+   并取消第二遍全表聚合。staging 用负价格 fixture 强制算出 `price_shift=100`，
+   055 与 056 逐行完全一致。生产事务内试算 min5 单品种 **70 秒无 OOM**
+   （历史两次 42/71 分钟、3 GiB 容器被打爆）；PF888 min5 与 106,453 行
+   `bar_5m_ba` 已重建。全量 82 品种 append-only 重跑经量化判定当下零收益
+   （11-04 后新锚点事件=0、10 个落后品种在口径外、5 个口径内最新段已对齐），
+   经用户拍板不执行；两项遗留另立 `CL-20261108-05` / `CL-20261108-06` 挂账。
 
 ## 工具现状与已知坑（2026-11-08 实测，CL-20261108-04）
 - `02_fixture_and_roll_ab.py` 与 `run_preflight.sh` 的**源文件已不在仓库**，只剩
