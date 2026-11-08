@@ -642,6 +642,73 @@ def _c_roll_positivity_shortcircuit(c: Ctx) -> tuple[bool, str, str, str]:
         "min5 重跑可能再次打满 3 GiB 容器内存并堵锁（CL-20261107-16）")
 
 
+#: CL-20261108-07 / P2-1：2026-11-08 14:26 生产实测的「实际生效」参数指纹。
+#: 覆盖 29 个信号/离场/仓位/取数字段（推送与展示字段故意不计入，避免运维调参误报）。
+#: 改代码默认值、给 cloud.yaml 加 fusion 段、注入 QH_FUSION_* env、或让策略注册表
+#: 覆盖真正生效，都会改变它 → 必须走台账重新登记 / 拍板，不许静默漂移。
+PINNED_FUSION_SIGNAL_HASH = (
+    "32bbd9eed3596d5c12491898d303deb8e0c726ddd0203ac820e0c186bc5af48a"
+)
+
+
+def _c_fusion_profile_pinned(c: Ctx) -> tuple[bool, str, str, str]:
+    """P2-1：生产实跑的 fusion 参数必须与已登记 V3.4 基线逐位一致。
+
+    审计报告 §4④ 的隐患是「回测报告的参数」与「生产在跑的参数」可能不是同一套，
+    而此前没有任何机器断言在盯这件事。本断言直接解析**当前磁盘 + 当前进程 env**
+    的完整覆盖链（复用 scripts/ops/dump_fusion_profile.py，避免两处实现分叉），
+    衡量的是「此刻的行为」而非历史流水。
+
+    注：常驻服务的配置缓存由 P0-1 的 C4 运行态断言负责，两者互补。
+    """
+    label = "实际生效 fusion 参数 = 已登记 V3.4 基线"
+    try:
+        import contextlib
+        import importlib.util
+        import io
+
+        path = Path(__file__).with_name("dump_fusion_profile.py")
+        spec = importlib.util.spec_from_file_location("_qhyc_fusion_profile", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"无法加载 {path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        # app 首次 import 会打一行 INFO 到 stdout，别污染守卫的人读表格
+        with contextlib.redirect_stdout(io.StringIO()):
+            prof = mod.build_profile()
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {exc}", (
+            "生效参数 profile 无法解析 → 参数口径处于不可验证状态（CL-20261108-07）")
+
+    h = prof["hashes"]["signal_params_hash"]
+    env = prof["layers"]["L3_env"]
+    reg = prof["layers"]["L4_registry"]
+    bad: list[str] = []
+    if h != PINNED_FUSION_SIGNAL_HASH:
+        bad.append(f"signal_params_hash={h[:12]}… != 基线 {PINNED_FUSION_SIGNAL_HASH[:12]}…")
+    if not prof["equals_code_default"]:
+        bad.append("生效值不等于代码默认（L2/L3/L4 有覆盖）")
+    if env.get("profile_candidate_active") or env.get("granular"):
+        bad.append(f"env 覆盖未登记：profile={env.get('QH_FUSION_PROFILE')} "
+                   f"granular={env.get('granular')}")
+    if reg.get("overrides"):
+        bad.append(f"注册表覆盖非空：{reg['overrides']} → 两个消费者可能分叉")
+    if not prof["profile_label"].startswith("V3.4"):
+        bad.append(f"profile_label={prof['profile_label']}")
+
+    observed = (
+        f"hash={h[:12]}… label={prof['profile_label']} "
+        f"equals_default={prof['equals_code_default']} "
+        f"env={env.get('QH_FUSION_PROFILE') or 'none'} "
+        f"registry_overrides={len(reg.get('overrides') or {})}"
+    )
+    return not bad, label, observed, (
+        "" if not bad else
+        "；".join(bad) + "。参数口径发生漂移：须在 ops.change_log 登记、重新过回测闸门，"
+        "并由人显式更新 PINNED_FUSION_SIGNAL_HASH 后才允许放行（CL-20261108-07 / M4）"
+    )
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -673,6 +740,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("L2-ROLL-GAP-DATA", "PF888 夜盘换月段位置与后复权偏移", "block", _c_roll_gap_data),
     ("L2-POSITIVITY-SHORTCIRCUIT", "min5 shift 默认路径短路（056 未回退）", "block",
      _c_roll_positivity_shortcircuit),
+    # P2-1：审计报告 §4④「三套参数口径并存」的防漂移断言。此前无任何断言在盯
+    # 「回测的参数是不是生产在跑的参数」，静默调参 / 静默覆盖都无人察觉。
+    ("OPS-FUSION-PROFILE-PINNED", "实际生效 fusion 参数与已登记 V3.4 基线一致",
+     "block", _c_fusion_profile_pinned),
 ]
 
 
