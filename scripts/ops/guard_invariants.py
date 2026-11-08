@@ -1208,6 +1208,119 @@ def _c_bt_ba_price_space(c: Ctx) -> tuple[bool, str, str, str]:
         + "。后复权维度价格空间混用，回测 pnl/成本/保证金会失真（CL-20261108-21）")
 
 
+def _c_v5x_engine_parity(c: Ctx) -> tuple[bool, str, str, str]:
+    """C1 / CL-20261108-22：V5X.3 引擎移植后必须与冻结参数一致、门控仍生效。
+
+    为什么这条必须存在
+    ------------------
+    V5X.3 的移植价值全部建立在「逐位复现冻结版」上：参数默认值改一个、门控顺序
+    挪一下，回测数字（+244,742 / 2022 占 88%）就不可比了，而且**不报错**。
+    历史教训（CL-20261108-08）就是「参数口径只存在于人脑子里」。
+
+    断言（全是「此刻的行为」，零 DB）：
+      · ``check_defaults()`` 为空 —— ``V5XConfig`` 默认值逐项等于 ``FROZEN_V5X3``；
+      · 合成趋势序列必须触发突破开仓（信号层没被改坏）；
+      · ``hvol=True`` / ``blocked=True`` → 不开仓（P2 静态门与簇冲击门生效）；
+      · ``regime=2 且 vol_z>=2.5`` → 不开仓，``vol_z=1.0`` → 仍开仓
+        （V5X.3 的核心增量就是这条「只削极端高波尾」）；
+      · ``sess_last_hours`` 命中当根小时 → 不开仓（P6）。
+    """
+    label = "V5X.3 引擎移植：默认值=冻结参数且五道门控仍生效"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import numpy as np
+        import pandas as pd
+
+        from app.strategies.v5x.engine import (
+            CostCfg,
+            DailyCtx,
+            SymbolEngine,
+            V5XConfig,
+        )
+        from app.strategies.v5x.params import check_defaults
+    except Exception as exc:                                 # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "V5X 包不可导入 → 移植断言不可用（CL-20261108-22）")
+
+    drift = check_defaults()
+    observed.append(f"param_drift={len(drift)}")
+    if drift:
+        bad.append(f"V5XConfig 默认值偏离冻结参数：{drift[:4]}")
+
+    # ---------- 合成趋势序列（必然触发突破支路）----------
+    n = 200
+    c_arr = 100.0 + 0.2 * np.arange(n)
+    o_arr = c_arr - 0.15
+    h_arr = c_arr + 0.1
+    l_arr = c_arr - 0.2
+    ts_list = pd.date_range("2026-01-05 09:00", periods=n, freq="h")
+
+    cost = CostCfg(fee_row={"OPEN": (0.0, 0.0), "CLOSE_TODAY": (0.0, 0.0),
+                            "CLOSE_YEST": (0.0, 0.0)},
+                   slip_yuan=0.0, mult=10.0, tick=1.0)
+
+    def _run(cfg: V5XConfig, ctx: DailyCtx) -> int:
+        eng = SymbolEngine("RB888", cfg, cost)
+        eng.set_daily_ctx(ctx)
+        n_open = 0
+        for i in range(n):
+            orders = eng.on_bar(ts_list[i], float(o_arr[i]), float(h_arr[i]),
+                                float(l_arr[i]), float(c_arr[i]), 1000.0,
+                                float(c_arr[i]), allow=True)
+            n_open += sum(1 for o in orders if o.get("type") == "OPEN")
+        return n_open
+
+    base_ctx = dict(td=None, hvol=False, member_z=float("nan"), blocked=False,
+                    sess_last_hours=frozenset(), regime=None, vol_z=None,
+                    pos_scale=1.0)
+    try:
+        cfg = V5XConfig()
+        n_base = _run(cfg, DailyCtx(**base_ctx))
+        observed.append(f"base_open={n_base}")
+        if n_base < 1:
+            bad.append("合成趋势序列未触发开仓（信号层被改坏）")
+
+        for name, kw in (("hvol", {"hvol": True}), ("blocked", {"blocked": True})):
+            n_g = _run(cfg, DailyCtx(**{**base_ctx, **kw}))
+            observed.append(f"{name}_open={n_g}")
+            if n_g != 0:
+                bad.append(f"{name}=True 仍开仓（门控失效）")
+
+        n_p2 = _run(cfg, DailyCtx(**{**base_ctx, "regime": 2, "vol_z": 3.0}))
+        n_p2_lo = _run(cfg, DailyCtx(**{**base_ctx, "regime": 2, "vol_z": 1.0}))
+        observed.append(f"p2_hi={n_p2} p2_lo={n_p2_lo}")
+        if n_p2 != 0:
+            bad.append("regime=2 且 vol_z=3.0 未禁开仓（REGIME_P2_AUTO 失效）")
+        if n_p2_lo < 1:
+            bad.append("regime=2 但 vol_z=1.0 也被禁（P2 应只削极端高波尾）")
+
+        n_p6 = _run(cfg, DailyCtx(**{**base_ctx,
+                                     "sess_last_hours": frozenset({9})}))
+        observed.append(f"p6_open={n_p6}")
+        if n_p6 != 0:
+            bad.append("会话末根小时（9 点）仍开仓（P6 失效）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"引擎行为对拍异常 {type(exc).__name__}: {exc}")
+
+    # ---------- 供数层不得偷偷用横截面 z ----------
+    try:
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[2] / "app" / "strategies"
+               / "v5x" / "context.py").read_text(encoding="utf-8")
+        if "member_net_z" in src and "member_net_ts_z" not in src:
+            bad.append("context.py 引用了横截面 member_net_z（应为 top20 时序 z）")
+        if "top20" not in src:
+            bad.append("context.py 未用 top20 净持仓（V5X M5 门口径）")
+        observed.append("ctx_member_z=top20_ts")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"context 源码检查失败 {type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。V5X.3 移植已偏离冻结口径，历史回测数字不再可比（CL-20261108-22）")
+
+
 def _c_bt_gap_filter_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """E1-C / CL-20261108-15：0.5 ATR 不利跳空过滤必须真实接线。
 
@@ -2076,6 +2189,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 断言用合成 K 对拍「换月假跳空被消除 + 成交价取真实价」，防静默失真。
     ("BT-BA-PRICE-SPACE", "后复权维度的信号空间与真实价空间已分离",
      "block", _c_bt_ba_price_space),
+    # C1 / CL-20261108-22：V5X.3 引擎移植。价值全在「逐位复现冻结版」，
+    # 参数或门控一次静默改动就让历史数字不可比，故用行为级门控对拍钉住。
+    ("V5X-ENGINE-PARITY", "V5X.3 引擎默认值=冻结参数且五道门控仍生效",
+     "block", _c_v5x_engine_parity),
 ]
 
 
