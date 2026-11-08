@@ -102,30 +102,61 @@ def _c_whitelist_nonempty(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_signal_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
-    """只看**近 7 天新增**信号——历史行的存在不代表当前行为。
+    """策略产出的信号品种必须 ⊆ 白名单 ∪ 持仓豁免。
 
-    这是本套断言的一条通用纪律：不变量必须衡量「现在的系统怎么运行」，
-    不能拿历史流水当现状（否则收口之后永远无法转 PASS，豁免就变成了永久遮羞布）。
+    ★ 口径演进（2026-11-09，CL-20261107-01 收口）
+    ------------------------------------------------
+    旧版只看 ``fusion_signal_log`` **近 7 天**。V3.4 于 2026-11-08 23:58 停用后，
+    这个窗口里剩下的 6 个越界品种（AU/CS/LC/PB/RU/ZN）全是停用前写的**历史流水**，
+    要从 11-14 才自然滚出去。用「等时间衰减」来让断言转绿，正是本 skill 第 6 条
+    铁律禁止的形状（断言必须衡量「现在的行为」）。
+
+    改法：
+      1. V3.4 若已停用 → 起点取开关的 ``updated_at``（停用那一刻），而不是 7 天窗口。
+         停用之后还冒出新行 = 有人偷偷绕开关跑 V3.4，这比越界更严重。
+      2. V3.4 若在跑 → 仍用 7 天窗口（此时的窗口是「当前写入行为」的合理代理）。
+      3. **同时检查 ``v5x_signal_log``**：V5X 是 2026-11-08 起的唯一生产推送源，
+         老断言只盯 V3.4 的表，等于盯着一台已停机的机器。
 
     ★ 持仓豁免（CL-20261107-01）：扫描池允许「非白名单但有持仓」的品种继续扫描，
       否则它既不会产出平仓/止损信号，持仓会被永久冻结。所以这类品种出现在信号表里
       是**正确行为**，不是越界。不加这一项，断言会在口径正确时永远 FAIL。
     """
-    rows = c.rows("""
-        SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v
-        FROM fusion_signal_log
-        WHERE symbol ~ '^[A-Za-z]+888$'
-          AND signal_at >= now() - interval '7 days'
-    """)
+    sw = c.rows("SELECT enabled, updated_at FROM cfg_feature_switch "
+                "WHERE switch_key = 'fusion_v34_live_enabled'")
+    v34_on = bool(sw[0][0]) if sw else True
+    since = (sw[0][1] if sw else None)
+
+    v5x_part = """
+        UNION
+        SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v, 'v5x' AS src
+        FROM v5x_signal_log
+        WHERE symbol ~ '^[A-Za-z]+888$' AND bar_ts >= now() - interval '7 days'
+    """
+    if v34_on or since is None:
+        sql = ("SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v, "
+               "'fusion' AS src FROM fusion_signal_log "
+               "WHERE symbol ~ '^[A-Za-z]+888$' "
+               "AND signal_at >= now() - interval '7 days'") + v5x_part
+        rows = c.rows(sql)
+        scope = "近 7 天"
+    else:
+        sql = ("SELECT DISTINCT regexp_replace(symbol, '888$', '') AS v, "
+               "'fusion' AS src FROM fusion_signal_log "
+               "WHERE symbol ~ '^[A-Za-z]+888$' AND signal_at >= :since") + v5x_part
+        rows = c.rows(sql, since=since)
+        scope = f"V3.4 停用后（{since:%m-%d %H:%M}）"
+
     got = {r[0] for r in rows}
     held = {r[0] for r in c.rows("""
         SELECT DISTINCT regexp_replace(symbol, '8888?$', '')
         FROM fusion_position WHERE COALESCE(position, 'FLAT') <> 'FLAT'
     """)}
+    label = f"策略信号品种 ⊆ 白名单 ∪ 持仓豁免（{scope} + V5X 近 7 天）"
     if not got:
-        return True, "近 7 天信号 ⊆ 白名单 ∪ 持仓豁免", "近 7 天无新信号（真空通过）", ""
+        return True, label, "窗口内无信号（真空通过）", ""
     extra = sorted(got - c.whitelist - held)
-    return not extra, "近 7 天信号 ⊆ 白名单 ∪ 持仓豁免", (
+    return not extra, label, (
         f"{len(got)} 个品种（持仓豁免 {len(held)}），越界 {len(extra)}"), (
         f"越界品种：{','.join(extra)}" if extra else "")
 
@@ -3796,17 +3827,28 @@ def main() -> int:
         print(f"{'状态':<4} {'断言':<34} {'实测':<28} 依据/说明")
         print("-" * 96)
         for r in results:
-            # warn 级 FAIL 不阻断退出码（exit_code 只看 block），显示成 ❌ 会让人
-            # 以为发布被拦了。用 ⚠️ 区分「需要处理」与「不满足但可接受」。
-            ic = "⚠️" if (r.status == "FAIL" and r.severity != "block") \
-                else icon.get(r.status, "?")
+            # 分级显示（2026-11-09）：
+            #   block 级 FAIL → ❌（拦发布）
+            #   warn  级 FAIL → ⚠️（要处理但不拦）
+            #   info  级 FAIL → ℹ️（设计如此，例如「配置允许是白名单超集」）
+            # 三者混成一个 ❌ 会让人以为守卫坏了，也会让「FAIL 数」永远降不到 0。
+            if r.status == "FAIL":
+                ic = {"block": "❌", "info": "ℹ️"}.get(r.severity, "⚠️")
+            else:
+                ic = icon.get(r.status, "?")
             print(f"{ic} {r.key:<32} {r.observed[:26]:<28} "
                   f"{r.waiver_ref or ''}")
             if r.detail and r.status != "PASS":
                 print(f"     └ {r.detail[:150]}")
         print("-" * 96)
-        n_warn_fail = sum(1 for r in real_fail if r.severity != "block")
-        tail = f" · 仅告警 {n_warn_fail}" if n_warn_fail else ""
+        n_info = sum(1 for r in real_fail if r.severity == "info")
+        n_warn_fail = sum(1 for r in real_fail
+                          if r.severity not in ("block", "info"))
+        tail = ""
+        if n_warn_fail:
+            tail += f" · 仅告警 {n_warn_fail}"
+        if n_info:
+            tail += f" · INFO {n_info}"
         print(f"合计 {len(results)}：PASS {sum(1 for r in results if r.status == 'PASS')}"
               f" · FAIL {len(real_fail)}{tail} · WAIVED {len(waived)}")
         if waived:
