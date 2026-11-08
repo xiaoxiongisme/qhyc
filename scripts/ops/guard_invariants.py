@@ -1415,6 +1415,90 @@ def _c_v5x_p6_sessions(c: Ctx) -> tuple[bool, str, str, str]:
         + "。P6 会把整个日盘禁开仓，且实盘/回测随窗口长度不同而分叉（CL-20261109-10）")
 
 
+def _c_v5x_snapshot_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """理论持仓快照必须「真的读引擎状态」且方向标签不反（CL-20261109-08）。
+
+    为什么这条值得 block
+
+    2026-11-09 首次实盘前的清单是**人工从重放里抄的**，结果 5 个仓里 4 个方向抄反
+    （实际 1 多 4 空，被写成 5 个多头）。用户若照那份清单核对，会以为手上该有
+    5 个多单，然后对每一条 ``CLOSE`` 都无仓可平 —— 而这正是「只推事件不推持仓」
+    这个设计缺口的全部危害。
+
+    所以断言量三件事（零 DB、零时间衰减）：
+      1. **同一条重放路径**：snapshot 模块必须调用 ``live._replay_orders``，
+         不允许自己再写一套循环（两套重放必然分叉）；
+      2. **真的注册了**：``scheduler.py`` 里有 ``id="v5x_snapshot"`` 且调用
+         ``push_snapshot``（防「模块写好了没人调」）；
+      3. **方向标签**：合成一条多头 + 一条空头，渲染结果里多/空字面量必须与
+         ``dir`` 一致（防 ``state`` 与 ``LONG/SHORT`` 的映射被写反）。
+    """
+    label = "V5X 理论持仓快照真实接线且方向标签正确"
+    try:
+        import ast
+
+        from app.strategies.v5x import snapshot as snap
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "持仓快照模块不可导入（CL-20261109-08）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+    root = Path(__file__).resolve().parents[2]
+
+    for rel, need in (("app/strategies/v5x/snapshot.py", "_replay_orders"),
+                      ("app/scheduler.py", "push_snapshot")):
+        try:
+            tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+            names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+            found = need in names or need in attrs
+            observed.append(f"{Path(rel).name}:{need}={found}")
+            if not found:
+                bad.append(f"{rel} 未引用 {need}")
+        except Exception as exc:                          # noqa: BLE001
+            bad.append(f"{rel} AST 检查失败：{type(exc).__name__}: {exc}")
+
+    # 调度注册：id="v5x_snapshot" 必须出现（否则快照永远不会被定时调用）
+    try:
+        sched_src = (root / "app/scheduler.py").read_text(encoding="utf-8")
+        registered = 'id="v5x_snapshot"' in sched_src or "id='v5x_snapshot'" in sched_src
+        observed.append(f"registered={registered}")
+        if not registered:
+            bad.append("scheduler.py 未注册 v5x_snapshot 作业")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"scheduler 源码读取失败：{type(exc).__name__}: {exc}")
+
+    # 方向标签：合成 1 多 1 空，渲染后逐条核对
+    fake = {
+        "last_bar": "2026-11-07 15:00", "stale_days": 0,
+        "n_long": 1, "n_short": 1,
+        "rows": [
+            {"symbol": "AA888", "dir": "LONG", "lots": 1, "avg_px_real": 100.0,
+             "last_price": 110.0, "stop_real": 95.0, "unrealized_yuan": 100.0,
+             "be_done": False},
+            {"symbol": "BB888", "dir": "SHORT", "lots": 2, "avg_px_real": 200.0,
+             "last_price": 190.0, "stop_real": 210.0, "unrealized_yuan": 200.0,
+             "be_done": True},
+        ],
+    }
+    try:
+        text = snap.format_snapshot(fake)
+        ok_long = "AA888 多 1手" in text
+        ok_short = "BB888 空 2手" in text
+        observed.append(f"long_label={ok_long} short_label={ok_short}")
+        if not (ok_long and ok_short):
+            bad.append("方向标签渲染错误（LONG/SHORT 映射反了）")
+        if "存量不追" not in text:
+            bad.append("缺少「存量不追，只跟新开仓」纪律提示")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"format_snapshot 渲染异常：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。持仓快照失效 = 用户无法核对理论持仓，统计与实盘永久错位（CL-20261109-08）")
+
+
 def _c_factor_z_ts_distinct(c: Ctx) -> tuple[bool, str, str, str]:
     """A1 / CL-20261108-20：横截面 z 与时序 z 必须是两个因子、两种语义。
 
@@ -3436,6 +3520,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # SF/SM 十年零成交，且实盘/回测随载入窗口长度分叉。
     ("V5X-P6-SESSIONS", "P6 会话末根取常态末根（非历史并集）", "block",
      _c_v5x_p6_sessions),
+    # CL-20261109-08：V5X 只推事件不推持仓，用户漏看一条 CLOSE 就彻底失联；
+    # 首份人工清单 5 个仓抄反了 4 个方向，所以「方向标签」也进断言。
+    ("V5X-SNAPSHOT-WIRED", "理论持仓快照真实接线且方向标签正确", "block",
+     _c_v5x_snapshot_wired),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",

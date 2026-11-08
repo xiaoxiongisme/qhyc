@@ -1080,6 +1080,13 @@ def _v5x_snapshot_job() -> dict | None:
     if not _switch_on("v5x_live_enabled", "QH_V5X_LIVE", default=False):
         logger.debug("[scheduler] v5x_live_enabled=off → 跳过持仓快照")
         return
+    # 只交易日跑：cron 的 mon-fri 挡不住国庆/春节，长假期间推一份过期清单
+    # 比不推更糟（用户会以为那 5 个仓还该持有）。
+    from app.data.trade_calendar import is_futures_trading_day
+    today = datetime.now(_SH_TZ).date()
+    if not is_futures_trading_day(today):
+        logger.info(f"[scheduler] v5x 持仓快照 {today} 非交易日，跳过")
+        return
     from app.strategies.v5x.snapshot import push_snapshot
 
     try:
