@@ -64,7 +64,9 @@ CLUSTER_SHOCK_MIN = 60
 #: M5 会员净持仓时序 z
 MEMBER_Z_TOPN = 20          # ★ top20，不是 factor_value 的 top5
 MEMBER_Z_WIN = 60
-MEMBER_Z_MIN = 20
+#: 与 ``v5x_on_qhyc.py`` 的 ``min_periods=max(20, win//2)`` 对齐（=30），
+#: 否则新品种上市初期会多出几期 z，信号与历史消融数字不可比。
+MEMBER_Z_MIN = 30
 
 
 @dataclass
@@ -117,9 +119,9 @@ def assign_td(buckets: pd.Series, open_days: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------- 取数
 _SQL_BA = text("""
 SELECT b.symbol, b.bucket, b.open, b.high, b.low, b.close, b.volume,
-       r.close AS raw_c
+       COALESCE(r.close, b.close - b.adj_offset) AS raw_c
 FROM l2_adj.bar_60m_ba b
-JOIN l1_mkt.bar_60m r ON r.symbol = b.symbol AND r.bucket = b.bucket
+LEFT JOIN l1_mkt.bar_60m r ON r.symbol = b.symbol AND r.bucket = b.bucket
 WHERE b.symbol = ANY(:syms) AND b.bucket >= :a AND b.bucket < :b
 ORDER BY b.symbol, b.bucket
 """)
