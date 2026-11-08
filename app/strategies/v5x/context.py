@@ -167,9 +167,16 @@ def _load_bars(session, symbols: list[str], start: date, end: date,
 
 # ---------------------------------------------------------------- 日线派生
 def _daily_frame(bars: pd.DataFrame, open_days: np.ndarray) -> pd.DataFrame:
-    """按 (symbol, 交易日) 聚合出日振幅与日已实现波动。"""
+    """按 (symbol, 交易日) 聚合出日振幅与日已实现波动。
+
+    ★ ``td`` 一律落成 ``datetime.date``（不是 Timestamp / datetime64）：
+      下游 ``hvol`` / ``blocked`` / ``regime`` 都是「date 作 key 的 dict」，
+      类型不一致会让查表恒 miss —— 三道门全部静默失效且不报错。
+      2026-11-08 实测踩过：三组不同配置跑出**完全相同**的 8,916 笔 / +249,726。
+    """
     df = bars[["symbol", "bucket", "high", "low", "close"]].copy()
     df["td"] = assign_td(df["bucket"], open_days)
+    df["td"] = pd.to_datetime(df["td"]).dt.date
     g = df.groupby(["symbol", "td"], sort=True)
     out = g.agg(hh=("high", "max"), ll=("low", "min"),
                 c=("close", "last")).reset_index()
@@ -249,6 +256,7 @@ def _sess_last_hours(bars: pd.DataFrame, open_days: np.ndarray) -> dict[str, fro
     """每个交易日**最后一根** bar 的小时集合（P6 会话末根禁开仓用）。"""
     df = bars[["symbol", "bucket"]].copy()
     df["td"] = assign_td(df["bucket"], open_days)
+    df["td"] = pd.to_datetime(df["td"]).dt.date
     df["hour"] = pd.to_datetime(df["bucket"]).dt.hour
     last = df.groupby(["symbol", "td"], sort=True)["hour"].last().reset_index()
     out: dict[str, frozenset] = {}
@@ -357,21 +365,32 @@ def load_market_data(session, symbols: list[str], start: date, end: date, *,
 
 
 def build_ctx(md: V5XMarketData, symbol: str, td) -> DailyCtx:
-    """组装某个交易日的 ``DailyCtx``（只使用 <= T-1 的信息，见模块 docstring）。"""
+    """组装某个交易日的 ``DailyCtx``（只使用 <= T-1 的信息，见模块 docstring）。
+
+    ``td`` 允许传 ``datetime.date`` / ``Timestamp`` / ``datetime64``，内部统一
+    归一成 ``datetime.date`` 再查表 —— 供数层的 dict 全部以 date 为 key。
+    类型不一致会让三道门（hvol / blocked / regime）恒 miss，而且不报错。
+    """
+    if isinstance(td, date):
+        k = td
+    elif isinstance(td, np.datetime64):
+        k = pd.Timestamp(td).date()
+    else:
+        k = pd.Timestamp(td).date()
     z = np.nan
     avz = md.member_z.get(symbol)
     if avz is not None:
         days, zs = avz
-        j = int(np.searchsorted(days, np.datetime64(td, "D"), side="right")) - 1
+        j = int(np.searchsorted(days, np.datetime64(k, "D"), side="right")) - 1
         if j >= 0:
             z = float(zs[j]) if np.isfinite(zs[j]) else np.nan
     cl = CLUSTER.get(symbol[:-3] if symbol.endswith("888") else symbol)
-    rg, vz = md.regime.get((symbol, np.datetime64(td, "D")), (None, None))
+    rg, vz = md.regime.get((symbol, k), (None, None))
     return DailyCtx(
-        td=td,
-        hvol=bool(md.hvol.get(symbol, {}).get(np.datetime64(td, "D"), False)),
+        td=k,
+        hvol=bool(md.hvol.get(symbol, {}).get(k, False)),
         member_z=z,
-        blocked=bool(cl and td in md.blocked.get(str(cl), set())),
+        blocked=bool(cl and k in md.blocked.get(str(cl), set())),
         sess_last_hours=md.sess_last_hours.get(symbol, frozenset()),
         regime=rg,
         vol_z=vz,

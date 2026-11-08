@@ -1307,6 +1307,36 @@ def _c_v5x_engine_parity(c: Ctx) -> tuple[bool, str, str, str]:
     except Exception as exc:                                 # noqa: BLE001
         bad.append(f"引擎行为对拍异常 {type(exc).__name__}: {exc}")
 
+    # ---------- 供数层：三种 td 入参必须都能查到上下文 ----------
+    # 2026-11-08 实测踩过：dict 用 Timestamp 作 key、查表用 datetime64，
+    # 结果 hvol / blocked / regime 三组配置跑出**完全相同**的数字（8,916 笔
+    # / +249,726），三道门全部静默 miss。这种错不报错，只能靠断言抓。
+    try:
+        from datetime import date as _date
+
+        from app.strategies.v5x.context import V5XMarketData, build_ctx
+
+        md = V5XMarketData(src="bar_60m_ba")
+        d = _date(2026, 1, 5)
+        md.hvol = {"RB888": {d: True}}
+        md.blocked = {"黑色": {d}}
+        md.regime = {("RB888", d): (2, 3.1)}
+        md.sess_last_hours = {"RB888": frozenset({15})}
+        probes = ((d, "date"), (np.datetime64("2026-01-05"), "datetime64"),
+                  (pd.Timestamp("2026-01-05 00:00"), "Timestamp"))
+        miss = []
+        for probe, tag in probes:
+            ctx = build_ctx(md, "RB888", probe)
+            if not (ctx.hvol and ctx.blocked and ctx.regime == 2
+                    and abs(float(ctx.vol_z) - 3.1) < 1e-9):
+                miss.append(tag)
+        observed.append(f"ctx_key_types={3 - len(miss)}/3")
+        if miss:
+            bad.append(f"build_ctx 在 {miss} 入参下查不到上下文"
+                       "（dict key 类型与查询类型不一致 → 门控静默失效）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"供数层 key 类型检查异常 {type(exc).__name__}: {exc}")
+
     # ---------- 供数层不得偷偷用横截面 z ----------
     try:
         from pathlib import Path
