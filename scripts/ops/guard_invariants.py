@@ -601,6 +601,40 @@ def _c_v5x_push_failure_loud(c: Ctx) -> tuple[bool, str, str, str]:
     return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
 
 
+def _c_v5x_push_single_channel(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-06：`fusion.fallback_webhook` 为空 = 推送单通道，是已知单点。
+
+    不是假想风险，2026-11-06 真实发生过：当天 `[alert]` 逐条推送 206 条，
+    击穿 pushplus 账号额度后返回 `code=900 用户账号使用受限`，把**共用同一
+    token 的交易信号**一起打成静默 —— `fusion_push_log` 从 11-06 11:01 起
+    连续 7 条 `delivered=f via=none`，直到 11-08 才恢复。用户侧看到的是
+    「这两天没信号」，实际是「信号发不出去」。
+
+    告警刷屏已在 CL-20261108-23 修掉（单条 digest + max_per_day=80），
+    但「信号与告警共用额度、且只有一条通道」这个结构没变。V5X 现在是**唯一**
+    推送源，配一个企业微信/钉钉/飞书群机器人 URL 就能消掉这个单点。
+
+    定 warn 而非 block：这是配置选择，不是代码缺陷；空值不阻断发布，
+    但要在每轮守卫报告里持续可见，直到配上为止。
+    """
+    label = "推送有降级通道（fusion.fallback_webhook 已配置）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        from app.core.config import get_settings
+
+        fb = getattr(get_settings().fusion, "fallback_webhook", "") or ""
+        observed.append(f"fallback={'set' if fb else 'empty'}")
+        if not fb:
+            bad.append(
+                "fusion.fallback_webhook 为空 → pushplus 是唯一通道，且与告警共用额度。"
+                "11-06 就因告警刷爆额度导致交易信号静默 2.5 天。"
+                "配一个企业微信/钉钉/飞书群机器人 URL 即可消除")
+    except Exception as exc:                                    # noqa: BLE001
+        bad.append(f"读取配置失败 {type(exc).__name__}: {exc}")
+    return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
+
+
 # ---------------------------------------------------------------- 运行态一致性
 def _c_switch_job_consistency(c: Ctx) -> tuple[bool, str, str, str]:
     """代码开关（cfg_feature_switch）与字典开关（ops.scheduled_task）必须同向。
@@ -3250,6 +3284,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_v5x_push_channel),
     ("V5X-PUSH-FAILURE-LOUD", "V5X 推送失败必须升级为任务失败",
      "block", _c_v5x_push_failure_loud),
+    # 配置态：空值不阻断发布，但要让「单通道」在每轮报告里持续可见。
+    ("V5X-PUSH-SINGLE-CHANNEL", "推送有降级通道（fallback_webhook 非空）",
+     "warn", _c_v5x_push_single_channel),
 ]
 
 
