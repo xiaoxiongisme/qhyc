@@ -3395,13 +3395,19 @@ def main() -> int:
         print(f"{'状态':<4} {'断言':<34} {'实测':<28} 依据/说明")
         print("-" * 96)
         for r in results:
-            print(f"{icon.get(r.status, '?')} {r.key:<32} {r.observed[:26]:<28} "
+            # warn 级 FAIL 不阻断退出码（exit_code 只看 block），显示成 ❌ 会让人
+            # 以为发布被拦了。用 ⚠️ 区分「需要处理」与「不满足但可接受」。
+            ic = "⚠️" if (r.status == "FAIL" and r.severity != "block") \
+                else icon.get(r.status, "?")
+            print(f"{ic} {r.key:<32} {r.observed[:26]:<28} "
                   f"{r.waiver_ref or ''}")
             if r.detail and r.status != "PASS":
                 print(f"     └ {r.detail[:150]}")
         print("-" * 96)
+        n_warn_fail = sum(1 for r in real_fail if r.severity != "block")
+        tail = f" · 仅告警 {n_warn_fail}" if n_warn_fail else ""
         print(f"合计 {len(results)}：PASS {sum(1 for r in results if r.status == 'PASS')}"
-              f" · FAIL {len(real_fail)} · WAIVED {len(waived)}")
+              f" · FAIL {len(real_fail)}{tail} · WAIVED {len(waived)}")
         if waived:
             print("\n已挂账缺口（不算违约，但必须有人推进）：")
             for r in waived:
