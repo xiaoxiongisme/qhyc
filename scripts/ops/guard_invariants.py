@@ -1499,6 +1499,96 @@ def _c_v5x_snapshot_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。持仓快照失效 = 用户无法核对理论持仓，统计与实盘永久错位（CL-20261109-08）")
 
 
+def _c_schedule_parity(c: Ctx) -> tuple[bool, str, str, str]:
+    """调度频率只有一个真相：字典 schedule 必须等于代码节奏（CL-20261109-07）。
+
+    `_reregister_schedules_from_db()` 在启动时用 `ops.scheduled_task.schedule`
+    （**executor='apscheduler' 的行**）覆盖代码里的 `CronTrigger`，字典赢。实测：
+
+      · `fusion_scan` 字典 `1,31 * * * *` vs 代码 `5,35` → 回切 V3.4 会在 :01
+        触发，早于 :00 的 hourly_collect 落盘（读到的是上一根）；
+      · `v5x_scan` 字典 `unknown` → **靠两条巧合幸存**：executor='manual' 不被
+        读取，且 'unknown' 不是 5 段 cron。谁"顺手补一条合法 cron"，双跑就静默
+        变单跑，11:15 / 14:15 两根非整点 bar 永远不被评估（CL-20261108-28 栽过）。
+
+    断言三面（都是「此刻可判」）：
+      1. 两个扫描作业的字典值 == 由 `SCAN_MINUTES` 推出的 crontab（同源，不另抄）；
+      2. `scheduler.py` 里 fusion 的 `minute="5,35"` 字面量必须与 `SCAN_MINUTES`
+         一致 —— 否则有人改了常量却没改代码，两边会再次分叉；
+      3. `v5x_snapshot` 必须登记、executor 非 apscheduler、schedule 保持惰性
+         （非 5 段 cron）、且 `meta.code_cron` 非空 —— 意图不能丢。
+         刻意不写 `5 15 * * 1-5`：`from_crontab` 的星期位 0=周一，`1-5` 会被
+         解析成周二~周六。
+    """
+    label = "调度频率单一真相（字典 == 代码）"
+    try:
+        import ast
+
+        from app.strategies.v5x.live import SCAN_MINUTES
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "SCAN_MINUTES 不可导入（CL-20261109-07）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+    scan_cron = ",".join(str(m) for m in SCAN_MINUTES) + " * * * *"
+    expected = {"fusion_scan": scan_cron, "v5x_scan": scan_cron}
+
+    rows = c.rows(
+        "SELECT task_id, coalesce(schedule,''), executor, coalesce(meta->>'code_cron','') "
+        "FROM ops.scheduled_task WHERE task_id = ANY(:ids)",
+        ids=list(expected) + ["v5x_snapshot"])
+    got = {r[0]: (r[1], r[2], r[3]) for r in rows}
+
+    for tid, want in expected.items():
+        if tid not in got:
+            bad.append(f"{tid} 未登记到 ops.scheduled_task")
+            continue
+        have, executor, _ = got[tid]
+        observed.append(f"{tid}={have!r}/{executor}")
+        if have.strip() != want:
+            bad.append(f"{tid} 字典 schedule={have!r} != 代码期望 {want!r}")
+
+    # 代码侧：fusion 的 minute 字面量必须与 SCAN_MINUTES 同源
+    try:
+        src = (Path(__file__).resolve().parents[2] / "app" / "scheduler.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(src)
+        fusion_minutes = None
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Name):
+                continue
+            if n.func.id != "CronTrigger":
+                continue
+            for kw in n.keywords:
+                if kw.arg == "minute" and isinstance(kw.value, ast.Constant):
+                    fusion_minutes = str(kw.value.value)
+        want_minutes = ",".join(str(m) for m in SCAN_MINUTES)
+        observed.append(f"code_minute={fusion_minutes!r}")
+        if fusion_minutes is not None and fusion_minutes != want_minutes:
+            bad.append(f"scheduler.py 里 CronTrigger(minute={fusion_minutes!r}) "
+                       f"与 SCAN_MINUTES={want_minutes!r} 不一致")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"scheduler.py AST 检查失败：{type(exc).__name__}: {exc}")
+
+    # 新作业：必须登记，但 schedule 保持惰性（不给 from_crontab 误读的机会）
+    if "v5x_snapshot" not in got:
+        bad.append("v5x_snapshot 未登记到 ops.scheduled_task")
+    else:
+        have, executor, code_cron = got["v5x_snapshot"]
+        parsed = len(have.split()) == 5
+        observed.append(f"v5x_snapshot={have!r}/{executor} code_cron={bool(code_cron)}")
+        if parsed:
+            bad.append(f"v5x_snapshot.schedule={have!r} 是合法 5 段 cron —— "
+                       "from_crontab 的星期位 0=周一，极易跑错一天；应保持惰性")
+        if not code_cron:
+            bad.append("v5x_snapshot 缺少 meta.code_cron（真实节奏的意图丢了）")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。字典与代码分叉 = 作业在没人预期的时间跑（CL-20261109-07）")
+
+
 def _c_factor_z_ts_distinct(c: Ctx) -> tuple[bool, str, str, str]:
     """A1 / CL-20261108-20：横截面 z 与时序 z 必须是两个因子、两种语义。
 
@@ -3524,6 +3614,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 首份人工清单 5 个仓抄反了 4 个方向，所以「方向标签」也进断言。
     ("V5X-SNAPSHOT-WIRED", "理论持仓快照真实接线且方向标签正确", "block",
      _c_v5x_snapshot_wired),
+    # CL-20261109-07：ops.scheduled_task.schedule 会覆盖代码 CronTrigger（字典赢）。
+    # fusion_scan 字典 1,31 vs 代码 5,35；v5x_scan 靠 executor='manual'+'unknown'
+    # 两条巧合才保住节奏 —— 纯属幸存，必须变成断言。
+    ("OPS-SCHEDULE-PARITY", "调度频率单一真相（字典 == 代码）", "block",
+     _c_schedule_parity),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
