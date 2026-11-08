@@ -538,6 +538,13 @@ def _c_v5x_push_channel(c: Ctx) -> tuple[bool, str, str, str]:
         if '"n_unsent"' not in src and "'n_unsent'" not in src:
             bad.append("run_v5x_scan 未返回 n_unsent → 调度层无法区分"
                        "「有信号但没送达」与「本轮没信号」")
+
+        # 回写标记必须用库里的 key：dedupe_key 里嵌着 bar_ts，落库时是 pandas
+        # Timestamp、读回来是 datetime，重算不保证一致 → UPDATE 匹配 0 行 →
+        # 信号永远标不成「已送达」，窗口内每轮重推（2026-11-09 实测抓到的 bug）。
+        if "stored_key" not in src:
+            bad.append("live.py 缺少 stored_key → 从库读回的信号会重算 dedupe_key，"
+                       "标记匹配 0 行导致无限重推")
     except Exception as exc:                                    # noqa: BLE001
         bad.append(f"扫描异常 {type(exc).__name__}: {exc}")
     return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))

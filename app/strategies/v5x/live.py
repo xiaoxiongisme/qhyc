@@ -134,11 +134,25 @@ class V5XSignal:
     #: 这一条是「上一轮推送失败、本轮补发」而非本轮新产出。
     #: 只用于推送文案打标记，**不参与 dedupe_key**（同一根 bar 的同一动作全局唯一）。
     from_retry: bool = False
+    #: 从 ``v5x_signal_log`` 读回来的原始 key。
+    #:
+    #: ★ 为什么必须存它（2026-11-09 端到端验证抓到的真 bug）
+    #:   ``dedupe_key`` 是 ``f"{symbol}|{bar_ts}|{action}|{side}"``，其中 ``bar_ts``
+    #:   在落库时是 pandas ``Timestamp``、读回来是 ``datetime``。两者 ``str()``
+    #:   在时区/微秒表示上并不保证一致（``Timestamp`` 可能带 ``.000000``）。
+    #:   一旦不一致，``_mark_notify`` 的 ``WHERE dedupe_key=:k`` 就匹配 0 行 ——
+    #:   信号永远标不成「已送达」，于是在 2 小时窗口内**每轮都重推一次**
+    #:   （:05/:35 各一轮 = 连收 4 条重复消息，且都标「补推」）。
+    #:   回写一律用表里那个值，不做重算。
+    stored_key: str | None = None
 
     @property
     def dedupe_key(self) -> str:
         # ★ 刻意不含 source：同一根 bar 的同一动作全局只允许一条。
         #   否则「先回放补录、后实盘跑到同一根 bar」会各记一条，统计翻倍。
+        # 从库里读回的行必须用原始 key（见 stored_key 的注释），不能重算。
+        if self.stored_key:
+            return self.stored_key
         return f"{self.symbol}|{self.bar_ts}|{self.action}|{self.side}"
 
 
@@ -419,8 +433,8 @@ def _load_unsent(session, now: datetime,
     """
     since = now - timedelta(hours=hours)
     rows = session.execute(text("""
-        SELECT symbol, action, side, bar_ts, adj_offset, price_ba, price_real,
-               lots, stop_ba, stop_real, etype, reason, net_yuan,
+        SELECT dedupe_key, symbol, action, side, bar_ts, adj_offset, price_ba,
+               price_real, lots, stop_ba, stop_real, etype, reason, net_yuan,
                (notify_ok IS FALSE) AS was_failed
           FROM public.v5x_signal_log
          WHERE notify_ok IS NOT TRUE
@@ -450,6 +464,8 @@ def _load_unsent(session, now: datetime,
         source="live",
         # notify_ok 为 NULL = 本轮刚落库；为 FALSE = 上轮推送失败，本轮补发
         from_retry=bool(r["was_failed"]),
+        # 回写标记必须用库里那个 key，不能拿 bar_ts 重算（见 stored_key 注释）
+        stored_key=r["dedupe_key"],
     ) for r in rows]
 
 

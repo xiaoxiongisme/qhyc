@@ -161,6 +161,7 @@ class _RowSession:
 def test_load_unsent_maps_nulls():
     """DB 里的 NULL 要正确转成 None / 默认手数，别把 None 塞进格式化。"""
     rows = [{
+        "dedupe_key": "AG888|2026-11-06 14:15:00+08:00|CLOSE|SHORT",
         "symbol": "AG888", "action": "CLOSE", "side": "SHORT",
         "bar_ts": datetime(2026, 11, 6, 14, 15), "adj_offset": 0.5,
         "price_ba": 100.0, "price_real": 99.5, "lots": None,
@@ -183,6 +184,7 @@ def test_load_unsent_maps_nulls():
 def test_load_unsent_fresh_row_is_not_retry():
     """notify_ok 为 NULL（刚落库）的行不能标成补发，否则标题会误报故障。"""
     rows = [{
+        "dedupe_key": "RB888|2026-11-06 14:15:00+08:00|OPEN|LONG",
         "symbol": "RB888", "action": "OPEN", "side": "LONG",
         "bar_ts": datetime(2026, 11, 6, 14, 15), "adj_offset": 0.0,
         "price_ba": 100.0, "price_real": 100.0, "lots": 1.0,
@@ -192,6 +194,31 @@ def test_load_unsent_fresh_row_is_not_retry():
     }]
     got = live._load_unsent(_RowSession(rows), datetime(2026, 11, 9, 7, 0))
     assert got[0].from_retry is False
+
+
+def test_stored_key_wins_over_recomputed():
+    """从库读回的行必须用表里的 dedupe_key 回写，不能拿 bar_ts 重算。
+
+    ★ 这是 2026-11-09 端到端验证抓到的真 bug：`dedupe_key` 里嵌着 `bar_ts`，
+    落库时是 pandas `Timestamp`（str 可能带 `.000000`）、读回来是 `datetime`。
+    两者格式化不保证一致 → `_mark_notify` 的 `WHERE dedupe_key=:k` 匹配 0 行
+    → 信号永远标不成「已送达」→ 2 小时窗口内每轮都重推（连收 4 条重复消息）。
+    """
+    stored = "RB888|2026-11-06 14:15:00.000000+08:00|OPEN|LONG"
+    rows = [{
+        "dedupe_key": stored,
+        "symbol": "RB888", "action": "OPEN", "side": "LONG",
+        "bar_ts": datetime(2026, 11, 6, 14, 15),     # 无 tz、无微秒 → 重算必不同
+        "adj_offset": 0.0, "price_ba": 100.0, "price_real": 100.0, "lots": 1.0,
+        "stop_ba": None, "stop_real": None,
+        "etype": "bk", "reason": None, "net_yuan": None,
+        "was_failed": False,
+    }]
+    got = live._load_unsent(_RowSession(rows), datetime(2026, 11, 9, 7, 0))[0]
+
+    assert got.dedupe_key == stored, "必须原样使用库里的 key"
+    recomputed = f"{got.symbol}|{got.bar_ts}|{got.action}|{got.side}"
+    assert got.dedupe_key != recomputed, "重算结果确实不同 —— 这正是必须存 key 的原因"
 
 
 def test_retry_window_is_short():
