@@ -56,6 +56,18 @@ class V5XBacktestParams:
     src: str = "bar_60m_ba"        # V5X 冻结版用后复权；"bar_60m" 复现原始价对照
     regime_mode: str = "frozen"    # frozen=复现 V5X（含前视）/ strict=无前视
     overrides: dict[str, Any] = field(default_factory=dict)
+    # —— 三道「上下文门」的开关（对应 V5X 的 ctx.hvol / ctx.blocked / ctx.regime）——
+    # 默认全开 = 逐位复现 V5X.3。消融时关掉即可，不必改引擎。
+    # ⚠ 实测（38 池 / 12 年）：hvol 单独打开净利 -819,634（严重有害），
+    #   关掉它做对照是必要的研究动作，但**不得**因此改默认值 —— 默认值代表
+    #   「冻结版是什么」，改了就再也复现不出历史数字。
+    use_hvol: bool = True
+    use_blocked: bool = True
+    use_regime: bool = True
+    # P6（会话末根禁开仓）。V5X.3 引擎自带，但历史消融脚本 v5x_on_qhyc.py 传的是
+    # 空集合（未启用）。要与那批数字（-423,264 / +95,493 / +244,742）逐位对拍，
+    # 必须显式置 False —— 否则笔数会因「尾盘根不开仓」而偏少，差异不可归因。
+    use_p6: bool = True
     # V5X 冻结回测假设每笔 1 手、单品种串行；本模块同口径，不做资金约束。
     note: str = ""
 
@@ -112,9 +124,19 @@ def run_v5x_backtest(session, symbols: list[str] | None = None,
         eng = SymbolEngine(sym, cfg, build_cost(sym, start))
         tds = assign_td(df["bucket"], md.open_days)
         prev_td = None
-        for i, (row, td) in enumerate(zip(df.itertuples(index=False), tds)):
+        for row, td in zip(df.itertuples(index=False), tds):
             if td != prev_td:
-                eng.set_daily_ctx(build_ctx(md, sym, td))
+                ctx = build_ctx(md, sym, td)
+                if not p.use_hvol:
+                    ctx.hvol = False
+                if not p.use_blocked:
+                    ctx.blocked = False
+                if not p.use_regime:
+                    ctx.regime = None
+                    ctx.vol_z = None
+                if not p.use_p6:
+                    ctx.sess_last_hours = frozenset()
+                eng.set_daily_ctx(ctx)
                 prev_td = td
             eng.on_bar(row.bucket, float(row.open), float(row.high),
                        float(row.low), float(row.close), float(row.volume),
@@ -141,6 +163,8 @@ def run_v5x_backtest(session, symbols: list[str] | None = None,
         "fill": "同根收盘（V5X 冻结口径，偏乐观；E1-C next_open 未实现）",
     }
     agg["regime_mode"] = p.regime_mode
+    agg["gates"] = {"hvol": p.use_hvol, "blocked": p.use_blocked,
+                    "regime": p.use_regime}
     agg["diagnostics"] = md.diagnostics
 
     # 分年（V5X 的核心结论是「2022 依赖」，必须每次都能看到）
