@@ -320,15 +320,46 @@ def _regime_table(daily: pd.DataFrame, mode: str,
 
 
 def _sess_last_hours(bars: pd.DataFrame, open_days: np.ndarray) -> dict[str, frozenset]:
-    """每个交易日**最后一根** bar 的小时集合（P6 会话末根禁开仓用）。"""
+    """每个品种「日盘末根 / 夜盘末根」的小时集合（P6 会话末根禁开仓用）。
+
+    ★ 2026-11-09 修正（CL-20261109-10）：旧实现取「每个交易日最后一根 bar 的
+      小时」再**跨日取并集**，只要历史上有任意一天该小时是当日最后一根，它就被
+      永久视为「会话末根」。而历史数据里有大量残缺日（早年流动性低缺 bar、
+      早年时间戳用起始时刻而非结束时刻），于是并集退化成
+      ``{9,10,11,13,14,15}``（SF/SM）甚至 ``{9,10,11,13,14,15,23}``（FU）——
+      **9:00 / 13:00 是日盘开盘的第一根，却被当成末根禁开仓**。
+
+      实测后果（38 白名单 / 2015-2026 / next_open 口径）：
+        · SF888 / SM888 十年**一笔未成交**（并集覆盖整个日盘）；
+        · 全池净利 +259,729 → 修正后 +342,152（+82,423，+32%）；
+        · 2024 从 −1,016 转 +4,725、2026 从 +7,084 转 +12,228。
+
+      正确语义是「**常态**的会话结束时刻」，不是「历史上出现过的所有末根」：
+      按 (交易日, 日盘/夜盘) 分段取末根，再对每个分段取**众数**。得到的
+      ``{15}`` / ``{15,23}`` / ``{15,1}``（有色夜盘到 01:00）与产品交易时间
+      一一对应，也与冻结版文档里 ``{14} / {14,22}``（起始时刻标记法，差 1 小时）
+      同源。
+
+    ⚠ 分段口径：``hour >= 18`` 是「前一自然日晚上、归属下一交易日」的夜盘；
+      ``hour <= 3`` 是跨零点后仍属同一交易日的夜盘尾段；其余为日盘。
+    """
     df = bars[["symbol", "bucket"]].copy()
     df["td"] = assign_td(df["bucket"], open_days)
     df["td"] = pd.to_datetime(df["td"]).dt.date
     df["hour"] = pd.to_datetime(df["bucket"]).dt.hour
-    last = df.groupby(["symbol", "td"], sort=True)["hour"].last().reset_index()
+    df["seg"] = np.where((df["hour"] >= 18) | (df["hour"] <= 3), "night", "day")
+
+    last = (df.groupby(["symbol", "td", "seg"], sort=True)["hour"]
+              .last().reset_index())
     out: dict[str, frozenset] = {}
     for sym, g in last.groupby("symbol", sort=False):
-        out[sym] = frozenset(int(x) for x in g["hour"].unique())
+        hours: set[int] = set()
+        for _seg, gg in g.groupby("seg"):
+            if len(gg) == 0:
+                continue
+            # 众数：常态的会话结束时刻。残缺日只会少数派，不会污染结果。
+            hours.add(int(gg["hour"].mode().iloc[0]))
+        out[sym] = frozenset(hours)
     return out
 
 
