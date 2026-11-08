@@ -1060,6 +1060,37 @@ def _v5x_scan_job() -> dict | None:
     return res
 
 
+def _v5x_snapshot_job() -> dict | None:
+    """V5X 理论持仓快照（只读 + 推送）— CL-20261109-08。
+
+    为什么需要它：V5X 是**无状态回放**扫描器，只推「当根 bar 发生了什么事件」，
+    从不回答「按规则现在应该持有什么」。2026-11-09 首次实盘前实测：
+    按 11-07 末根重放，理论上持有 5 个多头（A888/P888/SF888/SS888/Y888），
+    而用户手上一个都没有 —— 于是之后推这 5 个的 ``CLOSE`` 时用户无仓可平，
+    统计与实盘从此永久错位，且没有任何地方会提醒。
+
+    三条约束：
+      1. **只读**：不写 ``execution_order`` / ``execution_position`` /
+         ``fusion_position`` / ``v5x_signal_log``；
+      2. 复用 :func:`app.strategies.v5x.live._replay_orders` 的唯一重放路径，
+         不另写循环（两套重放必然分叉）；
+      3. 推送失败**外抛** —— 与 ``_v5x_scan_job`` 同一条纪律（CL-20261109-06）：
+         ``ops.scheduled_task_run`` 的 success 判据是「作业有没有抛异常」。
+    """
+    if not _switch_on("v5x_live_enabled", "QH_V5X_LIVE", default=False):
+        logger.debug("[scheduler] v5x_live_enabled=off → 跳过持仓快照")
+        return
+    from app.strategies.v5x.snapshot import push_snapshot
+
+    try:
+        res = push_snapshot()
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] v5x 持仓快照失败：{e}")
+        raise
+    logger.info(f"[scheduler] v5x 持仓快照完成：{res}")
+    return res
+
+
 def _fusion_scan_job() -> None:
     """融合策略扫描（每个整点后 :05/:35 触发，即小时线落盘后再生成信号/推送）。
 
@@ -1864,6 +1895,22 @@ def _build_scheduler() -> BlockingScheduler:
     logger.info("[scheduler] registered v5x_scan at "
                 + "/".join(f":{m:02d}" for m in _V5X_MINUTES)
                 + " hourly (switch v5x_live_enabled)")
+
+    # V5X 理论持仓快照（CL-20261109-08）：日盘收盘后 15:05 推一份「按规则现在
+    # 应该持有什么」。V5X 是无状态回放，只推事件不推持仓 —— V3.4 停用后
+    # 「盘前预播报」承担的持仓告知整体消失，用户漏看一条 CLOSE 就与统计永久错位。
+    # 只读引擎内部状态，不写任何表（与已关闭的持仓同步 CL-20261108-26 无关）。
+    sched.add_job(
+        _v5x_snapshot_job,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=5,
+                            timezone=settings.env.TZ),
+        id="v5x_snapshot",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
+    )
+    logger.info("[scheduler] registered v5x_snapshot at 15:05 mon-fri")
 
     # 复权主连每日重算（adjust_cont_adj）已于 2026-10-04 随 fdf 模块退役停用：
     # cont_adj 不再由定时作业生成（fdf 为唯一生产者，已删）。保留 minute_bar（L0 原始）。

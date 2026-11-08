@@ -206,7 +206,7 @@ def _load(session, symbols: list[str] | None, end: date):
     return md, symbols
 
 
-def _replay_orders(md, sym: str, df: pd.DataFrame, cfg):
+def _replay_orders(md, sym: str, df: pd.DataFrame, cfg, holder: dict | None = None):
     """逐根 bar 重放状态机，yield ``(idx, bar_ts, adj_offset, orders)``。
 
     **实时扫描与历史回放的唯一重放实现**。两处若各写一遍，迟早出现
@@ -215,12 +215,18 @@ def _replay_orders(md, sym: str, df: pd.DataFrame, cfg):
     关于成本参数 ``build_cost(sym, 最后一个交易日)``：取 ``df`` 末根 bar 的日期，
     即「按当前费率」算，**不按被回放那根 bar 的历史费率**。这是刻意的 —— 回放是为了
     复现「如果今天用这套参数跑到那根 bar 会出什么信号」，不是复刻当年的真实成本。
+
+    ``holder``（可选）：传入 dict 时会把 ``engine`` 塞进去，供调用方在重放结束后
+    读取 ``state / lots / avg_px``。持仓快照（:mod:`app.strategies.v5x.snapshot`）
+    靠它复用同一条重放路径，而不是再写一遍循环（CL-20261109-08）。
     """
     tds = _td_series(df["bucket"], md.open_days)
     # ★ 每根 bar 用**自己那根**的偏移量（BA 是加性偏移，随时间变化）。
     #   取最后一根去反解所有历史 bar 会把早年价格算成负几万 —— 这是 BA 空间最容易踩的坑。
     offs = (df["close"].astype(float) - df["raw_c"].astype(float)).to_numpy()
     eng = SymbolEngine(sym, cfg, build_cost(sym, df["bucket"].iloc[-1].date()))
+    if holder is not None:
+        holder["engine"] = eng
     prev_td = None
     for i in range(len(df)):
         td = tds[i]
