@@ -536,6 +536,81 @@ def _c_lstm_snapshot_write(c: Ctx) -> tuple[bool, str, str, str]:
         "跨 UID 共享卷会让回测快照静默失败（CL-20261108-03）")
 
 
+def _c_roll_gap_aware(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261107-15 / CL-20261108-04：换月映射必须跨休市感知，且 SP 不能再漏 n_bars。
+
+    054 用「事件落在 [bucket, next_bucket)」判归属，60m 网格上 15:00→22:00
+    的休市空隙被算进 15:00 那根，把 21:15 的夜盘换月归到日盘收盘桶。
+    055 把上界 clamp 到 min(next_bucket, bucket+名义周期)，并补一个归
+    next_bucket 的分支；同时补上漏写的 n_bars 列。
+
+    这里直接读**当前生效的 SP 定义**做防回退检查（与 VAR-SCOPE-WIRED 同思路）：
+    以前 CL-15 挂 high 却没有任何断言覆盖，重跑一次错归就会静默复发。
+    """
+    label = "L2 换月映射跨休市感知（055 未回退）"
+    try:
+        d = c.scalar(
+            "SELECT pg_get_functiondef("
+            "'public.sp_build_l2_roll_segment(text,boolean,text)'::regprocedure)") or ""
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {exc}", (
+            "055 三参签名不存在 → SP 已回退到 054，跨休市错归会静默复发")
+    tokens = {
+        "上界clamp": "least(t.bucket +",
+        "空隙分支": "SELECT t.next_bucket AS bar_ts",
+        "单品种参数": "p_symbol",
+        "n_bars补齐": "fs.n_bars",
+    }
+    missing = [k for k, t in tokens.items() if t not in d]
+    return not missing, label, (
+        f"sig=(text,boolean,text) ddl_len={len(d)} 缺失标记={missing or '无'}"), (
+        "" if not missing else
+        "SP 定义缺少 " + ", ".join(missing) +
+        " → 055 被回退或部分覆盖，跨休市错归 / INSERT 漏列会静默复发"
+        "（CL-20261107-15 / CL-20261108-04）")
+
+
+def _c_roll_gap_data(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-15 回归哨兵：2026-11-04 PF888 21:15 夜盘换月必须归到夜盘首桶。
+
+    近 120 天 min60/min30 各 17,933 个跨休市空隙里只有这 1 件换月事件落入，
+    故固定作为回归样本。判的是**当前主表状态**（不靠时间窗口衰减）：
+    只要有人重跑出 15:00 桶或后复权没重建，立刻 block FAIL。
+    """
+    label = "PF888 夜盘换月段落在夜盘首桶且后复权已抹平"
+    try:
+        segs = c.rows("""
+            SELECT freq, seg_start::text, cum_offset::text
+            FROM l2_adj.roll_segment
+            WHERE symbol = 'PF888' AND freq IN ('min30', 'min60')
+              AND seg_start >= '2026-11-04 00:00+08'::timestamptz
+              AND seg_start <  '2026-11-05 00:00+08'::timestamptz
+            ORDER BY freq
+        """)
+        off = c.scalar("""
+            SELECT adj_offset::text FROM l2_adj.bar_60m_ba
+            WHERE symbol = 'PF888'
+              AND bucket = '2026-11-04 22:00+08'::timestamptz
+        """)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {exc}", "主表查询失败"
+    got = {r[0]: (r[1], r[2]) for r in segs}
+    want_start = {"min30": "2026-11-04 21:30", "min60": "2026-11-04 22:00"}
+    bad: list[str] = []
+    for f, want in want_start.items():
+        if f not in got:
+            bad.append(f"{f} 缺段")
+        elif not got[f][0].startswith(want):
+            bad.append(f"{f} seg_start={got[f][0]}（应为 {want} 之后，不得是 15:00）")
+        elif str(got[f][1]).split(".")[0] != "320":
+            bad.append(f"{f} cum_offset={got[f][1]}（应为 320）")
+    if off is None or str(off).split(".")[0] != "320":
+        bad.append(f"bar_60m_ba@22:00 adj_offset={off}（应为 320，断层未抹平）")
+    return not bad, label, f"segs={got} ba_adj_offset={off}", (
+        "" if not bad else
+        "；".join(bad) + " → 换月又归到日盘收盘桶或后复权未重建（CL-20261107-15）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -561,6 +636,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # warn 而非 block：重跑期间最新 run 天然是半成品，靠「活跃写入 <2h」放行；
     # 只有停滞超过 2h 才报，正好抓住 CL-20261108-02 的容器重启误杀。
     ("OPS-BT-RUN-COMPLETE", "最新回测 run 完整或仍在活跃写入", "warn", _c_bt_run_complete),
+    # CL-15 之前挂 high 却零断言覆盖：算法一旦回退或重跑错归，没有任何告警。
+    # 一条防 SP 回退、一条盯当前主表状态，都是「此刻可判」，不靠时间衰减。
+    ("L2-ROLL-GAP-AWARE", "L2 换月映射跨休市感知（055 未回退）", "block", _c_roll_gap_aware),
+    ("L2-ROLL-GAP-DATA", "PF888 夜盘换月段位置与后复权偏移", "block", _c_roll_gap_data),
 ]
 
 

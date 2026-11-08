@@ -30,7 +30,8 @@
 ## 文件清单
 - `00_apply_migrations.sql` — 在 staging 上应用 007/008/009（`\i` 聚合）
 - `01_validate_dict_cfg.sql` — 字典/配置表断言（计数 / 开关对齐现状 env / FK / 视图）
-- `02_fixture_and_roll_ab.py` — **L2 A/B 对拍**（sp vs Python），synthetic 模式全程清理
+- `02_fixture_and_roll_ab.py` — **L2 A/B 对拍**（sp vs Python），synthetic 模式全程清理（源文件已失，只剩 pyc）
+- `02b_gap_aware_ab.py` — **CL-15 跨休市专项 A/B**（自包含、不依赖 pyc，默认拒绝连生产库）
 - `03_sp_l1_fixture.sql` — L1 聚合夹具，专门捕获 `oi` 列名 bug
 - `run_preflight.sh` — 编排以上四步
 
@@ -64,25 +65,42 @@ bash scripts/cloud_preflight/run_preflight.sh real --symbol RB888 --freqs min15,
    price_shift / src_freq）**全部保持不变**。
    ⚠ 055 同时加 `p_symbol`（CL-20261107-16 的 C1）；`low_off` 改 JOIN 属 C2，
    后置到 056，不得与映射改动一起进对拍（失败时无法归因）。
+4. ✅ **已验收（2026-11-08，CL-20261108-04）**：staging 上 054 把 21:15 的换月
+   归到 min60 的 15:00 桶，055 改归 22:00；min15(21:15)/min30(21:00) 不变，
+   三周期 A/B 逐行相等、退出码 0；日盘连续网格同样逐行相等（无空隙映射无回归）。
+   生产事务内试算 → `ROLLBACK` → 正式应用 055 → 只重跑 PF888 min60/min30：
+   `min60 seg19=2026-11-04 22:00+08`、`min30 seg19=21:30+08`，
+   `l2_adj.bar_60m_ba@22:00` 的 `adj_offset` 80→320、close 8066→8306，
+   −240 断层抹平，且 15:00 那根仍为 80（无 +240 假跳空）。
 
-## 工具现状（2026-11-08 实测）
-- `02_fixture_and_roll_ab.py` 与 `run_preflight.sh` 的**源文件已不在仓库**，但
-  `cpython-312.pyc` 仍在 `scripts/cloud_preflight/__pycache__/`（生产与本地各一份）。
-  宿主 venv 为 Python 3.12.3，版本匹配，补 `PYTHONPATH` 后可直接执行：
+## 工具现状与已知坑（2026-11-08 实测，CL-20261108-04）
+- `02_fixture_and_roll_ab.py` 与 `run_preflight.sh` 的**源文件已不在仓库**，只剩
+  `__pycache__/02_fixture_and_roll_ab.cpython-312.pyc`。宿主 venv 为 Python 3.12.3，
+  版本匹配，补 `PYTHONPATH=/Docker/qhyc/scripts:/Docker/qhyc` 后 `--help` 正常，但有三个坑：
+  1. ⚠ **`load_brs()` 路径缺陷**：它用 `dirname(abspath(__file__))/../build_roll_segments.py`
+     定位基准文件；pyc 在 `__pycache__/` 下，该路径指向
+     `cloud_preflight/build_roll_segments.py`（不存在）→ `main()` 一跑就崩，`--help`
+     能出只是因为 `parse_args` 提前退出。绕法：把 pyc 放到 `<harness>/__pycache__/`、
+     基准文件放 `<harness>/build_roll_segments.py`，相对路径正好命中，还可切换 old/new 两版。
+  2. ⚠ **`gen_synthetic()` 只造日盘**：buckets 过滤条件为 `9 <= hour < 15`，
+     所以 `--roll-at 21:15` 造不出夜盘换月事件，**不能用它验收 CL-15 的跨休市场景**
+     （12:05 曾误判「可用 --roll-at 做专项 fixture」，此处更正）。
+  3. ⚠ **`n_bars` 误判**：`compare()` 把「存在 `n_bars IS NULL` 段」直接判
+     `rows_eq=False`。054 SP 的 INSERT 漏写该列，生产 16,972 段全部为 NULL，
+     252/252 验收链在当前代码上永远跑不出 PASS。055 已补 `fs.n_bars` / `ns.n_bars`。
+- ✅ 已建 `qhyc_staging`（同一 PG 实例上的**独立库、最小结构**，不含任何生产数据）：
+  `public.bar_5m/15m/30m/60m` 与 `public.roll_segment` 都是**无过滤普通表**——
+  生产同名对象是带 `l3_ref` 白名单过滤的视图，会挡住测试品种 `ZZ888`；
+  另建 `public.l1_table_of(text)`。
+- ✅ `02b_gap_aware_ab.py` 自带跨休市 fixture（60m 日盘末根 15:00、夜盘首根 22:00，
+  事件 21:15），直接加载仓库 `scripts/build_roll_segments.py` 算期望值，不依赖 pyc：
   ```bash
-  PYTHONPATH=/Docker/qhyc/scripts:/Docker/qhyc \
-    /home/ubuntu/qhyc_work/venv/bin/python \
-    /Docker/qhyc/scripts/cloud_preflight/__pycache__/02_fixture_and_roll_ab.cpython-312.pyc \
-    --mode synthetic --freqs min15,min30,min60 --roll-at '<ts>'
+  set -a; . /home/ubuntu/qhyc_work/qhyc.env; set +a
+  PYTHONPATH=/Docker/qhyc /home/ubuntu/qhyc_work/venv/bin/python \
+    /Docker/qhyc/scripts/cloud_preflight/02b_gap_aware_ab.py --db qhyc_staging
   ```
-  连接参数走 `--host/--port/--db/--user/--pw` 或对应 `POSTGRES_*` 环境变量。
-- `02` 的 `compute_expected` 通过 `load_brs()` 动态加载 `build_roll_segments.py`，
-  调用 `detect_anchor_roll` / `map_roll_to_freq` / `build_segments`，**Python 侧改算法后
-  期望值自动同步**；`gen_synthetic(..., roll_at)` 可用 `--roll-at` 构造跨休市换月事件，
-  作为 CL-15 的专项 fixture。
-- ⚠ 生产当前只有 `futures` / `postgres` 两个库，**没有 staging**。按本文件顶部安全红线，
-  harness 绝不连生产；应用 055 前须先建 `qhyc_staging`（`pg_dump --schema-only` 导入
-  即可，synthetic 不需要真实数据），在 staging 跑出退出码 0。
+  默认 `dbname=futures` 直接拒绝。可用 `--brs-path` 指向 `git show HEAD^:...` 导出的旧版
+  做 old/new 对照，用 `--call-symbol` 验证 055 的 `p_symbol` 收窄。
 
 ## ⚠ 安全
 - `synthetic` 模式用测试品种 `ZZ888/ZZ8888`，插入后全程 `DELETE` 清理，不污染真实数据。
