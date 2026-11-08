@@ -1295,11 +1295,15 @@ def _c_v5x_engine_parity(c: Ctx) -> tuple[bool, str, str, str]:
         if n_p2_lo < 1:
             bad.append("regime=2 但 vol_z=1.0 也被禁（P2 应只削极端高波尾）")
 
+        # P6：命中会话末根小时 → 当根不开仓。
+        # 合成序列的小时是 9,10,…,23,0,1,… 连续递增，因此必须把 24 个小时
+        # 全部纳入集合才等价于「每根都是会话末根」；只写 {9} 会漏掉大部分 bar
+        # （本断言第一版就是这么写成 FAIL 的）。
         n_p6 = _run(cfg, DailyCtx(**{**base_ctx,
-                                     "sess_last_hours": frozenset({9})}))
+                                     "sess_last_hours": frozenset(range(24))}))
         observed.append(f"p6_open={n_p6}")
         if n_p6 != 0:
-            bad.append("会话末根小时（9 点）仍开仓（P6 失效）")
+            bad.append("会话末根小时全覆盖仍开仓（P6 失效）")
     except Exception as exc:                                 # noqa: BLE001
         bad.append(f"引擎行为对拍异常 {type(exc).__name__}: {exc}")
 
