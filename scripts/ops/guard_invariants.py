@@ -1081,6 +1081,129 @@ def _c_factor_z_ts_distinct(c: Ctx) -> tuple[bool, str, str, str]:
         + "。横截面 z / 时序 z 语义再次混用，单品种择时门会静默失效（CL-20261108-20）")
 
 
+def _c_bt_ba_price_space(c: Ctx) -> tuple[bool, str, str, str]:
+    """A2 / CL-20261108-21：后复权维度的「信号空间 / 真实价空间」必须分离。
+
+    为什么这条值一条 block 断言
+    --------------------------
+    `l2_adj.bar_60m_ba` 的价格是 `ba = raw + adj_offset`，**不是可成交价**：
+    实测 JD888 2026-11-06 15:00 `ba.close = -462.0`（offset -3923，真实价 3461）。
+    切到该维度后，若组合层直接用 ba 价算成交与 pnl，成本、保证金、涨跌停比例、
+    R 单位全部失真，甚至出现负价 —— 而且**不会报错**，只是数字变好看/变难看。
+
+    断言全是「此刻的行为」（合成 K 逐位对拍，零 DB）：
+      · `_generate_states` 输出 `close == close_sig − adj_offset`；
+      · adj_offset 缺失（NaN）必须 fail loud，不许静默退化成原始价；
+      · 换月假跳空：raw 空间 O−C=20（>0.5 ATR）会被拦，adj 空间为 0 不拦；
+      · 成交价取**真实价**（121），不得取信号空间价（100）。
+    """
+    label = "后复权维度价格空间分离（信号=adj / 成交=真实价）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import numpy as np
+        import pandas as pd
+
+        from app.backtest import fusion_backtest as fb
+    except Exception as exc:                                 # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "融合回测不可导入 → 价格空间断言不可用（CL-20261108-21）")
+
+    n = 60
+    k = 50                       # 换月根：真实价 100 → 120，后复权价保持 100
+    dts = pd.date_range("2026-01-01", periods=n, freq="h")
+    raws = np.array([100.0] * k + [120.0] * (n - k))
+    offs = np.array([0.0] * k + [-20.0] * (n - k))
+    bas = raws + offs
+
+    # ---------- ① _generate_states 的空间契约 ----------
+    try:
+        df = pd.DataFrame({"dt": dts, "open": bas, "high": bas, "low": bas,
+                           "close": bas, "adj_offset": offs})
+        p = fb.FusionBacktestParams()
+        st = fb._generate_states(df, p)
+        observed.append(f"cols_sig={'close_sig' in st.columns}/"
+                        f"{'atr_sig' in st.columns}")
+        if "close_sig" not in st.columns or "atr_sig" not in st.columns:
+            bad.append("_generate_states 未产出 close_sig/atr_sig（无法区分两个空间）")
+        else:
+            drift = float(np.max(np.abs(
+                st["close"].to_numpy(float)
+                - (st["close_sig"].to_numpy(float) - offs))))
+            observed.append(f"close_eq_sig_minus_off={drift:.2e}")
+            if drift > 1e-9:
+                bad.append(f"真实价 != 信号价-偏移（maxdiff {drift:.2e}）")
+            if st.attrs.get("price_space") != "adj":
+                bad.append(f"attrs.price_space={st.attrs.get('price_space')!r} != 'adj'")
+        # 缺偏移必须 fail loud（静默按 0 = 假装后复权）
+        df_bad = df.copy()
+        df_bad.loc[3, "adj_offset"] = np.nan
+        try:
+            fb._generate_states(df_bad, p)
+            bad.append("adj_offset 缺失未拒绝（会静默退化成原始价）")
+        except ValueError:
+            observed.append("nan_offset=rejected")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"_generate_states 空间对拍异常 {type(exc).__name__}: {exc}")
+
+    # ---------- ② 跳空判定用 sig 空间 / 成交价用真实价 ----------
+    def _states_frame(with_sig: bool) -> pd.DataFrame:
+        states = [0] * k + [1] * 5 + [0] * (n - k - 5)
+        d = {
+            "dt": dts,
+            "open": raws, "high": raws, "low": raws, "close": raws,
+            "state": states,
+            "lots": [1 if s == 1 else 0 for s in states],
+            "atr": np.full(n, 1.0),
+            "cur_stop": np.full(n, np.nan),
+        }
+        if with_sig:
+            d["open_sig"] = bas
+            d["close_sig"] = bas
+            d["atr_sig"] = np.full(n, 1.0)
+        return pd.DataFrame(d)
+
+    try:
+        p = fb.FusionBacktestParams(tick_size=1.0)
+        tr = fb._simulate_trades(_states_frame(True), p, symbol=None)
+        observed.append(f"adj_trades={len(tr)}"
+                        + (f" entry={tr[0]['entry_px']}" if tr else ""))
+        if len(tr) != 1:
+            bad.append(f"后复权口径下换月不应拦信号（实得 {len(tr)} 笔，应 1 笔）")
+        else:
+            if abs(float(tr[0]["entry_px"]) - 121.0) > 1e-6:
+                bad.append(f"成交价未用真实价（实得 {tr[0]['entry_px']}，应 121=120+1tick）")
+            if abs(float(tr[0]["exit_px"]) - 119.0) > 1e-6:
+                bad.append(f"平仓价未用真实价（实得 {tr[0]['exit_px']}，应 119=120-1tick）")
+            if float(tr[0]["pnl"]) >= 0:
+                bad.append(f"pnl 应为负（真实价 121→119），实得 {tr[0]['pnl']}")
+        # control：不给 sig 列 = 旧行为，换月 20 点假跳空必须被拦
+        tr0 = fb._simulate_trades(_states_frame(False), p, symbol=None)
+        observed.append(f"raw_control_trades={len(tr0)}")
+        if len(tr0) != 0:
+            bad.append("raw 空间 20 点假跳空未被拦（0.5 ATR 过滤失效）")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"_simulate_trades 对拍异常 {type(exc).__name__}: {exc}")
+
+    # ---------- ③ AST：防「字段建了没人读」 ----------
+    try:
+        import inspect
+        src_gap = inspect.getsource(fb._simulate_trades_ex)
+        for token in ("opens_sig", "closes_sig", "atr_sig"):
+            if token not in src_gap:
+                bad.append(f"_simulate_trades_ex 未引用 {token}（跳空判定疑似回退到真实价）")
+        src_gen = inspect.getsource(fb._generate_states)
+        if "adj_offset" not in src_gen:
+            bad.append("_generate_states 未读取 adj_offset（价格空间分离被移除）")
+        observed.append("ast_tokens=ok")
+    except Exception as exc:                                 # noqa: BLE001
+        bad.append(f"AST 检查失败 {type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。后复权维度价格空间混用，回测 pnl/成本/保证金会失真（CL-20261108-21）")
+
+
 def _c_bt_gap_filter_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """E1-C / CL-20261108-15：0.5 ATR 不利跳空过滤必须真实接线。
 
@@ -1945,6 +2068,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 断言同时验「两种 z 真不是一回事」（含无前视）与「时序 z 已注册并有数据」。
     ("FACTOR-Z-TS-DISTINCT", "横截面 z 与时序 z 语义可辨且时序 z 已落库",
      "block", _c_factor_z_ts_distinct),
+    # A2 / CL-20261108-21：后复权价不是可成交价（JD888 实测 ba.close=-462）。
+    # 断言用合成 K 对拍「换月假跳空被消除 + 成交价取真实价」，防静默失真。
+    ("BT-BA-PRICE-SPACE", "后复权维度的信号空间与真实价空间已分离",
+     "block", _c_bt_ba_price_space),
 ]
 
 

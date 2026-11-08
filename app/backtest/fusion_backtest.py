@@ -221,36 +221,94 @@ def _atr(df: pd.DataFrame, n: int) -> pd.Series:
     return tr.ewm(alpha=1.0 / max(1, int(n)), adjust=False).mean()
 
 
-def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
-    """信号层：消费 walk_fusion_states，输出 per-bar (dt, close, state, atr)。
+_PRICE4 = ("open", "high", "low", "close")
 
-    注意对齐：生成器从 i=2 开始（前两根为预热），故 state[k] 对应 df 行 k+2。
+
+def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
+    """信号层：消费 walk_fusion_states，输出 per-bar (dt, OHLC, state, atr, cur_stop)。
+
+    ★ 价格空间分离（A2 / CL-20261108-21）——本函数的唯一关键约束
+      ------------------------------------------------------------
+      `df` 若来自后复权维度（`src=bar_60m_ba`，带 `adj_offset` 列），则其价格是
+      **信号空间**价：`ba = raw + adj_offset`。它是一个**加性常量偏移**，所以
+      `O==H==L==C`、`High-Low`、价格差等**差值类**指标平移不变 → 信号逻辑等价，
+      而换月跳空被消除（这正是切后复权的目的）。
+
+      但后复权价**不是**可成交价：实测 JD888 2026-11-06 15:00 的
+      `ba.close = -462.0`（`adj_offset = -3923`，真实价 3461）——直接用它会
+      让 pnl / 成本 / 保证金 / 涨跌停比例全部失真，甚至算出负价。
+
+      因此这里显式分成两个空间：
+        · **信号空间**（`open_sig/close_sig/atr_sig`）：只喂给 `walk_fusion_states`
+          与跳空判定，用于消除换月污染；
+        · **真实价空间**（`open/high/low/close/atr/cur_stop`）：组合层的成交价、
+          成本、保证金、一字K、盘中击穿全部读这一套。
+      raw 维度下两者逐位相同，故既有基线零回归。
+
+    Returns:
+        DataFrame 列 = 原列 + `state/lots/cur_stop/atr`；BA 维度额外带
+        `open_sig/close_sig/atr_sig`，且 `attrs["price_space"]="adj"`。
     """
-    o = df["open"].to_numpy(float)
-    h = df["high"].to_numpy(float)
-    l = df["low"].to_numpy(float)
-    c = df["close"].to_numpy(float)
-    htf = _htf_direction(c, p.ema_k)
-    n = len(c)
+    out = df.reset_index(drop=True).copy()
+    miss = [c for c in _PRICE4 if c not in out.columns]
+    if miss:
+        raise ValueError(f"[backtest] 缺价格列 {miss}，拒绝生成信号")
+
+    # —— 真实价 = 信号空间价 − 该根桶的偏移 ——
+    # 偏移缺失必须 fail loud：静默按 0 处理会让「后复权」退化成「原始价」，
+    # 而调用方以为自己跑的是去跳空口径（P0-2 教训）。
+    off = None
+    if "adj_offset" in out.columns:
+        off = pd.to_numeric(out["adj_offset"], errors="coerce").to_numpy(dtype=float)
+        n_bad = int((~np.isfinite(off)).sum())
+        if n_bad:
+            raise ValueError(
+                f"[backtest] {n_bad}/{len(off)} 根 K 缺 adj_offset；"
+                "价格空间不明时不允许回测（A2 / CL-20261108-21）")
+
+    sig = {c: out[c].to_numpy(dtype=float) for c in _PRICE4}
+    if off is not None and bool(np.any(off != 0.0)):
+        real = {c: sig[c] - off for c in _PRICE4}
+        space = "adj"
+    else:
+        real = {c: sig[c] for c in _PRICE4}
+        space = "raw"
+
+    htf = _htf_direction(sig["close"], p.ema_k)
+    n = len(sig["close"])
     states = np.zeros(n, dtype=int)
     lots_arr = np.zeros(n, dtype=int)
     # B1：该帧「收盘后生效的止损价」。仅用于回测层的盘中击穿判定，
     # **不参与信号层**（walk_fusion_states 的止损仍是 close-only 单一真源）。
     # 时点纪律：bar i 开盘前可用的止损 = cur_stop[i-1]，见 _simulate_trades。
-    cur_stops = np.full(n, np.nan, dtype=float)
-    for k, d in enumerate(walk_fusion_states(o, h, l, c, htf, p)):
+    # ⚠ 引擎算出的是**信号空间**价，落表前必须减去该根 offset 换成真实价。
+    cur_stops_sig = np.full(n, np.nan, dtype=float)
+    for k, d in enumerate(walk_fusion_states(
+            sig["open"], sig["high"], sig["low"], sig["close"], htf, p)):
         states[k + 2] = d["state"]
         lots_arr[k + 2] = int(d.get("lots", 1) or 1)
         _st = d.get("cur_stop")
         if _st is not None:
-            cur_stops[k + 2] = float(_st)
-    out = df.reset_index(drop=True).copy()
-    out["state"] = states
-    out["lots"] = lots_arr
-    out["cur_stop"] = cur_stops
-    # 波动率基准：用于把成交归一化为 R（robustness 六项检查的硬要求）
-    out["atr"] = _atr(out, getattr(p, "atr_n", 14)).to_numpy(dtype=float)
-    return out
+            cur_stops_sig[k + 2] = float(_st)
+
+    out2 = out.copy()
+    for c in _PRICE4:
+        out2[c] = real[c]
+    out2["state"] = states
+    out2["lots"] = lots_arr
+    out2["cur_stop"] = (cur_stops_sig - off) if space == "adj" else cur_stops_sig
+    # 波动率基准：用于把成交归一化为 R（robustness 六项检查的硬要求）。
+    # 用**真实价**算，与 pnl 同空间；它不参与信号。
+    out2["atr"] = _atr(out2, getattr(p, "atr_n", 14)).to_numpy(dtype=float)
+    if space == "adj":
+        sig_df = pd.DataFrame({"high": sig["high"], "low": sig["low"],
+                               "close": sig["close"]})
+        out2["atr_sig"] = _atr(sig_df, getattr(p, "atr_n", 14)).to_numpy(dtype=float)
+        out2["open_sig"] = sig["open"]
+        out2["close_sig"] = sig["close"]
+    out2.attrs["price_space"] = space
+    out2.attrs["kline_dim"] = out.attrs.get("kline_dim", space)
+    return out2
 
 
 def _simulate_trades_ex(states_df: pd.DataFrame, p: FusionBacktestParams,
@@ -328,6 +386,22 @@ def _simulate_trades_ex(states_df: pd.DataFrame, p: FusionBacktestParams,
     n_bars = len(states)
     atr_arr = (states_df["atr"].to_numpy(dtype=float)
                if "atr" in states_df.columns else np.full(len(states), np.nan))
+    # —— A2 价格空间分离（CL-20261108-21）——
+    # 成交价 / 成本 / 保证金 / 一字K / 盘中击穿一律用上面那套**真实价**；
+    # 只有「跳空不利过滤」用信号空间（open_sig / close_sig / atr_sig），
+    # 因为主连换月会在真实价上制造几十~上百点的假跳空，把正常趋势信号整段作废。
+    # raw 维度或无 sig 列（守卫/单测手工构造的 df）时逐位退化为原口径。
+    if "close_sig" in states_df.columns:
+        closes_sig = states_df["close_sig"].to_numpy(dtype=float)
+        opens_sig = (states_df["open_sig"].to_numpy(dtype=float)
+                     if "open_sig" in states_df.columns else closes_sig.copy())
+        atr_sig = (states_df["atr_sig"].to_numpy(dtype=float)
+                   if "atr_sig" in states_df.columns else atr_arr)
+    else:
+        closes_sig, opens_sig, atr_sig = closes, opens, atr_arr
+    with np.errstate(all="ignore"):
+        _ms = np.nanmean(atr_sig) if len(atr_sig) else float("nan")
+        atr_mean_sig = float(_ms) if np.isfinite(_ms) else 0.0
     # —— B1：盘中击穿所需列。缺列必须 fail loud ——
     # 静默 nan 会让「盘中击穿」永不触发，等于 B1 只跑了个声明。
     highs = lows = stops = None
@@ -516,20 +590,26 @@ def _simulate_trades_ex(states_df: pd.DataFrame, p: FusionBacktestParams,
         return v
 
     def _gap_blocks(i: int, dirn: float) -> bool:
-        """E1-C：对开仓不利的跳空是否 > 阈值（按信号根 ATR[i] 归一化）。
+        """E1-C：对开仓不利的跳空是否 > 阈值（按信号根 ATR 归一化）。
 
         adverse = dirn × (O[i+1] − C[i])，>0 才是「买贵/卖便宜」；
         ATR 不可用或末尾无 i+1 时一律不过滤，避免静默全拒。
+
+        ★ A2 / CL-20261108-21：全程在**信号空间**判定。用真实价会把主连换月
+          那根的合约价差当成不利跳空（可远超 0.5 ATR），整段趋势信号被误杀——
+          这正是「回测信号价格用原始主连价」这个 bug 的第二重危害。
         """
         if gap_lim <= 0:
             return False
         j = i + 1
         if j >= n_bars:
             return False
-        a = _atr_at(i)
+        a = float(atr_sig[i]) if i < len(atr_sig) else float("nan")
+        if not np.isfinite(a) or a <= 0:
+            a = atr_mean_sig
         if not np.isfinite(a) or a <= 0:
             return False
-        adverse = dirn * (float(opens[j]) - float(closes[i]))
+        adverse = dirn * (float(opens_sig[j]) - float(closes_sig[i]))
         return (adverse / a) > gap_lim
 
     def _fill_price(i: int, dirn: float, is_open: bool) -> tuple[float, int]:
@@ -854,6 +934,16 @@ def run_fusion_backtest(session, symbols: list[str] | None = None,
     if include_trades:
         agg["trades"] = all_trades
     agg["params"] = {k: getattr(params, k) for k in params.__dataclass_fields__}
+    # A2 / CL-20261108-21：把本次回测的价格空间写进结果体。
+    # 「以为跑了后复权、其实 src 没传进去」是本模块最贵的静默错误（差价 156%）。
+    _src = str(getattr(params, "src", "bar_60m")).lower()
+    _dim = ("back_adj" if _src in ("bar_60m_ba", "back_adj", "adj", "ba")
+            else "raw")
+    agg["price_space"] = {
+        "kline_dim": _dim,
+        "signal": "后复权（去换月跳空）" if _dim == "back_adj" else "原始主连价",
+        "trade": "真实价（成交/成本/保证金/一字K/盘中击穿）",
+    }
     agg["seeds"] = seed_list
     if str(getattr(params, "exec_penalty_mode", "off")).lower() == "b1":
         # ⚠ 组合同时刻保证金峰值需要跨品种时间线合并，本批**不做**；
@@ -885,7 +975,11 @@ def run_fusion_matrix(session, symbols: list[str] | None = None,
         # 矩阵默认抽样 10 品种控时；池严格取 38 白名单（CL-20261108-12）
         symbols = [f"{v}888" for v in sorted(load_tradable_pool(session))][:10]
     grid = grid or {
-        "src": ["akshare"],
+        # A2 / CL-20261108-21：原默认 "akshare" 是 P0-3 已废弃的独立采集链，
+        # _read_hourly 会把未知 src 打到 HourlyBar 分支并返回 None → 矩阵恒空。
+        # 现只保留唯一真源的两个维度（原始 / 后复权），两者信号空间不同，
+        # 正好构成「换月污染」的 A/B 对照。
+        "src": ["bar_60m", "bar_60m_ba"],
         "sl_atr": [1.5, 2.0, 2.5],
         "trail_atr": [1.5, 2.0, 2.5],
     }
