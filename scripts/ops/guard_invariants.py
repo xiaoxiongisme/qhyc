@@ -2318,6 +2318,75 @@ def _c_ops_data_lag_trade_day(c: Ctx) -> tuple[bool, str, str, str]:
     return (not bad), label, " · ".join(observed), "；".join(bad)
 
 
+def _c_ops_fresh_trade_day(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-02：新鲜度巡检必须按表节奏分类，不得回退「一律自然日」。
+
+    历史误报：15 张表共用 ``(today - max).days > 3`` 的自然日判据，国庆/春节
+    长假必然让全部表同时越线（2026-11-09 00:00 那条「日线滞后 3 天」是周末两天
+    顶出来的，同源缺陷）。
+
+    衡量此刻的行为（不查历史流水）：
+      · ``freshness_tables`` 每张表都在 ``freshness_cadence`` 里有分类
+        （漏分类会静默落到 natural → 长假立刻误报，必须显式）；
+      · 分类取值 ⊆ {trade_day, session, natural}，且 trade_day 与 session 都有成员；
+      · AST 中存在以 ``data_lag_trade_days`` 为比较对象的判定（阈值真接进判定）；
+      · 交易日真源为 ``futures_rule``（不用已死的 l3_ref.trade_calendar，
+        CL-20261107-18），且存在夜盘映射 ``_session_trade_day``。
+    """
+    import ast
+
+    label = "新鲜度按交易日/时间戳分类（CL-20261109-02）"
+    root = Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    observed: list[str] = []
+
+    try:
+        from app.ops.alerting import AlertConfig
+        cfg = AlertConfig()
+        tables = set(cfg.freshness_tables)
+        cad = dict(cfg.freshness_cadence)
+    except Exception as e:
+        return False, label, "AlertConfig 不可导入", str(e)[:120]
+
+    missing = sorted(tables - set(cad))
+    extra = sorted(set(cad) - tables)
+    kinds = sorted(set(cad.values()))
+    observed.append("表={0} 已分类={1}".format(len(tables), len(tables) - len(missing)))
+    observed.append("kinds={0}".format(",".join(kinds)))
+    if missing:
+        bad.append("未分类表（会静默落 natural，长假必误报）: {0}".format(",".join(missing)))
+    if extra:
+        bad.append("分类里有不存在的表: {0}".format(",".join(extra)))
+    if not set(kinds) <= {"trade_day", "session", "natural"}:
+        bad.append("非法节奏取值: {0}".format(",".join(kinds)))
+    if "trade_day" not in kinds or "session" not in kinds:
+        bad.append("trade_day/session 两类必须都有成员（否则退化为单一口径）")
+
+    src_path = root / "app" / "ops" / "alerting.py"
+    if not src_path.is_file():
+        return False, label, " · ".join(observed), "alerting.py 缺失"
+    src = src_path.read_text(encoding="utf-8")
+    if "futures_rule" not in src:
+        bad.append("交易日真源未使用 futures_rule（可能回退到已死的 l3_ref.trade_calendar）")
+    if "_session_trade_day" not in src:
+        bad.append("缺 _session_trade_day（夜盘 02:30 的桶会被算成新交易日）")
+    try:
+        tree = ast.parse(src)
+        wired = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare):
+                names = {x.id for x in ast.walk(node) if isinstance(x, ast.Name)}
+                if "data_lag_trade_days" in names:
+                    wired = True
+                    break
+        observed.append("判据引用 data_lag_trade_days={0}".format(wired))
+        if not wired:
+            bad.append("交易日阈值未接进判定（仅定义字段不算生效）")
+    except SyntaxError as e:
+        bad.append("alerting.py 语法错误: {0}".format(str(e)[:60]))
+    return (not bad), label, " · ".join(observed), "；".join(bad)
+
+
 def _c_ops_push_quota(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261108-23：运维告警不得挤爆与交易信号共用的推送通道。
 
@@ -2791,6 +2860,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 数据实际零滞后。防「判据回退成自然日差」与「真源退回已死的 l3_ref.trade_calendar」。
     ("OPS-DATA-LAG-TRADE-DAY", "日线滞后按交易日计且真源为 futures_rule",
      "block", _c_ops_data_lag_trade_day),
+    # CL-20261109-02：15 张表共用自然日判据时，国庆/春节长假会让它们同时越线。
+    # 防「每张表都显式分类」被漏掉（漏分类会静默落 natural，长假立刻误报）。
+    ("OPS-FRESH-TRADE-DAY", "新鲜度按交易日/时间戳分类且阈值真接进判定",
+     "block", _c_ops_fresh_trade_day),
     # CL-20261108-18：恢复推送盈亏金额后，防止功能再下线 / 契约测试再僵尸化。
     ("OPS-PUSH-PNL-WIRED", "推送盈亏金额已接线且契约测试真实通过（CL-20261108-18）",
      "block", _c_ops_push_pnl_wired),

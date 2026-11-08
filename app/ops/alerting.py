@@ -56,7 +56,18 @@ class AlertConfig:
     disk_pct: float = 85.0             # 磁盘占用告警阈值（%）
     disk_crit_pct: float = 93.0        # 磁盘严重阈值（%）
     load_ratio: float = 1.5            # 负载/核心数 比值告警阈值
-    data_lag_days: int = 3             # 数据滞后期告警阈值（自然日，含周末）
+    data_lag_days: int = 3             # 数据滞后期告警阈值（**仅 natural 类**：自然日）
+    # ★ 2026-11-09（CL-20261109-02）：按交易日计滞后。
+    #   旧实现一律用 (今日 - 最新日期).days 比自然日阈值，国庆/春节长假会让 15 张表
+    #   同时越线（11-09 00:00「日线滞后 3 天」即周末两天顶出来的假告警，
+    #   ops_monitor 侧已由 CL-20261109-01 修复，此处是同源残留）。
+    #   trade_day / session 类改为「缺失的交易日个数」，默认 0 = 落后 1 个交易日即报。
+    data_lag_trade_days: int = 0
+    settle_cutoff_hour: int = 21       # 日更作业最晚 18:40(warehouse)/19:30(factor_freshness)，留余量到 21:00
+    # 盘中类：交易日几点起要求「当日」必须有数据。取 10 点而非 09:00——
+    # 首根 30 分钟桶要 09:37 才落库（minute_and_bars 在 :07/:37 跑），
+    # 定在 09:00 会让 5 张行情表在每个交易日开盘瞬间各报一次假告警。
+    session_open_hour: int = 10
     job_heartbeat_days: int = 4        # 作业心跳阈值：近30天内有过成功的作业，若距上次成功超此天数→告警（覆盖"作业停跑但数据未滞后"盲区）
     push_silence_hours: int = 36       # 预测/推送静默告警阈值（小时）
     db_restart_alert_min: int = 10     # DB uptime < 该分钟数 → 疑似崩溃重启
@@ -101,6 +112,35 @@ class AlertConfig:
         "factor_value": "trade_date",
         "main_contract_map": "trade_date",
     })
+    # 每张表的**产出节奏**分类（CL-20261109-02）。滞后量的算法随节奏不同：
+    #   · trade_day：值为 trade_date/report_date，只在交易日产出 → 滞后 = 缺失交易日数
+    #   · session  ：值为盘中时间戳，交易日盘中持续产出；夜盘跨零点（次日 02:30 的桶
+    #                属前一交易日）→ 先把时间戳映射到交易日，再按交易日数计
+    #   · natural  ：每日计算、节假日也产出 → 只能按自然日计（当前无成员，
+    #                保留给"真按日历跑"的表；真源不可用时全表降级到此口径）
+    # 实测依据（2026-11-09）：
+    #   · 国庆 10-01~10-07 **15 张表全部停产**，10-08 复产后各表 distinct 日期数
+    #     = 交易日数 → 均为 trade_day/session 节奏；
+    #   · factor_value 虽有 10-10(周六) 182 行、11-07(周六) 数据，但量级仅常规的
+    #     1/10（1700+），是夜盘跨零点/补算碎片，不是"周末也产出"→ 仍归 trade_day，
+    #     这些行会被映射回前一交易日。
+    freshness_cadence: dict = field(default_factory=lambda: {
+        "daily_bar": "trade_day",
+        "contract_daily": "trade_day",
+        "member_position_rank": "trade_day",
+        "warehouse_receipt": "trade_day",
+        "spot_basis": "trade_day",
+        "inventory": "trade_day",
+        "main_contract_map": "trade_day",
+        "factor_value": "trade_day",
+        "hourly_bar": "session",
+        "minute_bar": "session",
+        "bar_60m": "session",
+        "l2_adj.bar_5m_ba": "session",
+        "l2_adj.bar_15m_ba": "session",
+        "l2_adj.bar_30m_ba": "session",
+        "l2_adj.bar_60m_ba": "session",
+    })
     # ★ 2026-10-13 整改：作业心跳巡检不再靠本类的「退役/一次性例外集」去堵误报——
     #   改为直接读调度器已注册周期作业清单 `app.scheduler_jobs.monitored_jobs()`
     #   （单一事实源）。清单里没有的作业（退役的 adjust、一次性手动回填 label 等）
@@ -137,6 +177,9 @@ def alert_config_from_env() -> AlertConfig:
         disk_crit_pct=_f("ALERT_DISK_CRIT_PCT", 93.0),
         load_ratio=_f("ALERT_LOAD_RATIO", 1.5),
         data_lag_days=_i("ALERT_DATA_LAG_DAYS", 3),
+        data_lag_trade_days=_i("ALERT_DATA_LAG_TRADE_DAYS", 0),
+        settle_cutoff_hour=_i("ALERT_SETTLE_CUTOFF_HOUR", 21),
+        session_open_hour=_i("ALERT_SESSION_OPEN_HOUR", 10),
         push_silence_hours=_i("ALERT_PUSH_SILENCE_HOURS", 36),
         db_restart_alert_min=_i("ALERT_DB_RESTART_MIN", 10),
         cooldown_sec=_i("ALERT_COOLDOWN_SEC", 1800),
@@ -268,9 +311,87 @@ def _check_load(cfg: AlertConfig) -> list[dict]:
 # 数据类检查
 # ---------------------------------------------------------------------------
 
-def _check_freshness(session, cfg: AlertConfig) -> list[dict]:
+def _normalize_date(v):
+    """把 timestamp / date 统一成 date（timestamptz 先转 CST 再取日）。"""
+    if hasattr(v, "hour"):
+        return (v.astimezone(CST) if getattr(v, "tzinfo", None) else v).date()
+    return v
+
+
+def _trading_days(session, lookback: int = 120):
+    """最近交易日列表（升序）。真源 ``futures_rule``（akshare 每日 08:00 播种）。
+
+    ⚠ 不用 ``l3_ref.trade_calendar``：那是止于 2026-10-08 的 R2 推断死表
+    （CL-20261107-18），拿它判休市会把之后所有日期都当成休市。
+    返回 None = 真源不可用，调用方退回自然日口径（宁可误报，不可漏报）。
+    """
+    try:
+        rows = session.execute(
+            text("SELECT DISTINCT trade_date FROM futures_rule "
+                 "WHERE trade_date <= CURRENT_DATE "
+                 "ORDER BY trade_date DESC LIMIT :n"),
+            {"n": lookback},
+        ).scalars().all()
+    except Exception as e:
+        logger.warning("[freshness] 交易日真源不可用，本次退回自然日口径: {0}".format(str(e)[:120]))
+        return None
+    days = sorted({_normalize_date(r) for r in rows if r is not None})
+    return days or None
+
+
+def _prev_trade_day(days, d):
+    """≤ d 的最后一个交易日；早于整个窗口则 None。"""
+    prev = None
+    for x in days:
+        if x <= d:
+            prev = x
+        else:
+            break
+    return prev
+
+
+def _trade_gap(days, start, end) -> int:
+    """(start, end] 区间内的交易日个数 = 缺失的交易日数。"""
+    return sum(1 for x in days if start < x <= end)
+
+
+def _expected_trade_day(days, now: datetime, deadline_hour: int):
+    """截至 now 应已就绪的最后一个交易日。
+
+    · 今天是交易日且已过 deadline_hour → 今天（当天缺当天报）
+    · 否则 → 今天之前的最后一个交易日（周末/长假不额外要求，这是消除误报的关键）
+    """
+    today = now.date()
+    if today in set(days) and now.hour >= deadline_hour:
+        return today
+    return _prev_trade_day(days, today - timedelta(days=1))
+
+
+def _session_trade_day(days, mx):
+    """盘中时间戳 → 所属交易日。夜盘 00:00-03:00 的桶属前一自然日的交易日。"""
+    if hasattr(mx, "hour"):
+        t = mx.astimezone(CST) if getattr(mx, "tzinfo", None) else mx
+        d = t.date() - timedelta(days=1) if t.hour < 3 else t.date()
+    else:
+        d = mx
+    # 周末/假日的空桶（synthesize 产物）映射回最近交易日，不当作"新数据"
+    return _prev_trade_day(days, d)
+
+
+def _check_freshness(session, cfg: AlertConfig, now: datetime | None = None) -> list[dict]:
+    """关键表新鲜度。按表节奏分三类算滞后（CL-20261109-02）。
+
+    trade_day：值为交易日/报告日，只在交易日产出 → 滞后 = 缺失交易日数
+    session  ：值为盘中时间戳 → 先映射交易日，再按交易日数计
+    natural  ：每日计算、节假日也产出 → 只能按自然日计（当前无成员；真源不可用时降级到此）
+    """
     out = []
-    now = datetime.now(CST).date()
+    now = now or datetime.now(CST)
+    today = now.date()
+    days = _trading_days(session)
+    expected_daily = _expected_trade_day(days, now, cfg.settle_cutoff_hour) if days else None
+    expected_session = _expected_trade_day(days, now, cfg.session_open_hour) if days else None
+
     for tbl, col in cfg.freshness_tables.items():
         try:
             mx = session.execute(text("SELECT max({0}) FROM {1}".format(col, tbl))).scalar()
@@ -282,12 +403,33 @@ def _check_freshness(session, cfg: AlertConfig) -> list[dict]:
             out.append({"key": "fresh_" + tbl, "level": "WARN",
                         "msg": "{0} 无数据".format(tbl)})
             continue
-        d = mx.date() if isinstance(mx, datetime) else mx
-        lag = (now - d).days
-        if lag > cfg.data_lag_days:
+
+        cadence = cfg.freshness_cadence.get(tbl, "natural")
+        if cadence == "natural" or days is None:
+            # 自然日口径：factor_value 每日计算；或交易日真源不可用时的降级
+            d = _normalize_date(mx)
+            lag = (today - d).days
+            if lag > cfg.data_lag_days:
+                out.append({"key": "fresh_" + tbl, "level": "WARN",
+                            "msg": "{0} 数据滞后 {1} 天（最新 {2}，阈值 {3} 天）".format(
+                                tbl, lag, d, cfg.data_lag_days)})
+            continue
+
+        expected = expected_session if cadence == "session" else expected_daily
+        if expected is None:
+            continue
+        own = _session_trade_day(days, mx) if cadence == "session" else \
+            _prev_trade_day(days, _normalize_date(mx))
+        if own is None:
             out.append({"key": "fresh_" + tbl, "level": "WARN",
-                        "msg": "{0} 数据滞后 {1} 天（最新 {2}，阈值 {3} 天）".format(
-                            tbl, lag, d, cfg.data_lag_days)})
+                        "msg": "{0} 最新数据 {1} 早于近 {2} 个交易日，疑似长期停更".format(
+                            tbl, mx, len(days))})
+            continue
+        gap = _trade_gap(days, own, expected)
+        if gap > cfg.data_lag_trade_days:
+            out.append({"key": "fresh_" + tbl, "level": "WARN",
+                        "msg": "{0} 缺 {1} 个交易日数据（最新 {2}，应为 {3}）".format(
+                            tbl, gap, mx, expected)})
     return out
 
 
