@@ -90,6 +90,37 @@ def normalize_src(src: str) -> str:
     )
 
 
+def fusion_kline_range(session, symbols: list[str],
+                       src: str = "bar_60m") -> tuple[date | None, date | None]:
+    """返回符号集合在**唯一 K 线真源**上的可用日期区间 ``(min_date, max_date)``。
+
+    E2（路线图 §3.6 / CL-20261108-13）：walk-forward 此前自己用 ``HourlyBar`` ORM
+    + ``WHERE src=...`` 查范围 —— 那是 P0-3 已废弃的 akshare 独立采集链，实测在
+    ``src='bar_60m'`` 下 0 行、恒返回 ``(None, None)``，令 ``run_walk_forward``
+    不显式传 start/end 时静默返回「无数据」。这里与 ``_fetch`` 共用 ``RAW_TABLE``
+    常量和 ``normalize_src`` 口径，杜绝第二条读取路径。
+
+    范围只由 L1 桶集合决定，故不做 BA 的 LEFT JOIN（避免为聚合做无谓放大）；
+    dt/OHLC 的逐根同源仍由 ``read_fusion_kline`` 保证。
+    """
+    from sqlalchemy import bindparam
+
+    normalize_src(src)          # 拒绝 akshare/csv/agg_1m 等废弃维度
+    if not symbols:
+        return None, None
+    sql = (f"SELECT min(l.bucket), max(l.bucket) FROM {RAW_TABLE} l "
+           f"WHERE l.symbol IN :syms")
+    stmt = text(sql).bindparams(bindparam("syms", expanding=True))
+    row = session.execute(stmt, {"syms": list(symbols)}).first()
+    if not row or row[0] is None:
+        return None, None
+
+    def _d(v):
+        return v.date() if hasattr(v, "date") else v
+
+    return _d(row[0]), _d(row[1])
+
+
 def _fetch(session, symbol: str, limit: int | None,
            start, end) -> pd.DataFrame | None:
     """两端共用的唯一 SQL：L1 取桶 + LEFT JOIN 物化后复权偏移。"""

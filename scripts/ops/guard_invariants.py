@@ -908,6 +908,74 @@ def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。成交口径接线被回退或改坏，回测结论不可信（CL-20261108-11）")
 
 
+def _c_bt_walkforward_same_source(c: Ctx) -> tuple[bool, str, str, str]:
+    """P2-3 E2 / CL-20261108-13：walk-forward 的日期范围必须来自唯一 K 线真源。
+
+    行为级，不看历史流水、不靠时间衰减：
+      · 调 _data_range(RB888/PF888/FG888, 'bar_60m')，必须与直接查
+        l1_mkt.bar_60m 的 min/max bucket 日期**逐位相等**（同源对拍）；
+      · 结果必须非空 —— 旧实现恒返回 (None,None)，令 run_walk_forward
+        默认调用静默「无数据」，这正是本次修掉的失效；
+      · 废弃维度 src='akshare' 必须被 normalize_src 拒绝（防绕过口径）；
+      · AST 检查 walkforward 不再 import HourlyBar、确实引用 fusion_kline
+        （防 docstring/注释里的字面量造成假阳性）。
+    """
+    label = "walk-forward 日期范围取自唯一 K 线真源（E2 残留已消除）"
+    try:
+        import ast
+        from app.backtest.walkforward import _data_range
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "walkforward 不可导入 → E2 同源断言不可用（CL-20261108-13）")
+
+    syms = ["RB888", "PF888", "FG888"]
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        got = _data_range(c.session, syms, "bar_60m")
+        ref = c.rows(
+            "SELECT min(bucket), max(bucket) FROM l1_mkt.bar_60m "
+            "WHERE symbol IN ('RB888','PF888','FG888')"
+        )[0]
+        expected = (ref[0].date(), ref[1].date())
+        observed.append(f"range={got[0]}~{got[1]}")
+        if not got or got[0] is None:
+            bad.append("_data_range 返回空 → run_walk_forward 默认调用仍静默无数据")
+        elif tuple(got) != expected:
+            bad.append(f"_data_range={got} != 真源 {expected}（又出现第二条读取路径）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"同源对拍异常：{type(exc).__name__}: {exc}")
+
+    try:
+        _data_range(c.session, syms, "akshare")
+        bad.append("废弃维度 src=akshare 未被拒绝（normalize_src 被绕过）")
+    except ValueError:
+        observed.append("akshare=rejected")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"废弃维度校验抛了非 ValueError：{type(exc).__name__}: {exc}")
+
+    try:
+        src = (Path(__file__).resolve().parents[2] / "app" / "backtest"
+               / "walkforward.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)]
+        legacy = any((n.module or "") == "app.models"
+                     and any(a.name == "HourlyBar" for a in n.names)
+                     for n in imports)
+        wired = any("fusion_kline" in (n.module or "") for n in imports)
+        observed.append(f"legacy_import={legacy} fusion_kline_wired={wired}")
+        if legacy:
+            bad.append("walkforward 仍 import HourlyBar（残留未清）")
+        if not wired:
+            bad.append("walkforward 未引用 fusion_kline（同源函数被绕过）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"源码 AST 检查失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。walk-forward 会静默返回无数据或读到废弃链（CL-20261108-13）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -951,6 +1019,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 「改成下一根开盘」或「默认被悄悄改掉」都不会有人发现。行为级对拍而非只查源码。
     ("BT-FILL-MODE-WIRED", "回测成交口径 fill_mode 真实接线（默认 close / next_open +1tick）",
      "block", _c_bt_fill_mode_wired),
+    # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
+    # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
+    ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
+     "block", _c_bt_walkforward_same_source),
 ]
 
 

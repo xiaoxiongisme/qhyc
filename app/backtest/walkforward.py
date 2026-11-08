@@ -215,8 +215,7 @@ def _flatten(res: dict) -> list[dict]:
         v = res.get(k)
         if isinstance(v, list) and v:
             return v
-    agg = res.get("trades")
-    return agg if isinstance(agg, list) else []
+    return []   # 原实现末尾又取一次 res["trades"]，是第一个循环已覆盖的死分支
 
 
 def _net_from_result(res: dict) -> float:
@@ -224,16 +223,12 @@ def _net_from_result(res: dict) -> float:
 
 
 def _data_range(session, symbols: list[str], src: str):
-    """取符号集合在 hourly_bar 上的最大公共可用区间（start/end）。"""
-    from sqlalchemy import select, func as f
-    from app.models import HourlyBar
-    if not symbols:
-        return None, None
-    row = session.execute(
-        select(f.min(HourlyBar.trade_datetime), f.max(HourlyBar.trade_datetime))
-        .where(HourlyBar.symbol.in_(symbols)).where(HourlyBar.src == src)
-    ).first()
-    if not row or row[0] is None:
-        return None, None
-    mn, mx = row
-    return mn.date(), mx.date()
+    """取符号集合在**唯一 K 线真源** l1_mkt.bar_60m 上的可用区间（start/end）。
+
+    E2 / CL-20261108-13：原实现读 HourlyBar + WHERE src=...，是 P0-3 已废弃的
+    akshare 独立采集链；实测 src='bar_60m' 时 0 行、恒返回 (None,None)，
+    run_walk_forward 默认调用因此静默「无数据」。改为复用 fusion_kline 的同源
+    函数，杜绝第二条读取路径。签名保持不变，调用方无需改动。
+    """
+    from app.data.fusion_kline import fusion_kline_range
+    return fusion_kline_range(session, symbols, src)
