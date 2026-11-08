@@ -73,8 +73,8 @@ ingest:
     - { symbol: "Y888",  exchange: "DCE", product: "Y",  name: "豆油", unit: "吨", multiplier: 10 }
     - { symbol: "P888",  exchange: "DCE", product: "P",  name: "棕榈油", unit: "吨", multiplier: 10 }
     - { symbol: "C888",  exchange: "DCE", product: "C",  name: "玉米", unit: "吨", multiplier: 10 }
-    - { symbol: "CS888", exchange: "DCE", product: "CS", name: "白糖", unit: "吨", multiplier: 10 }
-    - { symbol: "JD888", exchange: "DCE", product: "JD", name: "鸡蛋", unit: "吨", multiplier: 10 }
+    - { symbol: "CS888", exchange: "DCE", product: "CS", name: "淀粉", unit: "吨", multiplier: 10 }
+    - { symbol: "JD888", exchange: "DCE", product: "JD", name: "鸡蛋", unit: "吨", multiplier: 5 }
     - { symbol: "L888",  exchange: "DCE", product: "L",  name: "塑料", unit: "吨", multiplier: 5 }
     - { symbol: "V888",  exchange: "DCE", product: "V",  name: "PVC", unit: "吨", multiplier: 5 }
     - { symbol: "PP888", exchange: "DCE", product: "PP", name: "聚丙烯", unit: "吨", multiplier: 5 }
@@ -102,24 +102,31 @@ scheduler:
     minute: 0
     run_hour: "all"
 
-# ---- 采集类作业开关（2026-10-05 显式化，勿删）--------------------------------
-# ★ 这些段此前**完全缺失**于 cloud.yaml，落到 app/core/config.py 的代码默认值：
-#   rank_position.enabled 默认 False → _rank_job 每天 17:30 被调用后立刻 return，
-#   仅打 INFO 无告警 → member_position_rank 自 2026-09-24 起停更 11 天，
-#   且 pipeline readiness 恒 False（spot_basis=0 member_position_rank=0）。
-# 约定：采集类开关一律显式声明，停采必须是可见的显式动作；
-#      "只在 local 有、云端缺"的段会让云端静默落到代码默认值。
+# ---- 采集类作业开关（2026-10-05 显式化，对齐 local.yaml）------------------
+# 起因：这些段此前**完全缺失**于 cloud.yaml，落到 app/core/config.py 的代码默认值。
+# 其中 rank_position.enabled 默认 False → _rank_job 每天 17:30 被调用后立刻 return，
+# 仅打 INFO 无告警，致 member_position_rank 自 2026-09-24 起停更 11 天，
+# 并使 pipeline readiness 恒 False（spot_basis=0 member_position_rank=0）。
+# 约定：**采集类开关一律显式写在这里**，停采必须是可见的显式动作。
+# ★ 两份 yaml 必须保持一致：任何"只在 local 有、云端缺"的段都会让云端落到代码默认值。
 rank_position:
   enabled: true          # 会员持仓排名（龙虎榜）17:30；CZCE/SHFE/GFEX→akshare, DCE→dce_scrapling
   exchanges: ["CZCE", "SHFE", "DCE", "GFEX"]
   run_hour: 17
   run_minute: 30
-# 库存 / 仓单：2026-10-03 已拍板**退役**（akshare 源覆盖不全且与仓单表重叠，
-# inventory_z 在 IC 扫描中无显著贡献）。停采集但**保留历史数据**供因子回溯。
+# 库存 / 仓单：2026-10-03 曾拍板**停采集**（akshare 源覆盖不全且与仓单表重叠，
+# inventory_z 在 IC 扫描中无显著贡献：pooled|ρ|=0.96、IC(h=5)=-0.058/t=-1.76）。
+# 2026-10-07 按《海龟×融合叠加回测报告》CB 清单 #2 要求**恢复采集**：
+#   · 恢复的是**数据采集**（周频，成本极低）—— 因子退役期间的历史数据是未来
+#     重估的唯一原料，停采等于把「可回滚性」永久销毁；
+#   · **inventory_z 因子仍保持退役**（factor_registry.enabled=false、weight=-0.08
+#     未动）。恢复采集 ≠ 恢复启用，两者刻意分离，避免后人误读为「已重新上线」。
+#   · 仓单表同期已修好 CZCE 静默失效（akshare 返回形态变更），2021-2023 空洞
+#     正在回补；待 inventory 积累足够覆盖后重估 ρ 与 IC，再决定是否解退役。
 inventory:
-  enabled: false
-  freq: "weekly"
-  run_day: 5
+  enabled: true
+  freq: "daily"
+  run_day: "mon-fri"
   run_hour: 17
   run_minute: 0
 spot_basis:
@@ -129,21 +136,30 @@ spot_basis:
   run_minute: 10
   window_days: 5
 
-# M8 决策链路容器化：源码真源在 WB skill（compose 只读挂载 /app/pipeline_src），
-# 此处只配调度与闸门。云端此前亦缺此段。
+# 仓单日报（R3，scrapling 浏览器版，四所全量）18:40；
+# 需镜像以 WITH_SCRAPLING=1 构建（装 scrapling + 无头 Chromium）后作业才成功。
+warehouse_receipt:
+  enabled: true
+  run_hour: 18
+  run_minute: 40
+
+# M8 决策链路容器化（2026-10-05 显式化，对齐 local.yaml）
+# 云端此前**缺整个 pipeline 段**，全部落代码默认值（值恰好相同纯属巧合，
+# 一旦调整默认值云端会静默漂移）。五条子链路源码真源在 WB skill，
+# 由 compose 只读挂载 /app/pipeline_src 带入容器。
 pipeline:
   enabled: true
   daily_cron: { hour: 17, minute: 40 }   # 17:40：给 rank_position(17:30) 留 10 分钟
   signal_slots: ["09:00", "10:00", "11:00", "13:30", "14:00", "15:00", "21:00", "22:00", "23:00"]
-  intraday_enabled: true
+  intraday_enabled: true                  # 整点：先盘中监控（串行），再信号推送
   check_cron: { day_of_week: mon, hour: 8, minute: 5 }
   readiness:
     enabled: true
     timeout_min: 10                       # 等当日 spot_basis + member_position_rank
     poll_sec: 60
   snapshot:
-    src: "/app/pipeline_src"
-    dest: "/app/runtime/pipeline_snapshot"
+    src: "/app/pipeline_src"              # 只读挂载（WB 单一真源）
+    dest: "/app/runtime/pipeline_snapshot" # 启动快照（子进程跑这份副本）
   step_timeout_sec: 1800
   max_instances: 1
   notify_on_failure: true
@@ -194,25 +210,3 @@ predict:
     strength: 0.3
     oi_boost_prob: 0.05
     max_prob: 0.85
-
-# =============================================================================
-# Phase 4/5 新增开关（2026-09-29）
-# 说明：这几项目前由**环境变量**控制（避免本地/云端配置文件分叉），
-#       此处仅登记口径，改配置需同步改 docker-compose.cloud.yml 的 environment。
-# -----------------------------------------------------------------------------
-# scheduler.env:
-#   FACTOR_COMPUTE_ENABLED=1          # 16:20 因子计算（默认开）
-#   FACTOR_COMPUTE_LOOKBACK_DAYS=60   # 增量回溯天数（全量用 FACTOR_COMPUTE_SINCE=2015）
-#   FACTOR_IC_MONITOR_ENABLED=1       # 16:45 滚动 IC 监控（默认开）
-#   FACTOR_IC_WINDOW=20               # 滚动窗口（交易日）
-#   DATA_SELFCHECK_ENABLED=0          # 17:35 数据自检（默认**关**，只写 anomaly_ticket）
-#   DATA_SELFCHECK_MISSING_PCT=0.05
-#   DATA_SELFCHECK_ZERO_VOL_DAYS=3
-#   PORTFOLIO_BRAKE_ENABLED=0         # 组合回撤熔断（默认**关**）
-#   PORTFOLIO_BRAKE_DD_WARN=0.15      # >15% → 半仓（scalar 0.5）
-#   PORTFOLIO_BRAKE_DD_STOP=0.25      # >25% → 清仓（scalar 0.0）
-#   PORTFOLIO_BRAKE_LOOKBACK=250
-#
-# 熔断依赖 portfolio_equity（migrations/004 建表）：
-#   trade_date / equity（累计权益，优先）/ realized_pnl（无 equity 时累加）
-#   表为空或缺失 → scalar 恒为 1.0（等价关闭），绝不阻断决策链。

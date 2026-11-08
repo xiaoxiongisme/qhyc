@@ -389,6 +389,29 @@ def _c_weekly_dow(c: Ctx) -> tuple[bool, str, str, str]:
         "星期语义错位：" + "; ".join(bad) if bad else "")
 
 
+# ---------------------------------------------------------------- 告警口径
+def _c_mem_caliber(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-01：内存告警必须读 cgroup，禁止回退宿主全局 /proc/meminfo。
+
+    旧实现的三条候选路径全都读不到——scheduler 是 systemd 服务，cgroup v2 文件
+    在 ``/sys/fs/cgroup/system.slice/qhyc-scheduler.service/`` 下，而不是根目录；
+    于是回退 /proc/meminfo，把服务级 2.5G 限额错量成宿主机总内存，
+    「接近 OOM」告警永远不可能触发。断言只看此刻调用的返回值，不看历史流水。
+    """
+    try:
+        from app.ops.alerting import _cgroup_mem_source  # noqa: PLC0415
+        used, lim, src = _cgroup_mem_source()
+    except Exception as exc:                              # noqa: BLE001
+        return False, "内存告警从 cgroup 读取（非宿主全局口径）", (
+            f"调用失败：{type(exc).__name__}: {exc}"), (
+            "app.ops.alerting._cgroup_mem_source 不可用，检查 CL-20261108-01")
+    ok = used > 0 and src.startswith("/sys/fs/cgroup/")
+    return ok, "内存告警从 cgroup 读取（非宿主全局口径）", (
+        f"used={used} lim={lim} src={src}"), (
+        "" if ok else
+        "回退到 /proc/meminfo → 分母变成宿主机总内存，服务/容器级内存上限永远告警不到")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -409,6 +432,7 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("OPS-SWITCH-JOB-CONSIST", "开关表与任务字典同向", "block", _c_switch_job_consistency),
     ("OPS-SIGNAL-WRITER-UNIQUE", "融合信号单一写入方", "warn", _c_signal_writer_unique),
     ("OPS-WEEKLY-DOW", "周度作业星期语义正确", "warn", _c_weekly_dow),
+    ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
 ]
 
 

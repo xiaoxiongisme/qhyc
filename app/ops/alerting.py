@@ -125,31 +125,52 @@ def alert_config_from_env() -> AlertConfig:
 # 资源类检查（容器内可观测）
 # ---------------------------------------------------------------------------
 
-def _cgroup_mem() -> tuple[int, int]:
-    """返回 (已用字节, 上限字节)。cgroup v2 优先，回退 v1，再回退 /proc/meminfo。"""
+def _cgroup_candidates() -> list[tuple[str, str]]:
+    """返回 (已用字节文件, 上限文件) 候选，按优先级。
+
+    CL-20261108-01：qhyc 有两种运行形态，cgroup v2 文件位置不同——
+      · 容器内：``/proc/self/cgroup = 0::/``，文件就在 /sys/fs/cgroup/ 根；
+      · systemd 服务（qhyc-scheduler）：``0::/system.slice/qhyc-scheduler.service``，
+        文件在 /sys/fs/cgroup/system.slice/qhyc-scheduler.service/ 下，
+        **根目录根本没有 memory.current**。
+    旧实现只试根路径与 v1，两者全失败后回退 /proc/meminfo（宿主全局内存），
+    把「服务级 2.5G 限额」错量成「宿主机总内存」→ 内存告警实质失灵。
+    """
+    cands: list[tuple[str, str]] = [
+        ("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.max")]
     try:
-        with open("/sys/fs/cgroup/memory.current") as f:
-            used = int(f.read().strip())
-        lim = 0
+        with open("/proc/self/cgroup") as f:
+            for line in f:
+                parts = line.strip().split(":", 2)
+                if len(parts) == 3 and parts[1] == "" and parts[2].startswith("/"):
+                    rel = parts[2].strip("/")
+                    if rel:
+                        base = "/sys/fs/cgroup/" + rel
+                        cands.append((base + "/memory.current", base + "/memory.max"))
+    except OSError:
+        pass
+    cands.append(("/sys/fs/cgroup/memory/memory.usage_in_bytes",
+                  "/sys/fs/cgroup/memory/memory.limit_in_bytes"))   # cgroup v1
+    return cands
+
+
+def _cgroup_mem_source() -> tuple[int, int, str]:
+    """返回 (已用字节, 上限字节, 来源)。``lim=0`` 表示 cgroup 未设上限（memory.max=max）。"""
+    for used_path, lim_path in _cgroup_candidates():
         try:
-            with open("/sys/fs/cgroup/memory.max") as f:
-                v = f.read().strip()
-                lim = 0 if v == "max" else int(v)
-        except Exception:
-            lim = 0
-        if used:
-            return used, lim
-    except Exception as exc:
-        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
-    try:                                    # cgroup v1
-        with open("/sys/fs/cgroup/memory/memory.usage_in_bytes") as f:
-            used = int(f.read().strip())
-        with open("/sys/fs/cgroup/memory/memory.limit_in_bytes") as f:
-            lim = int(f.read().strip())
-        return used, lim
-    except Exception as exc:
-        logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
-    # 回退：读取宿主机 /proc/meminfo（容器内看到的通常是宿主机内存）
+            with open(used_path) as f:
+                used = int(f.read().strip())
+            with open(lim_path) as f:
+                raw = f.read().strip()
+            lim = 0 if raw in ("", "max") else int(raw)
+            if lim > (1 << 60):         # cgroup v1 未设限时是个天文数字，等同无上限
+                lim = 0
+            if used > 0:
+                return used, lim, used_path
+        except (OSError, ValueError):
+            # 预期性缺失：逐个候选降级即可，不打栈。
+            # P0-4 把 pass 改成 exception=True 的 warning 后，每分钟刷两条 Traceback。
+            continue
     try:
         info = {}
         with open("/proc/meminfo") as f:
@@ -158,9 +179,18 @@ def _cgroup_mem() -> tuple[int, int]:
                 info[k] = int(v.split()[0]) * 1024
         total = info.get("MemTotal", 0)
         avail = info.get("MemAvailable", info.get("MemFree", 0))
-        return total - avail, total
-    except Exception:
-        return 0, 0
+        return total - avail, total, "proc-meminfo(宿主全局，口径降级)"
+    except (OSError, ValueError):
+        return 0, 0, "unavailable"
+
+
+def _cgroup_mem() -> tuple[int, int]:
+    """返回 (已用字节, 上限字节)。兼容容器 cgroup v2 / systemd 服务子路径 / v1。"""
+    used, lim, src = _cgroup_mem_source()
+    if not src.startswith("/sys/fs/cgroup/"):
+        logger.warning("[alert] cgroup 内存限额不可读，内存告警降级为宿主全局口径；"
+                       "请检查 OPS-MEM-CALIBER 守卫 (CL-20261108-01)")
+    return used, lim
 
 
 def _check_memory(cfg: AlertConfig) -> list[dict]:
@@ -172,7 +202,7 @@ def _check_memory(cfg: AlertConfig) -> list[dict]:
         if level:
             out.append({
                 "key": "mem", "level": level,
-                "msg": "容器内存占用 {0:.1f}%（阈值 {1}%）- 接近 OOM 风险".format(
+                "msg": "cgroup 内存占用 {0:.1f}%（阈值 {1}%）- 接近 OOM 风险".format(
                     pct, cfg.mem_pct),
             })
     return out
