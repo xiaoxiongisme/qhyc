@@ -57,6 +57,32 @@ bash scripts/cloud_preflight/run_preflight.sh real --symbol RB888 --freqs min15,
 1. ✅ **已拍板（2026-09-30）**：sp 以 15m 锚定原版为准做忠实移植，不得简化/改变/添加。
    009 已改完，A/B 现应逐行相等；退役 Python 的前提是 `02` 在 staging 跑出退出码 0。
 2. ⏳ 2026 补采前仍须先在 staging 跑通本 harness（尤其 `03` 验证 `oi` 已修、`02` 验证 A/B 相等）。
+3. 🔄 **重新拍板（2026-11-08 12:05，CL-20261107-15）**：用户选择改算法，上条「不得改变」
+   的约束**仅在本项上解除**。Python `map_roll_to_freq` 与 `migrations/055` 同步改为
+   「上界 clamp 到 min(下一根, bucket+名义周期) + 跨休市空隙归下一根」，两版仍须
+   `02` 逐行相等。其余忠实移植约束（15m 锚定 / gap 取锚点 / 双门 / cum_offset /
+   price_shift / src_freq）**全部保持不变**。
+   ⚠ 055 同时加 `p_symbol`（CL-20261107-16 的 C1）；`low_off` 改 JOIN 属 C2，
+   后置到 056，不得与映射改动一起进对拍（失败时无法归因）。
+
+## 工具现状（2026-11-08 实测）
+- `02_fixture_and_roll_ab.py` 与 `run_preflight.sh` 的**源文件已不在仓库**，但
+  `cpython-312.pyc` 仍在 `scripts/cloud_preflight/__pycache__/`（生产与本地各一份）。
+  宿主 venv 为 Python 3.12.3，版本匹配，补 `PYTHONPATH` 后可直接执行：
+  ```bash
+  PYTHONPATH=/Docker/qhyc/scripts:/Docker/qhyc \
+    /home/ubuntu/qhyc_work/venv/bin/python \
+    /Docker/qhyc/scripts/cloud_preflight/__pycache__/02_fixture_and_roll_ab.cpython-312.pyc \
+    --mode synthetic --freqs min15,min30,min60 --roll-at '<ts>'
+  ```
+  连接参数走 `--host/--port/--db/--user/--pw` 或对应 `POSTGRES_*` 环境变量。
+- `02` 的 `compute_expected` 通过 `load_brs()` 动态加载 `build_roll_segments.py`，
+  调用 `detect_anchor_roll` / `map_roll_to_freq` / `build_segments`，**Python 侧改算法后
+  期望值自动同步**；`gen_synthetic(..., roll_at)` 可用 `--roll-at` 构造跨休市换月事件，
+  作为 CL-15 的专项 fixture。
+- ⚠ 生产当前只有 `futures` / `postgres` 两个库，**没有 staging**。按本文件顶部安全红线，
+  harness 绝不连生产；应用 055 前须先建 `qhyc_staging`（`pg_dump --schema-only` 导入
+  即可，synthetic 不需要真实数据），在 staging 跑出退出码 0。
 
 ## ⚠ 安全
 - `synthetic` 模式用测试品种 `ZZ888/ZZ8888`，插入后全程 `DELETE` 清理，不污染真实数据。

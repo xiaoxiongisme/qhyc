@@ -207,6 +207,13 @@ def map_roll_to_freq(g, events, freq_min):
 
     正确的做法是「包含关系」：取最后一个 ts <= 锚点时刻的 bar j，
     并要求锚点落在该 bar 的覆盖区间 [ts[j], 下一根) 内。这与 bucket 对齐无关。
+
+    2026-11-08 补充（CL-20261107-15，用户重新拍板改算法）：上界不能无条件取
+    「下一根」。休市时下一根可能隔 7 小时（60m 的 15:00→22:00），会把夜盘换月
+    吞进日盘收盘桶（PF888 2026-11-04 21:15）。故上界 clamp 到
+    min(下一根, ts[j]+名义周期)；若锚点落在 [ts[j]+名义周期, 下一根) 的跨休市
+    空隙内，改归下一根（第一个 >= 锚点的桶）。日盘内下一根 == ts[j]+名义周期，
+    两版等价，252 个映射逐行不变。SQL 侧同步见 migrations/055。
     """
     tsv = (pd.to_datetime(g['bucket']).dt.tz_localize(None)
            .to_numpy(dtype='datetime64[ns]'))
@@ -224,9 +231,16 @@ def map_roll_to_freq(g, events, freq_min):
             drop += 1
             continue
         nxt = tsv[j + 1] if j + 1 < len(tsv) else tsv[j] + fallback
-        if bn >= nxt:
-            drop += 1                       # 锚点在该 bar 覆盖区间之外（停牌/无数据）
-            continue
+        upper = min(nxt, tsv[j] + fallback)   # CL-15：覆盖上界不得超过名义周期
+        if bn >= upper:
+            # 锚点落在 [ts[j]+freq, nxt) —— 只可能是跨休市空隙（或末根之后）。
+            # 归到「第一个 bucket >= 锚点时刻」，即 nxt 本身（中间没有其他 bar）。
+            # 末根时 nxt == upper，bn >= upper 必然不满足 bn < nxt，走 drop，不会越界。
+            if bn < nxt:
+                j += 1
+            else:
+                drop += 1                   # 锚点在该 bar 覆盖区间之外（停牌/无数据）
+                continue
         if roll[j]:
             merge += 1                      # 两个换月落在同一根高阶 bar 内
         roll[j] = True
