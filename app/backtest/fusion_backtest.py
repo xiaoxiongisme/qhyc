@@ -70,6 +70,15 @@ class FusionBacktestParams:
                                      #   即「开仓 1 手 + N 次加仓」，无 off-by-one 歧义。
     add_thr_atr: float = 1.0         # V3.4 加码浮盈门槛（lots × 该值 × ATR）
     add_guard_atr: float = 0.0       # V3.2 结构保本；V3.4 停用（保留兼容）
+    # —— 成交口径（P2-3 / CL-20261108-11，用户 2026-11-08 拍板）——
+    # "close"（默认）= 信号同根收盘价成交，历史基线，**逐位不变**；
+    # "next_open"    = 信号在 bar i 收盘产生 → bar i+1 开盘成交，且开仓 +dirn×1tick、
+    #                  平仓 -dirn×1tick（不利滑点）。此时成本系数里的 slip_yuan 会置 0，
+    #                  因为滑点已显式计入成交价，不能双计。
+    # ⚠ 不改默认值：新模式只作为「实盘预期下限」的对照口径，旧结论保持可复现。
+    fill_mode: str = "close"
+    tick_size: float = 0.0           # 无 symbol 时的 1tick 兜底；有 symbol 时取
+                                     # cost_coefficients().tick_size（dim_variety）
     # —— 回测专用 ——
     src: str = "bar_60m"             # P0-3：唯一 K 线真源 l1_mkt.bar_60m；
                                      # 可切 "bar_60m_ba" 取同一条线的后复权维度
@@ -215,6 +224,14 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     - 离场/反手时把全部在手按当根收盘价平掉（每手独立计 pnl，成本按各自开仓名义扣）；
     - 每手带 `addon` 标记（首仓=False / 加码=True），指标层单独统计 `n_addons`。
 
+    ★ 成交口径 fill_mode（P2-3 / CL-20261108-11）：
+      · "close"（默认，历史基线）→ 完全走上面的 close-only 路径，逐位不变；
+      · "next_open" → bar i 收盘出信号，bar i+1 开盘成交，开仓 +dirn×1tick /
+        平仓 -dirn×1tick。信号层仍只用 ≤i 的数据，下一根开盘价是**成交时点**的
+        价格，不构成前视。末尾无 i+1 时退回 closes[i] ± 1tick 强平。
+      · ⚠ 成本系数已含 `slip_yuan = 2×slip_ticks×tick_size×mult`（开平各 1 跳）。
+        next_open 模式把它置 0，滑点改由成交价显式体现，**绝不双计**。
+
     ⚠ 乘数与成本口径（2026-10-03 修正，用户拍板"真乘数口径"）
       此前 ``mult = getattr(p, "mult", 1.0)`` —— ``FusionBacktestParams`` **没有 mult
       字段**，故恒为 1.0；而 robust��ness 的 ``trade_pnl`` 按 ``R×risk×mult`` 折元，
@@ -226,8 +243,14 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     """
     dts = states_df["dt"].to_numpy()
     closes = states_df["close"].to_numpy(float)
+    opens = (states_df["open"].to_numpy(float)
+             if "open" in states_df.columns else closes.copy())
     states = states_df["state"].to_numpy()
     lots_arr = states_df["lots"].to_numpy()
+    n_bars = len(states)
+    fill_mode = getattr(p, "fill_mode", "close") or "close"
+    if fill_mode not in ("close", "next_open"):
+        raise ValueError(f"未知 fill_mode={fill_mode!r}（只支持 close / next_open）")
     atr_arr = (states_df["atr"].to_numpy(dtype=float)
                if "atr" in states_df.columns else np.full(len(states), np.nan))
     with np.errstate(all="ignore"):
@@ -277,8 +300,12 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         _first = _coef_for(dts[0]) if len(dts) else cost_coefficients(
             symbol, close_action="CLOSE_YEST")
         mult = float(_first["multiplier"])
+        _tick_size = float(_first.get("tick_size") or 0.0)
     else:
         mult = float(getattr(p, "mult", 1.0) or 1.0)
+        _tick_size = float(getattr(p, "tick_size", 0.0) or 0.0)
+    # close 模式 tick 恒为 0，保证默认路径与改动前逐位一致
+    tick = _tick_size if fill_mode == "next_open" else 0.0
     trades: list[dict] = []
     open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon, atr}
     pos = 0                      # 当前持仓方向 0/1/2
@@ -289,14 +316,33 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
             v = atr_mean
         return v
 
-    def _trade(lt: dict, i: int, open_pos: bool = False) -> dict:
+    def _fill_price(i: int, dirn: float, is_open: bool) -> tuple[float, int]:
+        """(成交价, 成交 bar 索引)。
+
+        close 模式：恒返回 (closes[i], i)，与改动前逐位一致。
+        next_open 模式：bar i 收盘出信号，bar i+1 开盘成交。开仓按 +dirn×tick、
+        平仓按 -dirn×tick 加不利滑点（多头买入 +tick / 多头卖出 -tick，空头反之）。
+        末尾没有 i+1 时退回 closes[i]，仍加滑点，避免凭空多一根 K。
+        """
+        if fill_mode == "close":
+            return float(closes[i]), i
+        j = i + 1
+        base = float(opens[j]) if j < n_bars else float(closes[i])
+        sign = dirn if is_open else -dirn
+        return base + sign * tick, min(j, n_bars - 1)
+
+    def _trade(lt: dict, exit_px: float, exit_i: int,
+               open_pos: bool = False) -> dict:
         dirn = 1.0 if pos == 1 else -1.0
         ep = float(lt["entry_px"])
-        xp = float(closes[i])
+        xp = float(exit_px)
         gross = dirn * (xp - ep)
         # 成本：按**建仓日**的历史费率（交易所+券商1分+滑点1跳/边），折成点数扣减
         if symbol:
             _c = _coef_for(dts[lt["entry_i"]])
+            if fill_mode == "next_open":
+                # 滑点已由开/平两个成交价各 1tick 显式计入，成本系数里必须扣掉
+                _c = {**_c, "slip_yuan": 0.0}   # 副本，不污染 _coef_memo
             cost_pts = cost_points_at(_c, ep)
         else:
             cost_pts = cost_frac * ep
@@ -308,7 +354,7 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         t = {
             "symbol": None,
             "side": "LONG" if pos == 1 else "SHORT",
-            "entry_dt": dts[lt["entry_i"]], "exit_dt": dts[i],
+            "entry_dt": dts[lt["entry_i"]], "exit_dt": dts[exit_i],
             "entry_px": round(ep, 4),
             "exit_px": round(xp, 4),
             "pnl": round(float(pnl), 4),
@@ -320,7 +366,7 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
             "atr": float(_a or 0.0),
             "risk": risk, "R": r_unit,
             "ep": ep, "xp": xp,
-            "edt": dts[lt["entry_i"]], "xdt": dts[i],
+            "edt": dts[lt["entry_i"]], "xdt": dts[exit_i],
             "dir": dirn, "mult": mult,
             # 真实成本（元/手，整段开平）：robustness 优先用此字段，
             # 避免退回 bp 假设（真实费率与 bp 假设可差数倍）
@@ -336,25 +382,33 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         cur_lots = int(lots_arr[i])
         # P1 加码：持仓中引擎手数增加 → 当根收盘加开对应手数
         if pos != 0 and tgt == pos and cur_lots > len(open_lots):
+            d_add = 1.0 if pos == 1 else -1.0
             for _ in range(cur_lots - len(open_lots)):
-                open_lots.append({"entry_px": float(closes[i]), "entry_i": i,
+                px, fi = _fill_price(i, d_add, is_open=True)
+                open_lots.append({"entry_px": px, "entry_i": fi,
                                   "addon": True, "atr": _atr_at(i)})
         if tgt != pos:
             if open_lots:
+                d_exit = 1.0 if pos == 1 else -1.0
+                xp, xi = _fill_price(i, d_exit, is_open=False)
                 for lt in open_lots:
-                    trades.append(_trade(lt, i))
+                    trades.append(_trade(lt, xp, xi))
                 open_lots.clear()
             if tgt != 0:
                 pos = tgt
-                open_lots.append({"entry_px": float(closes[i]), "entry_i": i,
+                d_ent = 1.0 if pos == 1 else -1.0
+                px, fi = _fill_price(i, d_ent, is_open=True)
+                open_lots.append({"entry_px": px, "entry_i": fi,
                                   "addon": False, "atr": _atr_at(i)})
             else:
                 pos = 0
-    # 末尾仍持仓：以最后收盘价强平（标记未实现，不计入已平仓统计）
+    # 末尾仍持仓：close 模式按最后收盘价强平；next_open 无 i+1，同样退回收盘价+滑点
     if pos != 0 and open_lots:
-        i = len(states) - 1
+        i = n_bars - 1
+        d_exit = 1.0 if pos == 1 else -1.0
+        xp, xi = _fill_price(i, d_exit, is_open=False)
         for lt in open_lots:
-            trades.append(_trade(lt, i, open_pos=True))
+            trades.append(_trade(lt, xp, xi, open_pos=True))
         open_lots.clear()
     return trades
 

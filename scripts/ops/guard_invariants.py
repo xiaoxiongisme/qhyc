@@ -785,6 +785,125 @@ def _c_config_snapshot_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     )
 
 
+def _c_bt_fill_mode_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """P2-3 / CL-20261108-11：回测成交口径必须**真实**按 fill_mode 分叉。
+
+    衡量的都是「此刻的行为」，不看历史流水、不靠时间衰减：
+      · 默认 fill_mode 仍是 close（旧回测基线可复现）；
+      · 合成 8 根 K 直接调 _simulate_trades，逐笔核对成交价与成交 bar 索引，
+        多空两侧都验（防只改了一边）；
+      · next_open 必须是「下一根开盘 ± 1tick」且成交 dt 落在下一根；
+      · 未知 fill_mode 必须拒绝（防静默回退到 close）；
+      · 源码里 next_open 分支必须把成本系数 slip_yuan 置 0（防滑点双计）。
+        用 AST 找 Dict 节点，避免 docstring/注释里的字面量造成假阳性
+        （OPS-LSTM-SNAPSHOT-WRITE 曾踩过字符串检查的坑）。
+    """
+    label = "回测成交口径 fill_mode 真实接线（默认 close / next_open +1tick）"
+    try:
+        import ast
+        import pandas as pd
+        from app.backtest import fusion_backtest as fb
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "融合回测模块不可导入 → 成交口径断言不可用（CL-20261108-11）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+
+    default_mode = getattr(fb.FusionBacktestParams(), "fill_mode", None)
+    observed.append(f"default={default_mode!r}")
+    if default_mode != "close":
+        bad.append(f"默认 fill_mode={default_mode!r}，必须 'close' 否则历史基线作废")
+
+    n = 8
+    opens = [100.0 + 10.0 * i for i in range(n)]
+    closes = [103.0 + 10.0 * i for i in range(n)]
+    dts = pd.date_range("2026-01-01", periods=n, freq="h")
+
+    def frame(side: int):
+        return pd.DataFrame({
+            "dt": dts,
+            "open": opens,
+            "close": closes,
+            "state": [0, side, side, side, 0, 0, 0, 0],
+            "lots": [0, 1, 1, 1, 0, 0, 0, 0],
+        })
+
+    def run(mode: str, side: int, tick_size: float = 0.0):
+        p = fb.FusionBacktestParams(fill_mode=mode, tick_size=tick_size)
+        return fb._simulate_trades(frame(side), p, symbol=None)
+
+    def hour(x) -> int:
+        return int(pd.Timestamp(x).hour)
+
+    try:
+        # close：成交价 = 信号根收盘；成交 bar = 信号根
+        for side in (1, 2):
+            tr = run("close", side)
+            if len(tr) != 1:
+                bad.append(f"close side={side} 期望 1 笔，实得 {len(tr)}")
+                continue
+            t = tr[0]
+            if abs(t["entry_px"] - 113.0) > 1e-9 or abs(t["exit_px"] - 143.0) > 1e-9:
+                bad.append(f"close side={side} 成交价 "
+                           f"{t['entry_px']}/{t['exit_px']} != 113/143")
+            if (hour(t["entry_dt"]), hour(t["exit_dt"])) != (1, 4):
+                bad.append(f"close side={side} 成交 bar "
+                           f"{hour(t['entry_dt'])}/{hour(t['exit_dt'])} != 1/4")
+        observed.append("close=113/143@bar1/4")
+
+        # next_open：下一根开盘 ± 1tick；成交 bar = 下一根；多空分别验
+        tick = 2.0
+        for side, exp in ((1, (122.0, 148.0)), (2, (118.0, 152.0))):
+            tr = run("next_open", side, tick_size=tick)
+            if len(tr) != 1:
+                bad.append(f"next_open side={side} 期望 1 笔，实得 {len(tr)}")
+                continue
+            t = tr[0]
+            if (abs(t["entry_px"] - exp[0]) > 1e-9
+                    or abs(t["exit_px"] - exp[1]) > 1e-9):
+                bad.append(f"next_open side={side} 成交价 "
+                           f"{t['entry_px']}/{t['exit_px']} != {exp[0]}/{exp[1]}")
+            if (hour(t["entry_dt"]), hour(t["exit_dt"])) != (2, 5):
+                bad.append(f"next_open side={side} 成交 bar "
+                           f"{hour(t['entry_dt'])}/{hour(t['exit_dt'])} != 2/5")
+        observed.append("next_open=L122/148,S118/152@bar2/5")
+
+        # 未知 mode 必须拒绝，而不是静默回退
+        try:
+            run("bogus", 1)
+            bad.append("未知 fill_mode 未拒绝（会静默回退 close）")
+        except ValueError:
+            observed.append("unknown_mode=rejected")
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"行为级对拍异常 {type(exc).__name__}: {exc}", (
+            "_simulate_trades 未按预期工作（CL-20261108-11）")
+
+    # 源码：next_open 必须把成本系数 slip_yuan 置 0（AST 防 docstring 假阳性）
+    try:
+        src = (Path(__file__).resolve().parents[2] / "app" / "backtest"
+               / "fusion_backtest.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        no_double = any(
+            isinstance(node, ast.Dict)
+            and any(isinstance(k, ast.Constant) and k.value == "slip_yuan"
+                    for k in node.keys)
+            and any(isinstance(v, ast.Constant)
+                    and isinstance(v.value, (int, float)) and float(v.value) == 0.0
+                    for v in node.values)
+            for node in ast.walk(tree)
+        )
+        observed.append(f"slip_yuan_zero={no_double}")
+        if not no_double:
+            bad.append("next_open 未把成本系数 slip_yuan 置 0 → 滑点双计")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"源码 AST 检查失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。成交口径接线被回退或改坏，回测结论不可信（CL-20261108-11）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -824,6 +943,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 特别防「加了列没人填」——qhyc 历史上最隐蔽的失效模式。
     ("OPS-CONFIG-SNAPSHOT-FRESH", "启动快照与信号流水绑定当前生效 params_hash",
      "block", _c_config_snapshot_fresh),
+    # P2-3 前置：成交口径是回测结论的地基。此前 close 模式硬编码、无任何断言盯它，
+    # 「改成下一根开盘」或「默认被悄悄改掉」都不会有人发现。行为级对拍而非只查源码。
+    ("BT-FILL-MODE-WIRED", "回测成交口径 fill_mode 真实接线（默认 close / next_open +1tick）",
+     "block", _c_bt_fill_mode_wired),
 ]
 
 
