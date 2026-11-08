@@ -88,6 +88,28 @@ class FusionBacktestParams:
     # 平仓 / 反手的平仓腿 / 末尾强平不受影响；加仓被拒只取消该次、持仓保留。
     # 0 = 关闭（守卫合成对拍与 close 老基线用）。只在 next_open 生效。
     max_adverse_gap_atr: float = 0.5
+    # —— B1 执行惩罚（P2-5 / CL-20261108-19，路线图 §3.3 四项乐观）——
+    # "off"（默认）= 全部惩罚关闭，与 3970431 逐位一致，历史基线可复现；
+    # "b1"         = 一次性启用：盘中击穿止损 / 剔除未收盘 K / 保证金核算 /
+    #                一字板拒绝开仓。**刻意不做成 4 个独立布尔**，避免
+    #                「mode=b1 但子项仍是默认 False」的半开状态静默通过。
+    exec_penalty_mode: str = "off"
+    # 初始资金：0 = 不设资金上限，只核算并输出保证金占用峰值（默认值理由：
+    # 归档已否定「4 万本金 3 品种」，凭空设资金数等于凭空造 G4 净利口径）；
+    # >0 时按「累计保证金 × margin_buffer ≤ initial_capital」约束开仓。
+    initial_capital: float = 0.0
+    margin_buffer: float = 1.0       # 保证金占用安全系数（1.0 = 恰好用满）
+    # 保证金率注入：0 = 走 futures_rule 时序（生产口径）；>0 = 直接用该值
+    # （仅供零 DB 的守卫/单测验证约束行为，避免「测不到就等于没接线」）。
+    margin_rate: float = 0.0
+    # 一字板近似：O==H==L==C 的 K 视为无法成交 → 取消该次开仓（平仓仍成交）。
+    # ⚠ 库内 high_limit/low_limit 近 30 天 0 行有效值，**不是真实板价模型**；
+    #   报告口径必须写「一字 K 不可成交近似」，不得写成「已建模涨跌停」。
+    limit_mode: str = "one_price"    # "none" | "one_price"
+    # 一字 K 的第二个必要条件：相对前一根收盘的变动幅度下限。
+    # ⚠ 单根 O==H==L==C 在低波动小时 K 上很常见（只动了几分钱），若不加这一条
+    #   会把正常 K 误判成停板 → 该品种几乎无法开仓。真实停板必然伴随大幅跳空。
+    limit_move_pct: float = 0.03
     # —— 回测专用 ——
     src: str = "bar_60m"             # P0-3：唯一 K 线真源 l1_mkt.bar_60m；
                                      # 可切 "bar_60m_ba" 取同一条线的后复权维度
@@ -212,20 +234,32 @@ def _generate_states(df: pd.DataFrame, p: FusionBacktestParams) -> pd.DataFrame:
     n = len(c)
     states = np.zeros(n, dtype=int)
     lots_arr = np.zeros(n, dtype=int)
+    # B1：该帧「收盘后生效的止损价」。仅用于回测层的盘中击穿判定，
+    # **不参与信号层**（walk_fusion_states 的止损仍是 close-only 单一真源）。
+    # 时点纪律：bar i 开盘前可用的止损 = cur_stop[i-1]，见 _simulate_trades。
+    cur_stops = np.full(n, np.nan, dtype=float)
     for k, d in enumerate(walk_fusion_states(o, h, l, c, htf, p)):
         states[k + 2] = d["state"]
         lots_arr[k + 2] = int(d.get("lots", 1) or 1)
+        _st = d.get("cur_stop")
+        if _st is not None:
+            cur_stops[k + 2] = float(_st)
     out = df.reset_index(drop=True).copy()
     out["state"] = states
     out["lots"] = lots_arr
+    out["cur_stop"] = cur_stops
     # 波动率基准：用于把成交归一化为 R（robustness 六项检查的硬要求）
     out["atr"] = _atr(out, getattr(p, "atr_n", 14)).to_numpy(dtype=float)
     return out
 
 
-def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
-                      symbol: str | None = None) -> list[dict]:
-    """组合层：把 state + lots 序列重放成**逐手**成交（close-only，单品种单方向）。
+def _simulate_trades_ex(states_df: pd.DataFrame, p: FusionBacktestParams,
+                        symbol: str | None = None
+                        ) -> tuple[list[dict], dict]:
+    """组合层：把 state + lots 序列重放成**逐手**成交（单品种单方向）。
+
+    返回 ``(trades, stats)``；``stats`` 含 B1 的保证金峰值与缺费率手数。
+    既有调用方请用薄包装 :func:`_simulate_trades`（只取 trades）。
 
     规则（V3.4 口径，PRD §16/§17；E1-C 起成交口径改为下一根开盘）：
     - bar i 收盘后策略目标持仓 = state_i；默认在 o[i+1] ± 1tick 开/平，
@@ -258,6 +292,26 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     """
     dts = states_df["dt"].to_numpy()
     closes = states_df["close"].to_numpy(float)
+    # —— B1 执行惩罚开关（P2-5 / CL-20261108-19）——
+    exec_mode = str(getattr(p, "exec_penalty_mode", "off") or "off").lower()
+    if exec_mode not in ("off", "b1"):
+        raise ValueError(f"未知 exec_penalty_mode={exec_mode!r}（只支持 off / b1）")
+    b1 = exec_mode == "b1"
+    limit_mode = str(getattr(p, "limit_mode", "one_price") or "one_price")
+    if limit_mode not in ("none", "one_price"):
+        raise ValueError(f"未知 limit_mode={limit_mode!r}（只支持 none / one_price）")
+    if b1:
+        # 剔除未收盘 K：回测窗口最后一根若尚未走完（bucket + 60m > 现在），
+        # 其 close 是「至今为止」的半根价，直接参与信号与成交会制造假成交。
+        # 判据用挂钟时间戳，属执行时点事实，不构成前视。
+        _last = pd.Timestamp(states_df["dt"].iloc[-1])
+        _now = (pd.Timestamp.now(tz=_last.tz) if _last.tz is not None
+                else pd.Timestamp.now())
+        if _last + pd.Timedelta(minutes=60) > _now and len(states_df) > 1:
+            logger.info(f"[backtest] B1 剔除未收盘 K：{_last}（+60m 晚于现在）")
+            states_df = states_df.iloc[:-1].reset_index(drop=True)
+            dts = states_df["dt"].to_numpy()
+            closes = states_df["close"].to_numpy(float)
     fill_mode = getattr(p, "fill_mode", "next_open") or "next_open"
     if fill_mode not in ("close", "next_open"):
         raise ValueError(f"未知 fill_mode={fill_mode!r}（只支持 close / next_open）")
@@ -274,6 +328,18 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     n_bars = len(states)
     atr_arr = (states_df["atr"].to_numpy(dtype=float)
                if "atr" in states_df.columns else np.full(len(states), np.nan))
+    # —— B1：盘中击穿所需列。缺列必须 fail loud ——
+    # 静默 nan 会让「盘中击穿」永不触发，等于 B1 只跑了个声明。
+    highs = lows = stops = None
+    if b1:
+        _miss = [k for k in ("open", "high", "low", "cur_stop")
+                 if k not in states_df.columns]
+        if _miss:
+            raise ValueError(f"exec_penalty_mode=b1 需要列 {_miss}；"
+                             "缺列会让盘中击穿静默失效（B1 口径失效）")
+        highs = states_df["high"].to_numpy(float)
+        lows = states_df["low"].to_numpy(float)
+        stops = states_df["cur_stop"].to_numpy(float)
     with np.errstate(all="ignore"):
         _m = np.nanmean(atr_arr) if len(atr_arr) else float("nan")
         atr_mean = float(_m) if np.isfinite(_m) else 0.0
@@ -325,6 +391,48 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     else:
         mult = float(getattr(p, "mult", 1.0) or 1.0)
         _tick_size = float(getattr(p, "tick_size", 0.0) or 0.0)
+    # —— B1：保证金率时序（生产口径 = futures_rule.margin_ratio，非 dim_variety 快照）——
+    # 用快照会「拿今天的保证金率算 2025 年」，与成本层同一类静默错误；
+    # futures_rule 是按时序落库的真源，preopen_gate / variety_gate 也都读它。
+    _m_dates = np.array([], dtype="datetime64[D]")
+    _m_rates = np.array([], dtype=float)
+    if b1 and symbol:
+        from sqlalchemy import text as _text
+        from app.core.db import session_scope as _scope
+        from app.data.cost import _variety as _variety_code
+        from app.risk.margin_model import normalize_rate as _norm_rate
+        with _scope() as _s:
+            _rows = _s.execute(_text(
+                "SELECT trade_date, margin_ratio FROM futures_rule "
+                "WHERE code = :c AND margin_ratio IS NOT NULL "
+                "ORDER BY trade_date"), {"c": _variety_code(symbol)}).all()
+        if _rows:
+            _m_dates = np.array([np.datetime64(r[0], "D") for r in _rows])
+            _m_rates = np.array([float(_norm_rate(r[1]) or 0.0) for r in _rows],
+                                dtype=float)
+
+    def _margin_per_lot(price: float, d) -> float:
+        """单手保证金（元）= 名义价 × 乘数 × 保证金率 × 1.03（含期货公司加收）。
+
+        1.03 与 app/risk/variety_gate 的 ``margin = px*mult*rate*1.03`` 同源。
+        保证金率优先取注入值 ``p.margin_rate``（仅在 0 时才查 futures_rule），
+        无任何费率时返回 0.0（= 不约束），并由调用方计入 ``margin_no_rate``
+        统计，**不静默当成「有保证金」**。
+        """
+        _inj = float(getattr(p, "margin_rate", 0.0) or 0.0)
+        _rate = _inj
+        if _rate <= 0:
+            if not _m_rates.size or not mult:
+                return 0.0
+            _d0 = d.date() if hasattr(d, "date") else d
+            k = int(np.searchsorted(_m_dates, np.datetime64(_d0, "D"), side="right")) - 1
+            if k < 0:
+                return 0.0
+            _rate = float(_m_rates[k])
+        if not mult:
+            return 0.0
+        return float(price) * mult * _rate * 1.03
+
     # close 模式 tick 恒为 0，保证历史基线逐位一致
     tick = _tick_size if fill_mode == "next_open" else 0.0
     if fill_mode == "next_open" and symbol and tick <= 0:
@@ -334,9 +442,50 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
     gap_lim = (float(getattr(p, "max_adverse_gap_atr", 0.0) or 0.0)
                if fill_mode == "next_open" else 0.0)
     trades: list[dict] = []
-    open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon, atr}
+    open_lots: list[dict] = []   # 在手各手：{entry_px, entry_i, addon, atr, margin}
     pos = 0                      # 当前持仓方向 0/1/2
     blocked_dir = 0              # E1-C 语义 B：被拒后整段作废的方向（0=未封锁）
+    # B1：盘中已被止损平掉，但引擎（close-only）仍认为持仓 → 封锁该方向重开，
+    # 直到引擎信号归零或反向。与 blocked_dir 语义不同，故分开记。
+    flat_lock = 0
+    margin_used = 0.0            # 当前在手各手保证金合计（元）
+    margin_peak = 0.0            # 峰值（报告口径）
+    margin_no_rate = 0           # 无保证金率记录的手数（fail-loud 统计）
+
+    def _one_price(i: int) -> bool:
+        """B1 一字 K 近似：O==H==L==C **且** 相对前收跳空 ≥ limit_move_pct。
+
+        口径边界：库内 ``high_limit/low_limit`` 近 30 天 0 行有效值，故**不做**
+        真实板价建模，只用「一字 + 大幅跳空」这一可验证特征。平仓不受此限
+        （与 E1-C 第 5 条一致：平仓不因流动性假设被无限期推迟）。
+
+        为什么要第二个条件：低波动小时 K 出现 O==H==L==C 很正常（只动几分钱），
+        单看一字会把这类正常 K 误判成停板，导致该品种几乎无法开仓。
+        """
+        if not b1 or limit_mode != "one_price":
+            return False
+        j = i + 1 if fill_mode == "next_open" else i
+        if j >= n_bars or j < 1:
+            return False
+        _o, _h, _l, _c = (float(opens[j]), float(highs[j]),
+                          float(lows[j]), float(closes[j]))
+        if not all(np.isfinite(v) for v in (_o, _h, _l, _c)):
+            return False
+        if not (_h == _l == _o == _c):
+            return False
+        _prev = float(closes[j - 1])
+        if _prev <= 0:
+            return False
+        return abs(_c - _prev) / _prev >= float(
+            getattr(p, "limit_move_pct", 0.03) or 0.0)
+
+    def _can_afford(margin: float) -> bool:
+        """B1 资金约束。initial_capital=0（默认）= 只核算不约束。"""
+        cap = float(getattr(p, "initial_capital", 0.0) or 0.0)
+        if cap <= 0:
+            return True
+        buf = float(getattr(p, "margin_buffer", 1.0) or 1.0)
+        return (margin_used + margin) <= cap * buf
 
     def _atr_at(i: int) -> float:
         v = float(atr_arr[i]) if i < len(atr_arr) else float("nan")
@@ -412,6 +561,8 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
             # 避免退回 bp 假设（真实费率与 bp 假设可差数倍）
             "cost_yuan": cost_yuan,
             "cost_points": cost_pts,
+            # B1：该手建仓时占用的保证金（元）。off 模式恒 0，不影响旧口径。
+            "margin": float(lt.get("margin") or 0.0),
         }
         if open_pos:
             t["open"] = True
@@ -425,35 +576,82 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         # —— 那正是实证过滤率 0% 的语义 A。
         if tgt == 0 or (blocked_dir and tgt != blocked_dir):
             blocked_dir = 0
+        # B1 解锁：引擎信号归零/反向，才允许该方向重新开仓
+        if flat_lock and (tgt == 0 or tgt != flat_lock):
+            flat_lock = 0
+
+        # ---------- B1 盘中击穿止损（先于引擎 close-only 离场判定）----------
+        # 时点纪律：bar i 开盘前**已生效**的止损 = cur_stop[i-1]（bar i-1 收盘算出）。
+        # 用 cur_stop[i] 去撞 bar i 的 high/low 属前视，禁止。
+        if b1 and pos != 0 and i > 0 and int(states[i - 1]) == pos:
+            _st = float(stops[i - 1])
+            if np.isfinite(_st) and _st > 0:
+                _hit = ((float(lows[i]) <= _st) if pos == 1
+                        else (float(highs[i]) >= _st))
+                if _hit:
+                    # 跳空越过止损 → 按开盘价成交（更差）；否则按止损价成交。
+                    # 平仓腿同样含 1 个不利 tick，与 fill_price 的平仓口径一致。
+                    _px = (min(_st, float(opens[i])) - tick if pos == 1
+                           else max(_st, float(opens[i])) + tick)
+                    for lt in open_lots:
+                        trades.append(_trade(lt, _px, i))
+                        margin_used -= float(lt.get("margin") or 0.0)
+                    open_lots.clear()
+                    flat_lock = pos       # 引擎仍认为持仓 → 屏蔽该方向重开
+                    pos = 0
+
         # P1 加码：持仓中引擎手数增加 → 当根加开对应手数。
         # 被跳空拒绝只取消该次加仓，已有持仓保留、不封锁整段（规约 D5）。
         if pos != 0 and tgt == pos and cur_lots > len(open_lots):
             d_add = 1.0 if pos == 1 else -1.0
-            if not _gap_blocks(i, d_add):
+            if not _gap_blocks(i, d_add) and not _one_price(i):
                 for _ in range(cur_lots - len(open_lots)):
                     px, fi = _fill_price(i, d_add, is_open=True)
+                    _m = _margin_per_lot(px, dts[fi]) if b1 else 0.0
+                    if b1 and _m <= 0:
+                        margin_no_rate += 1
+                    if not _can_afford(_m):
+                        break                    # 资金不足：本次加码取消
+                    margin_used += _m
+                    margin_peak = max(margin_peak, margin_used)
                     open_lots.append({"entry_px": px, "entry_i": fi,
-                                      "addon": True, "atr": _atr_at(i)})
+                                      "addon": True, "atr": _atr_at(i),
+                                      "margin": _m})
         if tgt != pos:
             if open_lots:
-                # 平仓腿：E1-C 第 5 条，不做跳空判定，一律按下一根开盘 ±1tick 成交
+                # 平仓腿：E1-C 第 5 条，不做跳空判定，一律按下一根开盘 ±1tick 成交；
+                # B1 的一字 K 同样不阻止平仓（否则持仓会被无限期推迟出场）。
                 d_exit = 1.0 if pos == 1 else -1.0
                 xp, xi = _fill_price(i, d_exit, is_open=False)
                 for lt in open_lots:
                     trades.append(_trade(lt, xp, xi))
+                    margin_used -= float(lt.get("margin") or 0.0)
                 open_lots.clear()
             if tgt != 0:
                 d_ent = 1.0 if tgt == 1 else -1.0
                 if blocked_dir == tgt:
                     pos = 0                    # 该段仍在封锁期：不重试
+                elif flat_lock == tgt:
+                    pos = 0                    # B1 已盘中止损：引擎未转向前不重开
                 elif _gap_blocks(i, d_ent):
                     blocked_dir = tgt         # 整段信号作废
                     pos = 0
+                elif _one_price(i):
+                    pos = 0                    # 一字 K 无法成交，本次开仓取消
                 else:
-                    pos = tgt
                     px, fi = _fill_price(i, d_ent, is_open=True)
-                    open_lots.append({"entry_px": px, "entry_i": fi,
-                                      "addon": False, "atr": _atr_at(i)})
+                    _m = _margin_per_lot(px, dts[fi]) if b1 else 0.0
+                    if b1 and _m <= 0:
+                        margin_no_rate += 1
+                    if not _can_afford(_m):
+                        pos = 0                # 资金不足：不开仓
+                    else:
+                        pos = tgt
+                        margin_used += _m
+                        margin_peak = max(margin_peak, margin_used)
+                        open_lots.append({"entry_px": px, "entry_i": fi,
+                                          "addon": False, "atr": _atr_at(i),
+                                          "margin": _m})
             else:
                 pos = 0
     # 末尾仍持仓：close 模式按最后收盘价强平；next_open 无 i+1，同样退回收盘价+滑点
@@ -463,8 +661,23 @@ def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
         xp, xi = _fill_price(i, d_exit, is_open=False)
         for lt in open_lots:
             trades.append(_trade(lt, xp, xi, open_pos=True))
+            margin_used -= float(lt.get("margin") or 0.0)
         open_lots.clear()
-    return trades
+    if b1:
+        return trades, {"margin_peak": margin_peak,
+                        "margin_no_rate": margin_no_rate,
+                        "exec_penalty_mode": exec_mode}
+    return trades, {"margin_peak": 0.0, "margin_no_rate": 0,
+                    "exec_penalty_mode": exec_mode}
+
+
+def _simulate_trades(states_df: pd.DataFrame, p: FusionBacktestParams,
+                     symbol: str | None = None) -> list[dict]:
+    """兼容包装：仅返回逐手成交（既有调用方与守卫断言不必改签名）。
+
+    B1 的保证金峰值等侧信道统计走 :func:`_simulate_trades_ex`。
+    """
+    return _simulate_trades_ex(states_df, p, symbol=symbol)[0]
 
 
 def to_robustness_trades(trades: list[dict], mult: float = 1.0) -> list[dict]:
@@ -579,6 +792,10 @@ def run_fusion_backtest(session, symbols: list[str] | None = None,
     all_trades: list[dict] = []
     per_symbol: list[dict] = []
     skipped: list[str] = []
+    # B1 侧信道统计：逐品种保证金峰值（组合同时刻峰值需时间线合并，本批只给
+    # 「单品种峰值」与「各品种峰值之和（上界）」，报告须标注不是组合真实峰值）。
+    margin_peak_by_sym: dict[str, float] = {}
+    margin_no_rate = 0
 
     seed_list = seeds if seeds else [params.seed]
     for sym in symbols:
@@ -592,7 +809,11 @@ def run_fusion_backtest(session, symbols: list[str] | None = None,
             if pp.lookback_bars and len(df) > pp.lookback_bars:
                 df = df.iloc[-pp.lookback_bars:]
             states_df = _generate_states(df, pp)
-            tr = _simulate_trades(states_df, pp, symbol=sym)
+            tr, _st = _simulate_trades_ex(states_df, pp, symbol=sym)
+            if _st.get("margin_peak"):
+                margin_peak_by_sym[sym] = max(
+                    margin_peak_by_sym.get(sym, 0.0), float(_st["margin_peak"]))
+            margin_no_rate += int(_st.get("margin_no_rate") or 0)
             for t in tr:
                 t["symbol"] = sym
             sym_trades.extend(tr)
@@ -612,6 +833,22 @@ def run_fusion_backtest(session, symbols: list[str] | None = None,
         agg["trades"] = all_trades
     agg["params"] = {k: getattr(params, k) for k in params.__dataclass_fields__}
     agg["seeds"] = seed_list
+    if str(getattr(params, "exec_penalty_mode", "off")).lower() == "b1":
+        # ⚠ 组合同时刻保证金峰值需要跨品种时间线合并，本批**不做**；
+        #   这里给的是「单品种峰值」与「各品种峰值之和（上界）」，
+        #   报告口径不得把上界当成真实组合占用。
+        _peaks = [v for v in margin_peak_by_sym.values() if v > 0]
+        agg["exec_penalty"] = {
+            "mode": "b1",
+            "margin_peak_by_symbol": {k: round(v, 2)
+                                      for k, v in margin_peak_by_sym.items()},
+            "max_margin_single": round(max(_peaks), 2) if _peaks else 0.0,
+            "margin_sum_upper_bound": round(sum(_peaks), 2),
+            "margin_no_rate_lots": margin_no_rate,
+            "initial_capital": float(getattr(params, "initial_capital", 0.0) or 0.0),
+            "margin_buffer": float(getattr(params, "margin_buffer", 1.0) or 1.0),
+            "limit_mode": getattr(params, "limit_mode", "one_price"),
+        }
     return agg
 
 

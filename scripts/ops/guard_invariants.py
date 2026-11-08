@@ -1129,6 +1129,182 @@ def _c_bt_pool_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
         + "。回测品种池偏离 38 白名单或持仓豁免被误停，结论不可信（CL-20261108-12）")
 
 
+def _c_bt_b1_penalty_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """P2-5 / CL-20261108-19：B1 执行惩罚必须真实接线。
+
+    路线图 §3.3 把回测的乐观写成 4 项，本断言覆盖其中 3 项（第 1 项同根收盘
+    已由 E1-C 修，见 BT-GAP-FILTER-WIRED）。全部衡量「此刻的行为」：
+
+      · 默认 ``exec_penalty_mode="off"``，且 off 下即使给了 high/low/cur_stop
+        也必须与旧基线**逐位一致**（否则每次重跑都在偷偷改历史数字）；
+      · 盘中击穿：``cur_stop[i-1]`` 被 bar i 的 low/high 击穿 → **当根**离场，
+        并只用 i-1 的止损（用 cur_stop[i] 撞 bar i 是前视）；
+      · 一字 K（O==H==L==C **且** 跳空 ≥ limit_move_pct）拒绝开仓但**不拒平仓**；
+        低波动 O==H==L==C（无跳空）不得被误判为停板；
+      · 资金不足拒开仓；充足则记录该手保证金（margin 字段 > 0）；
+      · 缺 high/low/cur_stop 必须 fail loud（否则盘中击穿静默失效）；
+      · AST：``_generate_states`` 真的输出 cur_stop、``_simulate_trades_ex``
+        真的引用 exec_penalty_mode / _one_price / _margin_per_lot / flat_lock
+        —— 专治「字段建了没人读」。
+
+    ⚠ 已知不建模：流动性（回测取数层 ``_BASE_COLS`` 只含 OHLC，无 volume）
+    与真实涨跌停板价（库内 high_limit/low_limit 近 30 天 0 行有效值）。
+    报告口径不得写成「已建模」。
+    """
+    label = "B1 执行惩罚真实接线（盘中击穿 / 一字 K / 保证金 / 未收盘 K）"
+    try:
+        import inspect
+
+        import pandas as pd
+
+        from app.backtest import fusion_backtest as fb
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "融合回测模块不可导入 → B1 断言不可用（CL-20261108-19）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+    bp = fb.FusionBacktestParams()
+    observed.append(f"default={bp.exec_penalty_mode!r}")
+    if bp.exec_penalty_mode != "off":
+        bad.append(f"默认 exec_penalty_mode={bp.exec_penalty_mode!r}，必须 'off'"
+                   "（否则旧基线不可复现）")
+
+    n = 8
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    nan = float("nan")
+
+    def frame(states, opens=None, highs=None, lows=None, closes=None,
+              stops=None, lots=None, with_hl=True):
+        c_list = list(closes) if closes is not None else [100.0] * len(states)
+        o_list = list(opens) if opens is not None else [100.0] * len(states)
+        d = {
+            "dt": pd.date_range("2026-01-01", periods=len(states), freq="h"),
+            "open": o_list, "close": c_list,
+            "state": states,
+            "lots": lots if lots is not None else
+            [0 if s == 0 else 1 for s in states],
+            "atr": [1.0] * len(states),
+        }
+        if with_hl:
+            d["high"] = list(highs) if highs is not None else list(c_list)
+            d["low"] = list(lows) if lows is not None else list(c_list)
+            d["cur_stop"] = stops if stops is not None else [nan] * len(states)
+        return pd.DataFrame(d)
+
+    def run(fr, **kw):
+        p = fb.FusionBacktestParams(tick_size=1.0,
+                                    max_adverse_gap_atr=0.0, **kw)
+        return fb._simulate_trades(fr, p, symbol=None)
+
+    try:
+        stops_hit = [nan, 95.0, 95.0, 95.0] + [nan] * (n - 4)
+        low_hit = [100.0] * n
+        low_hit[2] = 94.0
+        # 1) off 模式逐位一致（即便多了 high/low/cur_stop 列）
+        a = run(frame(seg, lows=low_hit, stops=stops_hit))
+        b = run(frame(seg, with_hl=False))
+        ka = [(t["entry_px"], t["exit_px"], t["pnl"], str(t["exit_dt"])) for t in a]
+        kb = [(t["entry_px"], t["exit_px"], t["pnl"], str(t["exit_dt"])) for t in b]
+        if ka != kb:
+            bad.append("off 模式下新增列改变了成交（旧基线不再逐位可复现）")
+        else:
+            observed.append(f"off_bitwise={len(ka)}")
+        # 2) 盘中击穿当根离场，成交价含 1tick
+        tr = run(frame(seg, lows=low_hit, stops=stops_hit),
+                 exec_penalty_mode="b1")
+        if (len(tr) != 1
+                or pd.Timestamp(tr[0]["exit_dt"]) != pd.Timestamp("2026-01-01 02:00")
+                or abs(tr[0]["exit_px"] - 94.0) > 1e-9):
+            bad.append(f"盘中击穿未在当根离场（实得 {len(tr)} 笔 / "
+                       f"exit={tr[0]['exit_dt'] if tr else None}）")
+        else:
+            observed.append("intrabar_exit=bar2@94")
+        # 3) 时点纪律：不得用 cur_stop[i]
+        stops_lag = [nan, 95.0, 90.0, 90.0] + [nan] * (n - 4)
+        low_lag = [100.0] * n
+        low_lag[2] = 92.0
+        tr = run(frame(seg, lows=low_lag, stops=stops_lag),
+                 exec_penalty_mode="b1")
+        if not tr or abs(tr[0]["exit_px"] - 94.0) > 1e-9:
+            bad.append("盘中击穿用了 cur_stop[i]（前视），应按 cur_stop[i-1]=95")
+        else:
+            observed.append("stop_lag_ok")
+        # 4) 一字 K 拒开仓、但延后一根仍可成交
+        o1 = [100.0] * n
+        c1 = [100.0] * n
+        h1 = [100.5] * n
+        l1 = [99.5] * n
+        for arr in (o1, c1, h1, l1):
+            arr[2] = 104.0
+        tr = run(frame(seg, opens=o1, closes=c1, highs=h1, lows=l1),
+                 exec_penalty_mode="b1")
+        if (len(tr) != 1
+                or pd.Timestamp(tr[0]["entry_dt"]) != pd.Timestamp("2026-01-01 03:00")):
+            bad.append("一字 K 未拒绝开仓（或未在下一根恢复）")
+        else:
+            observed.append("one_price_entry_deferred")
+        # 5) 低波动 O==H==L==C 不得误判成停板
+        tr = run(frame(seg), exec_penalty_mode="b1")
+        if len(tr) != 1:
+            bad.append("低波动 O==H==L==C 被误判成停板 → 该品种几乎无法开仓")
+        else:
+            observed.append("low_vol_not_limit")
+        # 6) 一字不阻止平仓
+        o2 = [100.0] * n
+        c2 = [100.0] * n
+        h2 = [100.5] * n
+        l2 = [99.5] * n
+        for arr in (o2, c2, h2, l2):
+            arr[5] = 104.0
+        tr = run(frame(seg, opens=o2, closes=c2, highs=h2, lows=l2),
+                 exec_penalty_mode="b1")
+        if not tr or abs(tr[0]["exit_px"] - 103.0) > 1e-9:
+            bad.append("一字 K 误阻止平仓（会让持仓无限期推迟出场）")
+        else:
+            observed.append("exit_not_blocked")
+        # 7) 保证金约束
+        if run(frame(seg), exec_penalty_mode="b1", margin_rate=0.1,
+               initial_capital=5.0):
+            bad.append("资金不足时仍开仓（保证金约束未接线）")
+        else:
+            observed.append("margin_cap_blocks")
+        tr = run(frame(seg), exec_penalty_mode="b1", margin_rate=0.1,
+                 initial_capital=1000.0)
+        if not tr or abs(float(tr[0].get("margin") or 0.0)
+                         - 101.0 * 0.1 * 1.03) > 1e-6:
+            bad.append("开仓未记录该手保证金（margin 字段缺失或口径错）")
+        else:
+            observed.append("margin_per_lot_ok")
+        # 8) 缺列 fail loud
+        try:
+            run(frame(seg, with_hl=False), exec_penalty_mode="b1")
+            bad.append("b1 缺 high/low/cur_stop 未拒绝（盘中击穿会静默失效）")
+        except ValueError:
+            observed.append("missing_cols=rejected")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"行为级对拍异常 {type(exc).__name__}: {exc}")
+
+    # 9) AST / 源码引用：字段建了必须有人读
+    try:
+        src_gen = inspect.getsource(fb._generate_states)
+        if "cur_stop" not in src_gen:
+            bad.append("_generate_states 未输出 cur_stop（盘中击穿无数据可用）")
+        src_sim = inspect.getsource(fb._simulate_trades_ex)
+        for token in ("exec_penalty_mode", "_one_price", "_margin_per_lot",
+                      "flat_lock"):
+            if token not in src_sim:
+                bad.append(f"_simulate_trades_ex 未引用 {token}（疑似死代码）")
+        if "cur_stop" not in src_sim:
+            bad.append("_simulate_trades_ex 未读取 cur_stop")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"源码引用检查失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。B1 执行惩罚未真实落地，G4 净利判据不可信（CL-20261108-19）")
+
+
 def _c_bt_walkforward_same_source(c: Ctx) -> tuple[bool, str, str, str]:
     """P2-3 E2 / CL-20261108-13：walk-forward 的日期范围必须来自唯一 K 线真源。
 
@@ -1595,6 +1771,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 行为级拒绝非白名单 + AST 真实引用 + 持仓豁免仍在数据链路，三面防漂移。
     ("BT-POOL-IN-WHITELIST", "回测品种池严格 38 白名单（持仓豁免只留数据链路）",
      "block", _c_bt_pool_in_whitelist),
+    # P2-5 / CL-20261108-19：B1 执行惩罚（路线图 §3.3 第 2/3/4 项）。
+    # 行为级对拍（盘中击穿/一字K/保证金/未收盘K）+ off 逐位零回归 + AST 引用，
+    # 防「字段建了没人读」「盘中击穿静默失效」「低波动被误判成停板」三种假绿。
+    ("BT-B1-PENALTY-WIRED", "B1 执行惩罚真实接线（盘中击穿/一字K/保证金/未收盘K）",
+     "block", _c_bt_b1_penalty_wired),
 ]
 
 

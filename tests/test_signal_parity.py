@@ -321,3 +321,168 @@ def test_e1c_next_open_requires_open_column():
         _e1c_run(_SEG, {2: 101.0}, with_open=False)
     assert len(_e1c_run(_SEG, {2: 101.0}, with_open=False,
                         fill_mode="close")) == 1
+
+
+# ---------------------------------------------------------------------------
+# 9) B1 执行惩罚（CL-20261108-19，零 DB）
+#    路线图 §3.3 四项乐观里的 2/3/4：盘中击穿、保证金/一字板、未收盘 K。
+#    ⚠ 全部默认关闭（exec_penalty_mode="off"）——旧基线必须逐位可复现。
+# ---------------------------------------------------------------------------
+def _b1_run(states, *, opens=None, highs=None, lows=None, closes=None,
+            stops=None, lots=None, dts=None, **params):
+    """合成 states_df（含 high/low/cur_stop）跑重放，返回逐笔成交。"""
+    import pandas as pd
+
+    from app.backtest import fusion_backtest as fb
+
+    n = len(states)
+    o_list = list(opens) if opens is not None else [100.0] * n
+    c_list = list(closes) if closes is not None else [100.0] * n
+    h_list = list(highs) if highs is not None else list(c_list)
+    l_list = list(lows) if lows is not None else list(c_list)
+    if dts is None:
+        dts = pd.date_range("2026-01-01", periods=n, freq="h")
+    d = {
+        "dt": dts, "open": o_list, "high": h_list,
+        "low": l_list, "close": c_list,
+        "state": states,
+        "lots": lots if lots is not None else [0 if s == 0 else 1 for s in states],
+        "atr": [1.0] * n,
+        "cur_stop": stops if stops is not None else [float("nan")] * n,
+    }
+    p = fb.FusionBacktestParams(tick_size=1.0, **params)
+    return fb._simulate_trades(pd.DataFrame(d), p, symbol=None)
+
+
+def test_b1_default_is_off_and_bitwise_identical():
+    """off 模式：即便给了 high/low/cur_stop，也必须与旧基线逐位一致。"""
+    import pandas as pd
+
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    n = len(seg)
+    stops = [float("nan"), 95.0, 95.0, 95.0] + [float("nan")] * (n - 4)
+    lows = [100.0] * n
+    lows[2] = 94.0                       # 若 off 生效，这根不应影响任何成交
+    a = _b1_run(seg, lows=lows, stops=stops, max_adverse_gap_atr=0.0)
+    b = _e1c_run(seg, max_adverse_gap_atr=0.0)
+    assert [(t["entry_px"], t["exit_px"], t["pnl"], t["exit_dt"]) for t in a] == \
+           [(t["entry_px"], t["exit_px"], t["pnl"], t["exit_dt"]) for t in b]
+    assert a[0]["margin"] == 0.0         # off 模式不计保证金
+    _ = pd
+
+
+def test_b1_intrabar_stop_exits_before_close():
+    """盘中低点击穿「上一根收盘算出的止损」→ 当根离场，不等收盘。"""
+    import pandas as pd
+
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    n = len(seg)
+    stops = [float("nan"), 95.0, 95.0, 95.0] + [float("nan")] * (n - 4)
+    lows = [100.0] * n
+    lows[2] = 94.0
+    tr = _b1_run(seg, lows=lows, stops=stops,
+                 exec_penalty_mode="b1", max_adverse_gap_atr=0.0)
+    assert len(tr) == 1
+    assert tr[0]["entry_dt"] == pd.Timestamp("2026-01-01 02:00")   # O[2] 建仓
+    assert tr[0]["exit_dt"] == pd.Timestamp("2026-01-01 02:00")    # bar 2 盘中离场
+    # min(stop=95, O[2]=100) - 1tick = 94
+    assert tr[0]["exit_px"] == pytest.approx(94.0)
+    # 但 bars 已 3 根（引擎仍认为持仓），不得在 bar 3 重新开仓
+    assert all(not t.get("addon") for t in tr)
+
+
+def test_b1_intrabar_stop_uses_prev_bar_stop_not_current():
+    """时点纪律：只用 cur_stop[i-1]，用 cur_stop[i] 撞 bar i 的低点是前视。"""
+    import pandas as pd
+
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    n = len(seg)
+    # cur_stop[1]=95（生效），cur_stop[2]=90（bar2 收盘才知道，不得用于 bar2）
+    stops = [float("nan"), 95.0, 90.0, 90.0] + [float("nan")] * (n - 4)
+    lows = [100.0] * n
+    lows[2] = 92.0                       # 击穿 95 但未击穿 90
+    tr = _b1_run(seg, lows=lows, stops=stops,
+                 exec_penalty_mode="b1", max_adverse_gap_atr=0.0)
+    assert tr[0]["exit_dt"] == pd.Timestamp("2026-01-01 02:00")
+    assert tr[0]["exit_px"] == pytest.approx(94.0)   # 按 95-1tick，不是 90-1tick
+
+
+def test_b1_one_price_blocks_entry_then_enters_next_bar():
+    """一字 K（O==H==L==C 且大幅跳空）无法成交：开仓取消，下一根恢复。"""
+    import pandas as pd
+
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    n = len(seg)
+    opens = [100.0] * n
+    closes = [100.0] * n
+    highs = [100.5] * n
+    lows = [99.5] * n
+    for arr in (opens, closes, highs, lows):
+        arr[2] = 104.0                   # bar 2 一字且相对前收 +4%（停板近似）
+    tr = _b1_run(seg, opens=opens, closes=closes, highs=highs, lows=lows,
+                 exec_penalty_mode="b1", max_adverse_gap_atr=0.0)
+    assert len(tr) == 1
+    assert tr[0]["entry_dt"] == pd.Timestamp("2026-01-01 03:00")   # 延后到 bar 3
+    assert tr[0]["entry_px"] == pytest.approx(101.0)               # O[3]+1tick
+
+
+def test_b1_low_volatility_bar_is_not_treated_as_limit():
+    """单根 O==H==L==C 但无大幅跳空（低波动）不得被判成停板。"""
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    n = len(seg)
+    opens = [100.0] * n
+    closes = [100.0] * n
+    highs = [100.0] * n
+    lows = [100.0] * n                   # 全部零波动：O==H==L==C
+    tr = _b1_run(seg, opens=opens, closes=closes, highs=highs, lows=lows,
+                 exec_penalty_mode="b1", max_adverse_gap_atr=0.0)
+    assert len(tr) == 1                  # 仍应正常开仓
+    assert tr[0]["entry_px"] == pytest.approx(101.0)
+
+
+def test_b1_one_price_does_not_block_exit():
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    n = len(seg)
+    opens = [100.0] * n
+    closes = [100.0] * n
+    highs = [100.5] * n
+    lows = [99.5] * n
+    for arr in (opens, closes, highs, lows):
+        arr[5] = 104.0                   # 平仓根 bar5 是一字（+4%）
+    tr = _b1_run(seg, opens=opens, closes=closes, highs=highs, lows=lows,
+                 exec_penalty_mode="b1", max_adverse_gap_atr=0.0)
+    assert len(tr) == 1
+    assert tr[0]["exit_px"] == pytest.approx(103.0)   # O[5]=104 - 1tick
+
+
+def test_b1_margin_constraint_blocks_entry():
+    """资金不足 → 拒开仓；充足则开仓并记录该手保证金。"""
+    seg = [0, 1, 1, 1, 0, 0, 0, 0]
+    common = dict(exec_penalty_mode="b1", margin_rate=0.1,
+                  max_adverse_gap_atr=0.0)
+    # 单手保证金 = entry 101 × mult 1 × 0.1 × 1.03 = 10.403
+    assert _b1_run(seg, initial_capital=5.0, **common) == []
+    tr = _b1_run(seg, initial_capital=1000.0, **common)
+    assert len(tr) == 1
+    assert tr[0]["margin"] == pytest.approx(101.0 * 0.1 * 1.03, rel=1e-9)
+
+
+def test_b1_requires_high_low_stop_columns():
+    """缺 high/low/cur_stop 必须 fail loud，不能让盘中击穿静默失效。"""
+    with pytest.raises(ValueError, match="high"):
+        _e1c_run(_SEG, exec_penalty_mode="b1")
+
+
+def test_b1_drops_unclosed_last_bar():
+    """最后一根未走完（bucket+60m 晚于现在）必须剔除。"""
+    import pandas as pd
+
+    now = pd.Timestamp.now().floor("h")
+    dts = [now - pd.Timedelta(hours=3), now - pd.Timedelta(hours=2),
+           now + pd.Timedelta(hours=1)]
+    seg = [0, 1, 1]
+    tr = _b1_run(seg, dts=dts, exec_penalty_mode="b1",
+                 max_adverse_gap_atr=0.0)
+    # 剔除未收盘根后只剩 2 根：bar1 建仓 + 末尾强平
+    assert len(tr) == 1
+    assert tr[0]["exit_dt"] <= dts[1]
