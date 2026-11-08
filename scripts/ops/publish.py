@@ -242,6 +242,12 @@ def main() -> int:
               f"/app/conftest.py > /Docker/qhyc/conftest.py")
         return 1
     print("容器 running，bind 挂载源齐全且类型正确")
+    # pull 之前先记下「上一轮部署是否收口」：标记必须对齐**旧** HEAD。
+    # ⚠ 不能拿标记跟新 HEAD 比——标记本来就是上一次发布写的，那样每次发布
+    # 都会误判成未收口，触发一次完全没必要的 api 重启（2026-11-08 首版踩过）。
+    prod_head_before = _ssh(f"cd {PROD_REPO} && git rev-parse --short HEAD").strip()
+    mark_before = _ssh(f"cd {PROD_REPO} && head -1 {DEPLOY_MARK} 2>/dev/null",
+                       check=False).strip()
 
     # ---- 5) 拉取 + 比对 ----
     _banner("5/6 生产 pull")
@@ -292,11 +298,10 @@ def main() -> int:
     # 上一次发布若在第 6 步中途失败（例如脚本自身抛异常），代码已经 pull 了但
     # 部署标记没写、api 没重启。重跑本脚本时 changed 为空，若无这个条件就会
     # 误判「无需重启」，把半成品留到第二天。标记缺失 = 部署未收口，必须补完。
-    mark_now = _ssh(f"cd {PROD_REPO} && head -1 {DEPLOY_MARK} 2>/dev/null",
-                    check=False).strip()
-    mark_pending = not mark_now.startswith(head)
+    mark_pending = not mark_before.startswith(prod_head_before)
     if mark_pending:
-        print(f"部署标记未对齐（当前 {mark_now!r}，应为 {head}）→ 视为上次发布未收口")
+        print(f"上次部署未收口（标记 {mark_before!r} 未对齐 pull 前 HEAD "
+              f"{prod_head_before}）→ 本轮补完重启")
     need_restart = bool(touched_app) or mark_pending
     if need_restart and not a.no_restart:
         print(f"{'app/ 有 ' + str(len(touched_app)) + ' 个文件变更' if touched_app else '补完上次未收口的部署'}"
