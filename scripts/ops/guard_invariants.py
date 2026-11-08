@@ -611,6 +611,37 @@ def _c_roll_gap_data(c: Ctx) -> tuple[bool, str, str, str]:
         "；".join(bad) + " → 换月又归到日盘收盘桶或后复权未重建（CL-20261107-15）")
 
 
+def _c_roll_positivity_shortcircuit(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261107-16 / C2：默认路径必须短路 shift 计算，否则 min5 会再 OOM。
+
+    055 及以前 `low_off` 对每根 bar 跑相关子查询、`shift_calc` 再做一次
+    `max(low)-min(low)` 全表聚合；结果却只在 p_positivity=true 才被使用，
+    生产所有调用都走 false。bar_5m = 3477 MB / 82 品种，PG 容器只有 3 GiB，
+    全量 min5 重跑两次 OOM（42/71 分钟）、堵 `ALTER TABLE fusion_position` 58 分钟。
+    056 用 `AND 'f'::boolean` 让优化器常数折叠成空集，并把 true 分支改成区间 JOIN。
+    """
+    label = "min5 后复权 shift 默认路径短路（056 未回退）"
+    try:
+        d = c.scalar(
+            "SELECT pg_get_functiondef("
+            "'public.sp_build_l2_roll_segment(text,boolean,text)'::regprocedure)") or ""
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {exc}", "读取 SP 定义失败"
+    must = {
+        "常数短路": "AND %4$L::boolean",
+        "区间JOIN": "LEFT JOIN full_segs s",
+        "取消二次全表聚合": "greatest(max(low) - min(low), 1.0)",
+    }
+    missing = [k for k, t in must.items() if t not in d]
+    legacy = "ORDER BY s.seg_start DESC LIMIT 1" in d
+    ok = not missing and not legacy
+    return ok, label, (
+        f"ddl_len={len(d)} 缺失={missing or '无'} 旧相关子查询残留={legacy}"), (
+        "" if ok else
+        "056 被回退或只改了一半 → p_positivity=false 仍会全表扫 bar_5m，"
+        "min5 重跑可能再次打满 3 GiB 容器内存并堵锁（CL-20261107-16）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-WHITELIST-NONEMPTY", "白名单表非空且有效", "block", _c_whitelist_nonempty),
     ("VAR-SIGNAL-IN-WHITELIST", "融合信号品种 ⊆ 白名单", "block", _c_signal_in_whitelist),
@@ -640,6 +671,8 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 一条防 SP 回退、一条盯当前主表状态，都是「此刻可判」，不靠时间衰减。
     ("L2-ROLL-GAP-AWARE", "L2 换月映射跨休市感知（055 未回退）", "block", _c_roll_gap_aware),
     ("L2-ROLL-GAP-DATA", "PF888 夜盘换月段位置与后复权偏移", "block", _c_roll_gap_data),
+    ("L2-POSITIVITY-SHORTCIRCUIT", "min5 shift 默认路径短路（056 未回退）", "block",
+     _c_roll_positivity_shortcircuit),
 ]
 
 
