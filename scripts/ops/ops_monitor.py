@@ -45,7 +45,9 @@ LOAD_WARN_RATIO = 1.5      # load5 > cores × 1.5
 MEM_WARN = 85.0            # %
 DISK_WARN = 85.0           # %
 DISK_CRIT = 93.0           # %
-DATA_LAG_WARN = 2          # 天
+DATA_LAG_WARN = 2          # 天（自然日；仅在交易日真源不可用时兜底）
+DATA_LAG_TRADE_WARN = 0    # 个交易日；落后 >0 即报（期望值已扣除未收盘的今天）
+SETTLE_HOUR = 19           # 日线入库截止小时（daily_futures_refresh 18:10 触发，留 50min 余量）
 PUSH_SILENCE_WARN = 24     # 小时
 MARKET_LIVE_H = 6          # 市场数据 6h 内有更新 ⇒ 视为交易时段（休市静默不算故障）
 SIGNAL_STALL_WARN = 3      # 小时；交易时段内无任何推送记录超过该值 ⇒ 链路停摆
@@ -232,15 +234,51 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
         issues.append(("crit", "db", "TimescaleDB 不可查询"))
 
     # 4. 数据新鲜度（表不存在/空表时跳过，避免回迁期误报）
+    #
+    # ★ 2026-11-09（CL-20261109-01）：原判据 `(today - max(trade_date)).days > 2`
+    #   按**自然日**算，周末两天必然把 lag 顶到 3 → 每逢周末/长假必误报。
+    #   11-09 00:00 那条「日线数据滞后 3 天（最新 2026-11-06）」即假告警：
+    #   daily_bar 的 max(trade_date) 与交易日真源 futures_rule 完全一致（都是 11-06），
+    #   数据零滞后。改为「以最后一个已收盘交易日为期望，数缺失的交易日个数」。
+    #   真源用 futures_rule + cfg_calendar_seed_meta.seeded_through（akshare 播种，
+    #   每日 08:00 由 seed_futures_rule 刷新）；**不可用** ``l3_ref.trade_calendar``
+    #   —— 那是止于 2026-10-08 的 R2 推断死表（CL-20261107-18）。
     ok, out = psql_fn("SELECT max(trade_date)::text FROM daily_bar")
     m["latest_data_date"] = out.strip() if ok and out.strip() else None
     if m["latest_data_date"] and m["latest_data_date"] not in ("", "None"):
         try:
             d = datetime.strptime(m["latest_data_date"], "%Y-%m-%d").date()
-            lag = (datetime.now(SH).date() - d).days
-            m["data_lag_days"] = lag
-            if lag > DATA_LAG_WARN:
-                issues.append(("warn", "data_lag", f"日线数据滞后 {lag} 天（最新 {m['latest_data_date']}）"))
+            m["data_lag_days"] = (datetime.now(SH).date() - d).days   # 自然日，仅展示
+            # 期望最新交易日：今天若是交易日，需已过结算入库时刻(SETTLE_HOUR)才计入，
+            # 否则取前一交易日 —— 这样「当天数据没到」能当天报，周末又不会误报。
+            trade_sql = (
+                "WITH exp AS ("
+                "  SELECT max(trade_date) AS d FROM futures_rule"
+                "  WHERE trade_date < CURRENT_DATE"
+                "     OR (trade_date = CURRENT_DATE"
+                "         AND EXTRACT(HOUR FROM now() AT TIME ZONE 'Asia/Shanghai') >= {h})"
+                ") SELECT coalesce((SELECT d::text FROM exp), '') || '|' ||"
+                "  (SELECT count(DISTINCT trade_date)::text FROM futures_rule, exp"
+                "    WHERE futures_rule.trade_date > '{d}'"
+                "      AND futures_rule.trade_date <= exp.d)"
+            ).format(h=SETTLE_HOUR, d=d.isoformat())
+            ok2, buf = psql_fn(trade_sql)
+            exp_s, gap_s = "", ""
+            if ok2 and "|" in buf:
+                exp_s, gap_s = [x.strip() for x in buf.strip().split("|", 1)]
+            if exp_s and gap_s.isdigit():
+                m["expected_trade_date"] = exp_s
+                m["data_lag_trade"] = int(gap_s)
+                if int(gap_s) > DATA_LAG_TRADE_WARN:
+                    issues.append((
+                        "warn", "data_lag",
+                        f"日线落后 {gap_s} 个交易日（最新 {d}，应为 {exp_s}；"
+                        f"自然日 {m['data_lag_days']} 天）"))
+            elif m["data_lag_days"] > DATA_LAG_WARN:
+                # 交易日真源不可用 → 退回自然日判据（宁可误报，不可漏报）
+                issues.append((
+                    "warn", "data_lag",
+                    f"日线数据滞后 {m['data_lag_days']} 天（最新 {d}，交易日真源不可用）"))
         except ValueError as exc:
             logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
 
@@ -311,8 +349,13 @@ def render_alert(issues, metrics) -> str:
               f"负载 {metrics.get('load5')}（{metrics.get('cores')} 核）｜"
               f"内存 {metrics.get('mem_pct')}%｜磁盘 {metrics.get('disk_pct')}%｜"
               f"剩余 {metrics.get('disk_free_gb')} GB"]
-    if metrics.get("data_lag_days") is not None:
-        lines.append(f"数据最新 {metrics.get('latest_data_date')}（滞后 {metrics.get('data_lag_days')} 天）")
+    if metrics.get("data_lag_trade") is not None:
+        lines.append(f"数据最新 {metrics.get('latest_data_date')}"
+                     f"（落后 {metrics.get('data_lag_trade')} 个交易日，"
+                     f"应为 {metrics.get('expected_trade_date')}）")
+    elif metrics.get("data_lag_days") is not None:
+        lines.append(f"数据最新 {metrics.get('latest_data_date')}"
+                     f"（自然日滞后 {metrics.get('data_lag_days')} 天）")
     return "\n".join(lines)
 
 
@@ -326,8 +369,13 @@ def render_daily(metrics, issues) -> str:
              f"- API /health：{metrics.get('api_code')}｜DB：{'ok' if metrics.get('db_ok') else 'DOWN'}",
              ]
     if metrics.get("latest_data_date"):
-        lines.append(f"- 数据最新：{metrics.get('latest_data_date')}"
-                     f"（滞后 {metrics.get('data_lag_days')} 天）")
+        if metrics.get("data_lag_trade") is not None:
+            lines.append(f"- 数据最新：{metrics.get('latest_data_date')}"
+                         f"（落后 {metrics.get('data_lag_trade')} 个交易日，"
+                         f"应为 {metrics.get('expected_trade_date')}）")
+        else:
+            lines.append(f"- 数据最新：{metrics.get('latest_data_date')}"
+                         f"（自然日滞后 {metrics.get('data_lag_days')} 天）")
     if metrics.get("push_silence_h") is not None:
         lines.append(f"- 距上次成功推送：{metrics.get('push_silence_h')} 小时")
     if metrics.get("market_age_h") is not None:
