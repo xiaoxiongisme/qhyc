@@ -202,13 +202,12 @@ def reprice_orders(
 
         if typ == "CLOSE":
             stats["n_close"] += 1
-            if pos is None:
-                stats["n_orphan"] += 1
-                continue
             if dropped:                          # 开仓未成交 → 整段作废，无盈亏
                 stats["n_dropped_episode"] += 1
-                pos = None
                 dropped = False
+                continue
+            if pos is None:
+                stats["n_orphan"] += 1
                 continue
             px, j = fill_price(i, dirn, False, closes, opens, n, fill_mode, eff_tick)
             if fill_mode == "next_open" and i + 1 >= n:

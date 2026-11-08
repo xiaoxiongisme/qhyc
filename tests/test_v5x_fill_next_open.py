@@ -194,10 +194,10 @@ def test_next_open_does_not_double_count_slippage():
     trades, _ = _run_reprice(bars, orders, [1.0, 1.0, 1.0], cost=cost,
                              fill_mode="next_open", tick=1.0, gap=0.0, tds=[0, 0, 0])
     t = trades[0]
-    # 开仓 101（=open[1]+1tick）、平仓 119（=open[2]-1tick）→ 毛 18 点 × 10
-    assert t["P"] == pytest.approx(101.0)
+    # 开仓 111（=open[1]+1tick）、平仓 119（=open[2]-1tick）→ 毛 8 点 × 10 = 80
+    assert t["P"] == pytest.approx(111.0)
     assert t["X"] == pytest.approx(119.0)
-    assert t["gross"] == pytest.approx(180.0)
+    assert t["gross"] == pytest.approx(80.0)
     assert t["gross"] - t["net"] == pytest.approx(4.0), "成本只能是两笔手续费，不能含 99 滑点"
 
 
