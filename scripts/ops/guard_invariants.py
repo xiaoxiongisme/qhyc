@@ -1148,7 +1148,11 @@ def _c_bt_ba_price_space(c: Ctx) -> tuple[bool, str, str, str]:
 
     # ---------- ② 跳空判定用 sig 空间 / 成交价用真实价 ----------
     def _states_frame(with_sig: bool) -> pd.DataFrame:
-        states = [0] * k + [1] * 5 + [0] * (n - k - 5)
+        # 信号必须落在换月**前一根**（i=k-1）：这样成交根 j=k 的开盘价与信号根
+        # 收盘价之间才存在那 20 点「合约价差」，才谈得上「真跳空 vs 假跳空」。
+        # 若信号落在 i=k，O[k] 与 C[k] 同属新合约，两边都是 0 跳空 → 对照组失效
+        # （这正是本断言第一版写成 1 笔的 bug）。
+        states = [0] * (k - 1) + [1] * 6 + [0] * (n - k - 5)
         d = {
             "dt": dts,
             "open": raws, "high": raws, "low": raws, "close": raws,
