@@ -35,6 +35,12 @@ class _Result:
         if isinstance(first, (tuple, list)):
             return first[0] if first else None
         return first
+    def scalars(self):
+        # 2026-11-07 起 _ref_trading_days / check_missing 基线查询改用
+        # .scalars().all()；fake 缺这个方法会把整项检查吞成 continue（0 工单）。
+        return self
+    def all(self):
+        return [r[0] if isinstance(r, (tuple, list)) else r for r in self._rows]
 
 
 class FakeSession:
@@ -66,18 +72,34 @@ class FakeSession:
         self.tickets = 0
         self.committed = 0
 
+    # 2026-11-07 起 check_missing 取「近 N 个交易日」做基线，fake 需回报日历。
+    _REF_DAYS = (date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 23),
+                 date(2026, 9, 24), date(2026, 9, 25))
+
+    def _missing_rows(self):
+        """把注入的 (symbol, 当日根数) 扩成新版 check_missing 期望的 6 列
+        ``(symbol, c, 中位 m, lo, hi, ndays)``：近 5 日中位 32 根且窗口稳定
+        → 10 根判缺失 >5%。**原有断言不变**，只让假结果集跟上生产 SQL。"""
+        return [(sym, c, 32.0, 32.0, 32.0, 5) for sym, c in self.missing_rows]
+
     def execute(self, sql, params=None):
         s = str(sql).lower()
         p = params or {}
         if "information_schema.columns" in s:   # _time_col 的表结构探测
             t = str(p.get("t") or "").lower()
             return _Result([(c,) for c in self._TIME_COLS.get(t, [])])
-        if "from bar_15m" in s and "bucket::date" in s:   # 仅 bar_15m 注入缺失样本
-            return _Result(self.missing_rows)
-        if "bucket::date" in s:               # 其余表的缺失查询（无注入样本）
-            return _Result([])
-        if "volume = 0" in s:                # check_zero_volume 的零成交查询
+        if "tradable_scope_array" in s:          # 品种口径：无 DB → fail-open
+            return _Result([(None,)])
+        if "select distinct trade_date from daily_bar" in s:   # 交易日历真源
+            return _Result([(d,) for d in self._REF_DAYS])
+        if "select distinct" in s and "::date from" in s:      # 表内基线日期回退
+            return _Result([(d,) for d in self._REF_DAYS])
+        if "volume = 0" in s:                    # check_zero_volume 的零成交查询
             return _Result(self.zero_rows)
+        if "with daily as" in s or "percentile_cont" in s:     # check_missing 主查询
+            if "from bar_15m" in s:             # 仅 bar_15m 注入缺失样本
+                return _Result(self._missing_rows())
+            return _Result([])
         if "max(bucket)" in s or "max(ts)" in s:   # 尾部回退查询
             return _Result([(self.tail_max,)] if self.tail_max is not None else [(None,)])
         if "insert into anomaly_ticket" in s:      # 写工单

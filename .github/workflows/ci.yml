@@ -26,10 +26,31 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -q
       - name: Guard — tests must actually run
+        # 2026-11-08 / CL-20261108-17：原门禁只数 '::' 行数，实测 pytest 收集
+        # 阶段 1 error 时仍会输出 279 行用例名 → n>40 假绿。必须先验 collect 退出码。
         run: |
-          n=$(python -m pytest tests/ -q --collect-only 2>/dev/null | grep -c '::' || true)
+          set +e
+          out=$(python -m pytest tests/ -q --collect-only 2>&1)
+          rc=$?
+          set -e
+          echo "$out" | tail -6
+          test "$rc" -eq 0 || { echo "::error::pytest 收集阶段失败 (rc=$rc) — 收集中断时不得靠用例数蒙混"; exit 1; }
+          n=$(printf '%s\n' "$out" | grep -c '::' || true)
           echo "collected cases: $n"
           test "$n" -gt 40 || { echo "::error::collected too few cases ($n) — 疑似收集中断"; exit 1; }
+      - name: Guard — E3 same-source parity (P2-4 / CL-20261108-17)
+        # E3 两个测试必须零 DB 可跑：不得被整体 skip，也不得 0 用例假绿。
+        run: |
+          set +e
+          out=$(python -m pytest tests/test_data_same_source.py tests/test_signal_parity.py -q -rs 2>&1)
+          rc=$?
+          set -e
+          echo "$out" | tail -25
+          test "$rc" -eq 0 || { echo "::error::E3 同源断言失败（CI 判红）"; exit 1; }
+          echo "$out" | grep -Eq '[0-9]+ passed' || { echo "::error::E3 没有任何真正运行的用例"; exit 1; }
+          if echo "$out" | grep -Eq '[0-9]+ skipped'; then
+            echo "::error::E3 用例被跳过：CI 无 DB 也必须可跑"; exit 1
+          fi
 
   lint:
     runs-on: ubuntu-latest

@@ -1109,7 +1109,127 @@ def _c_bt_exec_fork_declared(c: Ctx) -> tuple[bool, str, str, str]:
         + "。执行分叉声明已与当前行为脱节，E1 结论不可信（CL-20261108-14）")
 
 
+def _c_ci_same_source_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """P2-4 / E3 / CL-20261108-17：CI 同源断言必须真接线且**此刻真通过**。
+
+    衡量「现在的行为」，不查历史流水、也不只查字符串：
+      · 两个 E3 测试文件存在，且 AST 里确有关键用例（防文件被掏空）；
+      · 根 ``conftest.py`` 确实把 ``scripts/`` 加进 ``sys.path``
+        （``235711a`` 误删它导致 GitHub 侧 pytest 整轮 0 用例）；
+      · ``compute_factor_v1v6`` 顶层 import 的 ``factor_ic_scan`` / ``pgconn``
+        在磁盘上可解析（防「清理未使用脚本」再次打断收集阶段）；
+      · **直接执行 pytest 跑这两个文件**：rc=0、passed≥20、零 skipped。
+
+    ⚠ 容器 ``/app`` 没有 ``.github/``，``ci.yml`` 的接线由 CI 自身的显式
+      E3 step 自检，并由 C1–C5 三方同 sha 保证 GitHub/生产/本地配置一致。
+    """
+    import ast
+    import subprocess
+
+    label = "CI 同源断言已接线且真实通过（E3 / P2-4）"
+    root = Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    observed: list[str] = []
+    tests = root / "tests"
+
+    # ① 文件 + 关键用例（AST，防注释字符串假阳性）
+    required = {
+        "test_data_same_source.py": (
+            "test_backtest_and_live_read_identical_bars",
+            "test_source_drift_sentinel_fires",
+            "test_both_chains_wired_to_single_entry",
+        ),
+        "test_signal_parity.py": (
+            "test_same_params_hash_same_direction",
+            "test_params_drift_is_detected",
+            "test_execution_fork_contract_declared",
+        ),
+    }
+    for name, funcs in required.items():
+        p = tests / name
+        if not p.is_file():
+            bad.append(f"{name} 缺失")
+            continue
+        try:
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+            defined = {n.name for n in ast.walk(tree)
+                       if isinstance(n, ast.FunctionDef)}
+            miss = [f for f in funcs if f not in defined]
+            observed.append(f"{name}:{len(defined)}funcs")
+            if miss:
+                bad.append(f"{name} 关键用例缺失 {miss}")
+        except Exception as exc:                              # noqa: BLE001
+            bad.append(f"{name} 解析失败：{type(exc).__name__}: {exc}")
+
+    # ② 根 conftest.py：scripts/ 必须在 sys.path 上
+    cf = root / "conftest.py"
+    if not cf.is_file():
+        bad.append("根 conftest.py 缺失（235711a 误删事故复发）")
+    else:
+        try:
+            src = cf.read_text(encoding="utf-8")
+            has_insert = any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "insert"
+                for n in ast.walk(ast.parse(src)))
+            if not (has_insert and "scripts" in src):
+                bad.append("conftest.py 未把 scripts/ 加进 sys.path")
+            else:
+                observed.append("conftest=sys.path+scripts")
+        except Exception as exc:                              # noqa: BLE001
+            bad.append(f"conftest.py 解析失败：{type(exc).__name__}: {exc}")
+
+    # ③ 顶层 import 可达性：被误删一个就会让 pytest 收集整轮中断
+    cf2 = root / "scripts" / "compute_factor_v1v6.py"
+    if cf2.is_file():
+        try:
+            mods = {
+                n.module for n in ast.walk(ast.parse(cf2.read_text(encoding="utf-8")))
+                if isinstance(n, ast.ImportFrom)
+                and n.module in ("factor_ic_scan", "pgconn")
+            }
+            for m in sorted(mods):
+                ok = (root / "scripts" / f"{m}.py").is_file()
+                observed.append(f"{m}.py={'ok' if ok else 'MISSING'}")
+                if not ok:
+                    bad.append(f"scripts/{m}.py 缺失 → pytest 收集会整轮中断")
+            if not mods:
+                bad.append("compute_factor_v1v6 顶层依赖清单为空，检查逻辑需复核")
+        except Exception as exc:                              # noqa: BLE001
+            bad.append(f"compute_factor_v1v6 解析失败：{type(exc).__name__}: {exc}")
+    else:
+        observed.append("compute_factor_v1v6=absent")
+
+    # ④ 行为级：此刻真的执行 E3 两个测试文件
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest",
+             str(tests / "test_data_same_source.py"),
+             str(tests / "test_signal_parity.py"),
+             "-q", "-rs", "-p", "no:cacheprovider"],
+            cwd=str(root), capture_output=True, text=True, timeout=180)
+        lines = [x for x in proc.stdout.strip().splitlines() if x.strip()]
+        tail = lines[-1] if lines else "(no stdout)"
+        observed.append(f"pytest_rc={proc.returncode} {tail[:90]}")
+        if proc.returncode != 0:
+            bad.append(f"E3 pytest rc={proc.returncode}：{tail[:160]}")
+        m = re.search(r"(\d+) passed", proc.stdout)
+        if not m or int(m.group(1)) < 20:
+            bad.append("E3 passed 用例数 <20（疑似 0 用例假绿）")
+        if re.search(r"\d+ skipped", proc.stdout):
+            bad.append("E3 出现 skipped（CI/容器都不该跳过同源断言）")
+    except Exception as exc:                                  # noqa: BLE001
+        bad.append(f"E3 pytest 执行失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。CI 同源断言未真实生效，E3 结论不可信（CL-20261108-17）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
+    # P2-4 E3：CI 门禁复活 + data_same_source / signal_parity 真实接线并执行。
+    ("CI-SAME-SOURCE-WIRED", "CI 同源断言已接线且真实通过（E3 / P2-4）",
+     "block", _c_ci_same_source_wired),
     # P2-3 E1-A/E1-B：6 处分叉用声明式白名单钉住，且断言逐项核实「声明仍成立」。
     # 特别防「参数默认值被改了但声明表没更新」——E1 结论全部建立在实测数值上。
     ("BT-EXEC-FORK-DECLARED", "执行分叉声明契约与当前行为一致（E1-A/E1-B）",

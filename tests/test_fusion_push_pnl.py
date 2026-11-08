@@ -1,4 +1,13 @@
-"""融合策略微信推送盈亏金额契约（信号估算口径，非实际成交）。"""
+"""融合策略微信推送盈亏金额契约（信号估算口径，非实际成交）。
+
+⚠ 2026-11-08 / CL-20261108-18：本文件是**僵尸测试**，整组 skip，不得删除。
+``68bfe82``（2026-11-06/07 同步 130 个生产 hotfix）已把「推送盈亏金额」整体下线：
+``app/scheduler.py`` 中 ``_MULT_CACHE`` / ``_MULT_WARNED`` / ``_pnl_yuan`` 均已不存在，
+``pnl_yuan`` 在 app/ 与 scripts/ 全仓 0 命中。此前 CI 在这 3 个用例的 autouse
+fixture 阶段就 AttributeError（3 errors），是 CI 常年判红的存量欠债。
+不得以「让测试变绿」为由删文件或放宽断言；功能若要恢复或测试若要重写，
+须先关闭 CL-20261108-18 并重新定义契约。
+"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -7,13 +16,18 @@ import pytest
 
 import app.scheduler as sched
 
+pytestmark = pytest.mark.skip(
+    reason="CL-20261108-18: 推送盈亏金额功能已于 68bfe82 下线，"
+           "本文件测的 _pnl_yuan/_MULT_CACHE 已不存在，待重新定义契约")
+
 
 @pytest.fixture(autouse=True)
 def _clear_pnl_caches():
-    for cache in (sched._MULT_CACHE, sched._DEC_CACHE):
-        cache.clear()
-    sched._MULT_WARNED.clear()
-    sched._DEC_WARNED.clear()
+    # 符号可能已随功能下线而消失；用 getattr 容错，避免 skip 前 fixture 先炸。
+    for name in ("_MULT_CACHE", "_DEC_CACHE", "_MULT_WARNED", "_DEC_WARNED"):
+        obj = getattr(sched, name, None)
+        if obj is not None and hasattr(obj, "clear"):
+            obj.clear()
     yield
 
 
