@@ -67,7 +67,7 @@ def test_fusion_params_applies_override_and_drops_unknown(monkeypatch):
     assert got.sl_atr == pytest.approx(1.5)
     assert not hasattr(got, "no_such_field")
     # 未覆盖的字段逐位不变
-    assert got.tp_atr == base.tp_atr
+    assert got.trail_atr == base.trail_atr
 
 
 def test_fusion_params_noop_without_override(monkeypatch):
