@@ -1549,24 +1549,37 @@ def _c_schedule_parity(c: Ctx) -> tuple[bool, str, str, str]:
         if have.strip() != want:
             bad.append(f"{tid} 字典 schedule={have!r} != 代码期望 {want!r}")
 
-    # 代码侧：fusion 的 minute 字面量必须与 SCAN_MINUTES 同源
+    # 代码侧：fusion_scan 那个 add_job 的 minute 字面量必须与 SCAN_MINUTES 同源
+    # （按 id 精确定位，不能扫全文件 —— 文件里有几十个 CronTrigger，取到别的作业
+    #   的 minute='35' 会得到假 FAIL）
     try:
         src = (Path(__file__).resolve().parents[2] / "app" / "scheduler.py").read_text(
             encoding="utf-8")
         tree = ast.parse(src)
         fusion_minutes = None
         for n in ast.walk(tree):
-            if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Name):
+            if not isinstance(n, ast.Call):
                 continue
-            if n.func.id != "CronTrigger":
+            fn = n.func
+            name = getattr(fn, "attr", None) or getattr(fn, "id", None)
+            if name != "add_job":
                 continue
-            for kw in n.keywords:
-                if kw.arg == "minute" and isinstance(kw.value, ast.Constant):
-                    fusion_minutes = str(kw.value.value)
+            kws = {kw.arg: kw.value for kw in n.keywords if kw.arg}
+            idv = kws.get("id")
+            if not (isinstance(idv, ast.Constant) and idv.value == "fusion_scan"):
+                continue
+            trig = kws.get("trigger")
+            if isinstance(trig, ast.Call):
+                for kw in trig.keywords:
+                    if kw.arg == "minute":
+                        fusion_minutes = (kw.value.value
+                                          if isinstance(kw.value, ast.Constant) else "<expr>")
         want_minutes = ",".join(str(m) for m in SCAN_MINUTES)
         observed.append(f"code_minute={fusion_minutes!r}")
-        if fusion_minutes is not None and fusion_minutes != want_minutes:
-            bad.append(f"scheduler.py 里 CronTrigger(minute={fusion_minutes!r}) "
+        if fusion_minutes is None:
+            bad.append("scheduler.py 未找到 id='fusion_scan' 的 add_job(minute=...)")
+        elif fusion_minutes != want_minutes:
+            bad.append(f"scheduler.py 里 fusion_scan 的 CronTrigger(minute={fusion_minutes!r}) "
                        f"与 SCAN_MINUTES={want_minutes!r} 不一致")
     except Exception as exc:                              # noqa: BLE001
         bad.append(f"scheduler.py AST 检查失败：{type(exc).__name__}: {exc}")
