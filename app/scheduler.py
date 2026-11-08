@@ -3035,6 +3035,18 @@ def _minute_and_bars_job() -> None:
     logger.info("[scheduler] minute_and_bars start")
     try:
         from app.core.config import get_settings
+        # ★ CL-20261109-04（2026-11-09）：本作业此前**无任何时段门**，每小时 :07/:37
+        # 无条件拉 akshare。而新浪在休市期会返回时间戳落在非交易时段的合成 bar
+        # （实测 ag0 在 11-07 02:30 收盘后紧跟一根 2026-11-09 00:00、volume=121），
+        # 于是周一凌晨 00:07 这一轮就把 11 根幽灵 bar 写进 l0 → 60m → bar_60m_ba，
+        # 占住 V5X 状态机上一根的位置，全程不报错。
+        # 与 cron_fetch_1min 用同一个 is_collection_window（它早已正确排除周一凌晨）。
+        # 采集器内部另有逐根判定做第二道防线，防其他调用方绕过本门。
+        from app.ingest.trading_window import is_collection_window
+
+        if not is_collection_window():
+            logger.info("[scheduler] minute_and_bars 跳过：非采集窗口（休市期无新 bar）")
+            return
         # 注意：IngestConfig 挂在 YamlConfig 下（Settings 只有 env/yaml 两个顶层字段），
         # 必须走 .yaml.ingest；写成 .ingest 会在本作业首次触发时抛 AttributeError，
         # 被外层 except 吞掉后表现为「作业静默不干活」，正是本次要根治的那类故障。

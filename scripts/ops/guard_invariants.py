@@ -391,6 +391,92 @@ def _c_calendar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
         f"官方日历落后 {lag} 天 → 指数扩展的坏日门会静默失效（CL-20261107-18）")
 
 
+def _c_l0_no_offhours_bar(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-04：l0 不得出现时间戳落在**非交易时段**的 bar。
+
+    休市期新浪 ``futures_zh_minute_sina`` 会返回一根「时间戳 = 当前时刻」的合成 bar
+    （实测 ag0 末尾 11-07 02:30 后紧跟 2026-11-09 00:00，volume=121，OHLC 齐全），
+    而 11-09 是周一、**周一凌晨无夜盘**。这根 bar 一路进 l0 → bar_60m → bar_60m_ba，
+    占住 V5X 状态机「上一根」的位置参与 EMA/ATR/开平判定，且全程不报错。
+
+    只看近 7 天：固定触发点是「每周一凌晨」，7 天足以覆盖一次；
+    不让远古 CSV 导入残留常红（历史脏数据由清理脚本处理，不该挡住当前发布）。
+    """
+    label = "l0 无时间戳落在非交易时段的 bar（CL-20261109-04）"
+    try:
+        n = c.scalar("""
+            SELECT count(*) FROM (
+              SELECT (ts AT TIME ZONE 'Asia/Shanghai') AS lts
+              FROM l0_raw.minute_bar
+              WHERE layer='continuous' AND ts >= now() - interval '7 days'
+            ) b
+            WHERE extract(dow FROM lts) = 0                                  -- 周日全天
+               OR (extract(dow FROM lts) = 1 AND lts::time < TIME '08:50')   -- 周一开盘前
+               OR (lts::time > TIME '02:40' AND lts::time < TIME '08:50')
+               OR (lts::time > TIME '15:20' AND lts::time < TIME '20:50')
+        """)
+        n = int(n or 0)
+        ok = n == 0
+        return ok, label, f"offhours_bars={n}", (
+            "" if ok else
+            f"{n} 根 bar 落在非交易时段 → 会污染 60m 与 V5X 状态机。"
+            "先确认 _minute_and_bars_job 的 is_collection_window 门没被绕过，"
+            "再清理 l0_raw.minute_bar 与 public.bar_60m 的对应行")
+    except Exception as exc:                                    # noqa: BLE001
+        return False, label, "", f"查询失败 {type(exc).__name__}: {exc}"
+
+
+def _c_minute_collect_window_gated(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-04：两个采集入口都必须真实调用时段门（AST 级，防被删/被注释）。
+
+    为什么要断言源码而不是只看数据：幽灵 bar 只在**每周一凌晨**出现，
+    数据侧断言要等到下周一才会转红；若期间有人把门删了，中间几天全是假绿。
+    这里直接钉住「作业层 + 采集器层」两处调用点，改坏了当场 FAIL。
+    """
+    label = "分钟采集作业与采集器都调用 is_collection_window（CL-20261109-04）"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import ast
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+
+        def _calls_gate(path: Path, func: str) -> tuple[bool, int]:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and node.name == func:
+                    hits = 0
+                    for sub in ast.walk(node):
+                        if isinstance(sub, ast.Call):
+                            fn = sub.func
+                            name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+                            if name == "is_collection_window":
+                                hits += 1
+                    return hits > 0, hits
+            return False, -1            # 函数本身不存在
+
+        ok_job, n_job = _calls_gate(root / "app" / "scheduler.py", "_minute_and_bars_job")
+        ok_col, n_col = _calls_gate(root / "app" / "ingest" / "minute_collector.py",
+                                    "_fetch_akshare")
+        observed.append(f"job_calls={n_job} collector_calls={n_col}")
+        if n_job == -1:
+            bad.append("scheduler.py 找不到 _minute_and_bars_job（改名了？断言需同步）")
+        elif not ok_job:
+            bad.append("_minute_and_bars_job 未调用 is_collection_window → "
+                       "休市期会再写幽灵 bar")
+        if n_col == -1:
+            bad.append("minute_collector.py 找不到 _fetch_akshare（改名了？）")
+        elif not ok_col:
+            bad.append("MinuteCollector._fetch_akshare 未逐根过滤非交易时段 bar → "
+                       "其他调用方可绕过作业层门")
+    except Exception as exc:                                    # noqa: BLE001
+        bad.append(f"扫描异常 {type(exc).__name__}: {exc}")
+    return (not bad), label, " ".join(observed), (
+        "" if not bad else "；".join(bad))
+
+
 # ---------------------------------------------------------------- 运行态一致性
 def _c_switch_job_consistency(c: Ctx) -> tuple[bool, str, str, str]:
     """代码开关（cfg_feature_switch）与字典开关（ops.scheduled_task）必须同向。
@@ -2940,6 +3026,12 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-SCOPE-VIEW-OK", "口径视图存在、非空、覆盖白名单", "block", _c_scope_view_healthy),
     ("DATA-L0-LAYERS-FRESH", "L0 各 layer 未断层", "block", _c_l0_layers_fresh),
     ("DATA-CALENDAR-FRESH", "官方交易日历覆盖到最新数据日", "block", _c_calendar_fresh),
+    # CL-20261109-04：休市期 akshare 会给「时间戳=当前时刻」的合成 bar，
+    # 采集作业无时段门 → 周一凌晨写入 11 根幽灵 bar，一路进 V5X 信号源且不报错。
+    ("L0-NO-OFFHOURS-BAR", "l0 无时间戳落在非交易时段的 bar", "block",
+     _c_l0_no_offhours_bar),
+    ("MINUTE-COLLECT-WINDOW-GATED", "采集作业与采集器都走交易时段门", "block",
+     _c_minute_collect_window_gated),
     # warn 而非 block：录权益是运营动作，且调度器已有每日一条 pushplus 提醒，
     # 守卫再报 block 只会重复轰炸。挂账后变 WAIVED，录满 20 天自动转 PASS。
     ("DATA-EQUITY-FRESH", "组合权益流新鲜", "warn", _c_equity_fresh),

@@ -11,7 +11,8 @@
   minute_bar 的更长历史由历史 CSV 批量导入维护，upsert 按 (symbol, ts)
   DO NOTHING 不会覆盖旧历史。这是 C9 收敛到 akshare 单一源后的已知降韧性取舍——
   天勤 原可拉 ~9000 根（约 21 日），切换后实时回溯窗口缩短，须确保 CSV 导入定期补历史。
-- 不强行对齐交易时段整点（那会丢分钟），仅剔除 NaN 价 / 1970 脏戳 / 未来戳。
+- 不强行对齐交易时段整点（那会丢分钟），仅剔除 NaN 价 / 1970 脏戳 / 未来戳，
+  以及**时间戳落在非交易时段的合成 bar**（CL-20261109-04，见 _fetch_akshare 内注释）。
 - 写入幂等：ON CONFLICT (symbol, ts) DO NOTHING，重复跑安全。
 """
 from __future__ import annotations
@@ -26,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import MainContractSpec, get_settings
 from app.core.logging import logger
+from app.ingest.trading_window import is_collection_window
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -155,10 +157,22 @@ class MinuteCollector:
         if df is None or df.empty:
             return []
         rows: list[dict] = []
+        n_offhour = 0
         for _, r in df.iterrows():
             dt = _parse_ak_minute_dt(r.get("datetime"))
             o = r.get("open"); h = r.get("high"); l = r.get("low"); c = r.get("close")
             if not _valid_minute_row(dt, o, h, l, c):
+                continue
+            # ★ CL-20261109-04（2026-11-09）：休市期新浪会返回「时间戳落在非交易时段」的
+            # 合成 bar。实测 ag0 收盘于 11-07 02:30，紧接着给出 2026-11-09 00:00
+            # （volume=121，OHLC 齐全），而 11-09 是周一、周一凌晨无夜盘。
+            # 这类 bar 进了 l0 → 60m 聚合 → bar_60m_ba（V5X 唯一信号源），会**占住状态机
+            # 上一根的位置**参与 EMA/ATR/开平判定，且全程不报错。故在入库前逐根按
+            # 交易时段判据（与 cron_fetch_1min 同一函数）拦掉。
+            # 注意判的是「这根 bar 自己的时间戳」，不是 now()——历史窗口里的合法 bar
+            # 必须放行，否则 1024 根历史会被整体误杀。
+            if not is_collection_window(dt):
+                n_offhour += 1
                 continue
             vol = r.get("volume")
             oi = r.get("hold")
@@ -181,6 +195,10 @@ class MinuteCollector:
                     "src": "akshare_1min",
                 }
             )
+        if n_offhour:
+            logger.warning(
+                f"[minute] {spec.symbol} 丢弃 {n_offhour} 根非交易时段 bar"
+                f"（休市期合成 bar，CL-20261109-04）")
         return rows
 
     # ---------- upsert ----------
