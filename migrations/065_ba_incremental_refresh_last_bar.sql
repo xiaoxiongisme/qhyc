@@ -110,7 +110,7 @@ END;
 $$;
 
 
-COMMENT ON PROCEDURE l2_adj.sp_build_l2_back_adjusted(text, boolean, boolean) IS
+COMMENT ON PROCEDURE l2_adj.sp_build_l2_back_adjusted(text, text, boolean) IS
     '后复权物化：raw + roll_segment 的 as-of join 写 l2_adj.bar_*m_ba。'
     'CL-20261109-12：增量下界改为 >=，每轮刷新最后一个已知桶，避免盘中全量重建'
     '留下的半成品 bar 永久冻结。历史中段修订仍需 --force-ba 全量重建。';
