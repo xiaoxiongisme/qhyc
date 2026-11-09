@@ -50,6 +50,8 @@ with eng.begin() as c:
 
     c.execute(text("DROP TABLE IF EXISTS ops.ab_window_20261109"))
     c.execute(text("""CREATE TABLE ops.ab_window_20261109 AS
-                      SELECT :st::date AS win_start, :en::date AS win_end, :n::int AS n_days"""),
+                      SELECT CAST(:st AS date) AS win_start,
+                             CAST(:en AS date) AS win_end,
+                             CAST(:n AS int)  AS n_days"""),
               {"st": str(start), "en": str(end), "n": len(days)})
 print("SNAPSHOT DONE")
