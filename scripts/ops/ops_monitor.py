@@ -342,7 +342,8 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
     #   11-06 23:04 起不再增长 ⇒ 「已 79 小时无成功推送」+「信号链路 65.7 小时无记录」
     #   成为**永久误报**，每 10 分钟各推一次。现改为：
     #     · 推送成功时间 = max(fusion_push_log.delivered, v5x_signal_log.notify_ok)
-    #     · 有信号却未送达 = v5x_signal_log 里 notify_ok IS NOT TRUE 的近 3 天记录
+    #     · 有信号却未送达 = v5x_signal_log 里 **source='live'** 且仍在补发窗口内、
+    #       notify_ok 非真的记录（replay 补录行按设计不推送，混进来就是永久误报）
     #     · 链路活性       = ops.scheduled_task_run 里 v5x_scan 最近一次 success
     #   「无信号」与「推不出去」必须分开衡量：V5X 是事件驱动，一天没事件本来就不推。
     ok, out = psql_fn(
@@ -351,7 +352,8 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
         " (SELECT max(created_at)::text FROM v5x_signal_log WHERE notify_ok),"
         " (SELECT max(created_at)::text FROM v5x_signal_log),"
         " (SELECT count(*) FROM v5x_signal_log"
-        "   WHERE notify_ok IS NOT TRUE AND created_at > now() - interval '3 days'),"
+        "   WHERE notify_ok IS NOT TRUE AND source='live'"
+        "     AND bar_ts > now() - interval '2 hours'),"
         " (SELECT enabled::text FROM cfg_feature_switch WHERE switch_key='v5x_live_enabled'),"
         " (SELECT enabled::text FROM cfg_feature_switch"
         "   WHERE switch_key='fusion_v34_live_enabled')")
@@ -381,7 +383,7 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
         m["push_silence_h"] = round(silence_h, 1)
     if last_signal_age is not None:
         m["last_signal_age_h"] = round(last_signal_age, 1)
-    m["v5x_unsent_3d"] = unsent
+    m["v5x_unsent_live"] = unsent
     m["push_sources"] = f"v5x={'on' if v5x_on else 'off'}/v34={'on' if v34_on else 'off'}"
 
     # 通道故障：只在「确实有推送需求」时下结论 —— 近 24h 内有信号产出才算。
@@ -396,7 +398,7 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
     # 有信号但没送达：比「静默」更精确，且不依赖推送表是否还在增长。
     if unsent > 0:
         issues.append(("warn", "push_unsent",
-                       f"{unsent} 条 V5X 信号落库但未送达（notify_ok 非真，近 3 天）"
+                       f"{unsent} 条 V5X 实盘信号仍在补发窗口（2h）内却未送达"
                        f"——查 PUSHPLUS_TOKEN / fusion.fallback_webhook / 网络"))
 
     # 5b. 信号链路活性：交易时段内扫描作业压根没成功跑完，说明调度/计算停了。
