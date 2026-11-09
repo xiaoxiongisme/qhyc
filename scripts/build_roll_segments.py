@@ -214,6 +214,17 @@ def map_roll_to_freq(g, events, freq_min):
     min(下一根, ts[j]+名义周期)；若锚点落在 [ts[j]+名义周期, 下一根) 的跨休市
     空隙内，改归下一根（第一个 >= 锚点的桶）。日盘内下一根 == ts[j]+名义周期，
     两版等价，252 个映射逐行不变。SQL 侧同步见 migrations/055。
+
+    2026-11-09 补充（CL-20261108-06，用户拍板补更细周期的精度）：上面的规则
+    对**更细周期**（freq < 锚点 15m，即 min5）是错的。15m 的 bucket 是右标签，
+    桶 a 覆盖 [a-15m, a)；锚点 gap 的定义是 `open - 前一根 close`，即跳空发生在
+    桶的**开盘第一笔**，也就是桶内**第一根**细周期 bar。而「最后一个 ts <= a」取
+    的是桶**末**根，等于把跳空推到桶尾：PF888 2026-11-04 夜盘 21:00 换月，
+    21:05/21:10 两根仍用旧 offset(=80)，21:15 才跳到 320，凭空造出一个 240 点
+    假跳空（真实连续价应为 8360/8368，实际是 8120/8128）。
+
+    故 freq < ANCHOR_MIN 时改取「桶内第一根」；桶内无 bar（早年 5m 数据稀疏）
+    时回退上面的旧规则，保证换月事件不丢。SQL 侧同步见 migrations/063。
     """
     tsv = (pd.to_datetime(g['bucket']).dt.tz_localize(None)
            .to_numpy(dtype='datetime64[ns]'))
@@ -224,23 +235,33 @@ def map_roll_to_freq(g, events, freq_min):
     drop = 0
     merge = 0
     fallback = np.timedelta64(int(freq_min), 'm')
+    finer = freq_min < ANCHOR_MIN          # min5 这种比锚点更细的周期
+    anchor_span = np.timedelta64(int(ANCHOR_MIN), 'm')
     for b, gap_ev in events:
         bn = np.datetime64(pd.Timestamp(b).tz_localize(None), 'ns')
-        j = int(np.searchsorted(tsv, bn, side='right')) - 1   # 最后一个 ts <= b
-        if j < 0:
-            drop += 1
-            continue
-        nxt = tsv[j + 1] if j + 1 < len(tsv) else tsv[j] + fallback
-        upper = min(nxt, tsv[j] + fallback)   # CL-15：覆盖上界不得超过名义周期
-        if bn >= upper:
-            # 锚点落在 [ts[j]+freq, nxt) —— 只可能是跨休市空隙（或末根之后）。
-            # 归到「第一个 bucket >= 锚点时刻」，即 nxt 本身（中间没有其他 bar）。
-            # 末根时 nxt == upper，bn >= upper 必然不满足 bn < nxt，走 drop，不会越界。
-            if bn < nxt:
-                j += 1
-            else:
-                drop += 1                   # 锚点在该 bar 覆盖区间之外（停牌/无数据）
+        j = None
+        if finer:
+            # CL-20261108-06：桶 (bn-anchor, bn] 内的第一根
+            i0 = int(np.searchsorted(tsv, bn - anchor_span, side='right'))
+            i1 = int(np.searchsorted(tsv, bn, side='right'))
+            if i1 > i0:
+                j = i0
+        if j is None:
+            j = int(np.searchsorted(tsv, bn, side='right')) - 1   # 最后一个 ts <= b
+            if j < 0:
+                drop += 1
                 continue
+            nxt = tsv[j + 1] if j + 1 < len(tsv) else tsv[j] + fallback
+            upper = min(nxt, tsv[j] + fallback)   # CL-15：覆盖上界不得超过名义周期
+            if bn >= upper:
+                # 锚点落在 [ts[j]+freq, nxt) —— 只可能是跨休市空隙（或末根之后）。
+                # 归到「第一个 bucket >= 锚点时刻」，即 nxt 本身（中间没有其他 bar）。
+                # 末根时 nxt == upper，bn >= upper 必然不满足 bn < nxt，走 drop，不会越界。
+                if bn < nxt:
+                    j += 1
+                else:
+                    drop += 1                   # 锚点在该 bar 覆盖区间之外（停牌/无数据）
+                    continue
         if roll[j]:
             merge += 1                      # 两个换月落在同一根高阶 bar 内
         roll[j] = True
