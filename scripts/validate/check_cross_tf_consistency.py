@@ -96,6 +96,25 @@ def _values_clause(mapping: dict[str, list[str]]) -> tuple[str, dict]:
     return ", ".join(frag), params
 
 
+#: 已登记、**无法重建**的数据源缺失（不是网格/聚合问题）。键 = (symbol, YYYY-MM-DD)。
+#: 只 suppresses 该品种当日的明细；不加这个表，一条永久性源缺口会在 30 天窗口内
+#: 每天 09:30 推一次告警，把真问题埋掉（2026-11-06 pushplus 额度被打爆就是这形态）。
+#: 新增条目必须写清「为什么补不回来」，并同步进 ops.change_log。
+KNOWN_DATA_GAPS: dict[tuple[str, str], str] = {
+    ("BR888", "2026-11-03"): "09:00~13:42 分钟源从未采集；akshare 单次仅回溯约 3 个交易日，"
+                              "local_csv 快照止于 2026-10-30 → 不可重建（CL-20261109-19）",
+    ("PF888", "2026-11-03"): "同上",
+}
+
+
+def _gap_key(problem: str) -> tuple[str, str] | None:
+    """从明细行取 (symbol, date)，用于匹配 KNOWN_DATA_GAPS。"""
+    import re
+
+    m = re.match(r"^(\S+)\s+(\d{4}-\d{2}-\d{2})\s", problem)
+    return (m.group(1), m.group(2)) if m else None
+
+
 def _check_one(conn, *, hi_tbl: str, lo_tbl: str,
                mapping: dict[str, list[str]], days: int,
                symbol: str | None, limit: int,
@@ -197,6 +216,13 @@ def main() -> int:
                                mapping=_MAP_30_TO_60, days=args.days,
                                symbol=args.symbol, limit=args.limit,
                                sym_set=sym_set)
+
+    suppressed = [p for p in problems if _gap_key(p) in KNOWN_DATA_GAPS]
+    if suppressed:
+        syms = sorted({_gap_key(p)[0] for p in suppressed})  # type: ignore[index]
+        print(f"[KNOWN-GAP] 已登记的数据源缺失 {len(suppressed)} 处，不计入不一致"
+              f"（{', '.join(syms)}；理由见 KNOWN_DATA_GAPS）")
+    problems = [p for p in problems if _gap_key(p) not in KNOWN_DATA_GAPS]
 
     if problems:
         print(f"[FAIL] 跨周期聚合不一致 {len(problems)} 处（前 {args.limit * 5} 条）：")
