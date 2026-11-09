@@ -3896,6 +3896,69 @@ def _c_ba_price_identity(c: Ctx) -> tuple[bool, str, str, str]:
         "rebuild_roll_all_freqs.py --force-ba 全量重建")
 
 
+#: CL-20261109-13：关键存储过程 → {必须存在的 token: 引入它的迁移}。
+#:
+#: 治的是**「拿旧基线迁移覆盖新迁移」**这一类事故。plpgsql 的
+#: `CREATE OR REPLACE PROCEDURE` 是全量替换：想改一行，就得把整段过程体重新写进去，
+#: 于是「从哪个迁移拷基线」变成了一个静默的、没人检查的选择。
+#:
+#: 2026-11-09 **同一天犯两次**：
+#:   ① `063` 基于 055 而非 056 重建 roll_segment → 056 的 positivity 短路消失
+#:      （p_positivity=false 也会全表扫 bar_5m，恢复 min5 OOM 的触发条件）；
+#:   ② `065` 基于 040 而非 053 重建 back_adjusted → 053 的 `tradable_scope_array`
+#:      口径 + 042 的四维签名一起消失（非白名单品种重新被派生，VAR-SCOPE-WIRED 判红）。
+#:
+#: 共同点：每次只消失**一个** token，而原有断言各自只盯自己那一个——
+#: ROLL-FINER-ANCHOR-WIRED 盯 063、VAR-SCOPE-WIRED 盯 053，恰好都不覆盖「被覆盖的那一方」。
+#: 所以这条断言不按「结论」而是按「迁移来源」组织：一次读取过程体，逐 token 追责到迁移号，
+#: 缺哪个就直接报「哪个迁移被覆盖」。口径是「当前生效的定义」，不依赖任何历史流水。
+MIG_PROC_BASELINE: dict[str, dict[str, str]] = {
+    "l2_adj.sp_build_l2_back_adjusted(text,text,boolean)": {
+        "tradable_scope_array": "053-S3 品种口径（白名单∪持仓豁免）",
+        "cum_offset_baseline": "042 四维触发签名 Σcum_offset",
+        "nseg_baseline": "042 四维触发签名 段数",
+        "b.bucket >= %L::timestamptz": "065/066 增量下界刷新最后一个桶",
+    },
+    "public.sp_build_l2_roll_segment(text,boolean,text)": {
+        "least(t.bucket +": "055 跨休市上界 clamp",
+        "SELECT t.next_bucket AS bar_ts": "055 空隙归 next_bucket 分支",
+        "fs.n_bars": "055 补 n_bars 列",
+        "AND %4$L::boolean": "056 positivity 常数短路",
+        "LEFT JOIN full_segs s": "056 区间 JOIN 替代相关子查询",
+    },
+    "public.sp_build_l1_from_minute(text,timestamptz,timestamptz)": {
+        "tradable_scope_array": "053-S2 L1 派生品种口径",
+        "amount=EXCLUDED.amount": "053 amount 列进 ON CONFLICT",
+    },
+}
+
+
+def _c_mig_proc_baseline(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-13：关键过程的多迁移 token 必须同时存在（防旧基线覆盖新迁移）。"""
+    label = "关键过程未被旧基线覆盖（迁移 token 集合完整）"
+    dead: list[str] = []
+    checked = 0
+    for sig, tokens in MIG_PROC_BASELINE.items():
+        try:
+            ddl = c.scalar(
+                "SELECT pg_get_functiondef(CAST(:sig AS regprocedure))", sig=sig) or ""
+        except Exception:                                 # noqa: BLE001
+            dead.append(f"{sig.split('(')[0]} 不存在")
+            continue
+        checked += 1
+        miss = [f"{src}" for tok, src in tokens.items() if tok not in ddl]
+        if miss:
+            short = sig.split("(")[0].split(".")[-1]
+            dead.append(f"{short} 缺[{', '.join(miss)}]")
+    return not dead, label, (
+        f"校验 {checked}/{len(MIG_PROC_BASELINE)} 个过程，缺失 {len(dead)} 处"
+        + (f"：{'；'.join(dead)}" if dead else "")
+    ), ("" if not dead else
+        "有人用旧迁移作基线 CREATE OR REPLACE 了过程体 → 上面列出的迁移改动已被静默回退。"
+        "修法：以**最新**一份重定义该过程的迁移为基线重写（不是最早那份），"
+        "并核对本条断言全绿（CL-20261109-13 / 同型前例 20261107-16、20261109-12）")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -4011,6 +4074,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 2026-10-21~10-28 违约、60m 最大 215 点。这条断言把"静默错位"变成红灯。
     ("BA-PRICE-IDENTITY", "后复权行与原始价自洽（ba.close - adj_offset == raw.close）",
      "block", _c_ba_price_identity),
+    # CL-20261109-13：2026-11-09 一天之内两次「拿旧迁移作基线 CREATE OR REPLACE」——
+    # 063 覆盖 056、065 覆盖 053。每次只丢一个 token，而既有断言各自只盯自己那一个，
+    # 正好漏掉被覆盖的那一方。这条按「迁移来源」逐 token 追责，缺了直接报哪个迁移被回退。
+    ("MIG-PROC-BASELINE", "关键过程未被旧基线覆盖（迁移 token 集合完整）",
+     "block", _c_mig_proc_baseline),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
