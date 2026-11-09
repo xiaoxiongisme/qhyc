@@ -1,16 +1,22 @@
 -- =============================================================================
 -- CL-20261108-06：15m 锚点映射到**更细周期**（min5）时的右标签精度修正
 --
--- 症状：PF888 2026-11-04 夜盘 21:00 换月，bar_5m_ba 的 21:05/21:10 两根仍是
---       旧 offset(80)，21:15 才跳到 320 → 连续序列上凭空多出 240 点假跳空
---       （真实连续价应为 8360/8368，实际是 8120/8128）。21:15 之后正确。
+-- ⚠ 本文件必须基于 **056** 的过程体（而非 055）。056 用 `%4$L::boolean`
+--   把 shift 计算常数折叠成空集（CL-20261107-16 / C2，min5 全量重跑两次 OOM
+--   的直接修法）。若从 055 的文本重新 CREATE OR REPLACE，会**静默回退**该优化
+--   ——2026-11-09 08:15 首次实施时正是这么踩的：单品种段重建从秒级退化到 166s。
+--   故本迁移第 5 个 format 参数是 p_freq（%5$L），p_positivity 仍是 %4$L。
+--
+-- 症状：PF888 2026-11-04 夜盘 21:00 换月，bar_5m_ba 的 21:05/21:10 仍是旧
+--       offset(80)，21:15 才跳到 320 → 连续序列凭空多出 240 点假跳空
+--       （真实连续价 8360/8368，实际 8120/8128）。21:15 之后正确。
 --
 -- 根因：15m bucket 是右标签（桶 a 覆盖 [a-15m, a)），锚点 gap 定义为
 --       `open - 前一根 close`，即跳空发生在桶的**开盘第一笔** = 桶内**第一根**
---       细周期 bar。旧规则「最后一个 ts <= a」取的是桶**末**根，把跳空推到桶尾。
+--       细周期 bar。旧规则「最后一个 ts <= a」取桶**末**根，把跳空推到桶尾。
 --
 -- 修法：freq < 锚点(15m) 时改取桶内第一根（分支①）；桶内无 bar（早年 5m
---       数据稀疏）时回退原规则（分支②/③），保证换月事件一个都不丢。
+--       数据稀疏）时回退原规则（分支②/③），保证换月事件不丢。
 --       非 min5 频率的 SQL 文本与执行结果逐字不变。
 --
 -- 配套：scripts/build_roll_segments.py::map_roll_to_freq 同步（双真源对齐）；
@@ -89,7 +95,7 @@ mapped AS (
     -- ① CL-20261108-06：比锚点更细的周期（min5）取「锚点桶内第一根」。
     --    15m bucket 是右标签，桶 a 覆盖 [a-15m, a)；锚点 gap = open - 前一根 close，
     --    即跳空落在桶的开盘第一笔 = 桶内第一根细周期 bar。旧规则取桶**末**根，
-    --    把夜盘 21:00 换月推到 21:15（PF888 2026-11-04 实测）。
+    --    把夜盘 21:00 换月推到 21:15（PF888 2026-11-04 实测 8120/8128 vs 8360/8368）。
     SELECT fb.bucket AS bar_ts, e.gap
     FROM roll_events e
     JOIN LATERAL (
@@ -100,16 +106,16 @@ mapped AS (
          ORDER BY f2.bucket
          LIMIT 1
     ) fb ON true
-    WHERE %4$L = 'min5'
+    WHERE %5$L = 'min5'
     UNION ALL
-    -- ② 原规则：包含关系，上界 clamp 到名义周期（CL-15）。细周期仅在桶内无 bar 时兜底
+    -- ② 原规则：包含关系 + 上界 clamp 到名义周期（CL-15）。细周期仅在桶内无 bar 时兜底
     SELECT t.bucket AS bar_ts, e.gap
     FROM target t
     JOIN roll_events e
       ON e.a_ts >= t.bucket
      AND e.a_ts < least(t.bucket + %3$L::interval,
                         coalesce(t.next_bucket, t.bucket + %3$L::interval))
-     AND (%4$L <> 'min5' OR NOT EXISTS (
+     AND (%5$L <> 'min5' OR NOT EXISTS (
             SELECT 1 FROM %2$I f3
              WHERE f3.symbol = %1$L
                AND f3.bucket >  e.a_ts - interval '15 minutes'
@@ -121,7 +127,7 @@ mapped AS (
     JOIN roll_events e
       ON e.a_ts >= t.bucket + %3$L::interval
      AND e.a_ts < t.next_bucket
-     AND (%4$L <> 'min5' OR NOT EXISTS (
+     AND (%5$L <> 'min5' OR NOT EXISTS (
             SELECT 1 FROM %2$I f3
              WHERE f3.symbol = %1$L
                AND f3.bucket >  e.a_ts - interval '15 minutes'
@@ -156,18 +162,20 @@ full_segs AS (
     FROM seg_final
 ),
 low_off AS (
-    SELECT l.low + (
-        SELECT s.cum_offset FROM full_segs s
-        WHERE s.seg_start <= l.bucket AND (s.seg_end IS NULL OR l.bucket < s.seg_end)
-        ORDER BY s.seg_start DESC LIMIT 1) AS v
-    FROM %2$I l WHERE l.symbol = %1$L
+    SELECT l.low + s.cum_offset AS v, l.low AS low
+    FROM %2$I l
+    LEFT JOIN full_segs s
+      ON l.bucket >= s.seg_start
+     AND (s.seg_end IS NULL OR l.bucket < s.seg_end)
+    WHERE l.symbol = %1$L
+      AND %4$L::boolean         -- false → 'f'::boolean 常量折叠 → 空集，零扫描
 ),
 shift_calc AS (
-    SELECT CASE WHEN min(v) <= 0 THEN
-        ceil((-min(v) + 0.01 * greatest((SELECT max(low)-min(low) FROM %2$I WHERE symbol=%1$L), 1.0)) / 100.0) * 100.0
-    ELSE 0 END AS shift FROM low_off
+    SELECT coalesce(CASE WHEN min(v) <= 0 THEN
+        ceil((-min(v) + 0.01 * greatest(max(low) - min(low), 1.0)) / 100.0) * 100.0
+    ELSE 0 END, 0) AS shift FROM low_off
 )
-$c$, v_sym, v_table, v_fallback, p_freq);
+$c$, v_sym, v_table, v_fallback, p_positivity, p_freq);
 
         SELECT max(seg_no), max(seg_start) INTO v_max_seg, v_max_start
           FROM roll_segment WHERE symbol = v_sym AND freq = p_freq;
@@ -184,7 +192,7 @@ $c$, v_sym, v_table, v_fallback, p_freq);
                 '''min15'', now() FROM full_segs fs CROSS JOIN shift_calc sc',
                 v_sym, p_freq, p_positivity);
             GET DIAGNOSTICS v_ins_n = ROW_COUNT;
-            RAISE NOTICE '[L2] %/% 首跑插入 % 段（跨休市映射修正版）', v_sym, p_freq, v_ins_n;
+            RAISE NOTICE '[L2] %/% 首跑插入 % 段（056 shift 短路版）', v_sym, p_freq, v_ins_n;
         ELSE
             SELECT cum_offset INTO v_base_co
               FROM roll_segment WHERE symbol = v_sym AND freq = p_freq AND seg_no = v_max_seg;
@@ -226,14 +234,15 @@ $c$, v_sym, v_table, v_fallback, p_freq);
         RAISE NOTICE '[L2] roll_segment(%) seg_end 收口 % 段', p_freq, v_fix_n;
     END IF;
 
-    RAISE NOTICE '[L2] roll_segment(%) 刷新完成 symbol=%（跨休市映射修正版）', p_freq, coalesce(p_symbol, 'ALL');
+    RAISE NOTICE '[L2] roll_segment(%) 刷新完成 symbol=%（056 shift 短路版）', p_freq, coalesce(p_symbol, 'ALL');
 END;
 $$;
 
 
 COMMENT ON PROCEDURE sp_build_l2_roll_segment(text, boolean, text) IS
     'L1→L2 换月 offset（append-only）。055/CL-20261107-15：mapped 上界 clamp 到 '
-    'min(next_bucket, bucket+名义周期)。063/CL-20261108-06：freq<锚点(15m) 时取'
-    '锚点桶内第一根（右标签修正），桶内无 bar 回退原规则。';
+    'min(next_bucket, bucket+名义周期)。056/CL-20261107-16：shift 默认路径常数折叠。'
+    '063/CL-20261108-06：freq<锚点(15m) 取锚点桶内第一根（右标签修正），'
+    '桶内无 bar 回退原规则。';
 
 COMMIT;
