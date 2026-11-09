@@ -42,7 +42,9 @@ BA = {"min5": "bar_5m_ba", "min15": "bar_15m_ba", "min30": "bar_30m_ba", "min60"
 def whitelist_symbols(eng) -> list[str]:
     """38 个可交易品种主连（l3_ref.tradable_variety），不是 config 里的 53 个。"""
     with eng.connect() as c:
-        rows = c.execute(text("SELECT variety FROM l3_ref.tradable_variety ORDER BY variety")).fetchall()
+        rows = c.execute(text(
+            "SELECT variety_code FROM l3_ref.tradable_variety "
+            "WHERE effective_to IS NULL ORDER BY variety_code")).fetchall()
     return [f"{r[0]}888" for r in rows]
 
 
@@ -60,6 +62,8 @@ def main() -> int:
     ap.add_argument("--freqs", default="min5,min15,min30,min60")
     ap.add_argument("--symbols", default="", help="逗号分隔；留空 = 38 白名单")
     ap.add_argument("--skip-ba", action="store_true", help="只重算段表，不重建后复权")
+    ap.add_argument("--force-ba", action="store_true",
+                    help="段表没变也强制全量重建 ba（默认只在段表变化时重建）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--log", default="/tmp/rebuild_roll.jsonl")
     args = ap.parse_args()
@@ -107,17 +111,22 @@ def main() -> int:
                         c.execute(text("CALL sp_build_l2_roll_segment(:f, false, :s)"),
                                   {"f": freq, "s": sym})
                         rec["t_seg"] = round(time.time() - t0, 1)
-                        if not args.skip_ba:
+                        rec["seg_after"], rec["sig_after"] = seg_sig(c, sym, freq)
+                        # 段表没变 ⇒ 后复权逐位相同，没必要重写几十万行 ba。
+                        # 默认只在「段表真的变了」或显式 --force-ba 时重建。
+                        rec["changed"] = rec["sig_before"] != rec["sig_after"]
+                        need_ba = (not args.skip_ba) and (rec["changed"] or args.force_ba)
+                        if need_ba:
                             c.execute(text("CALL l2_adj.sp_build_l2_back_adjusted(:f, :s, true)"),
                                       {"f": freq, "s": sym})
                             rec["t_ba"] = round(time.time() - t0 - rec["t_seg"], 1)
+                        else:
+                            rec["ba_skipped"] = True
                     with eng.connect() as c:
-                        rec["seg_after"], rec["sig_after"] = seg_sig(c, sym, freq)
                         rec["ba_after"] = int(c.execute(
                             text(f"SELECT count(*) FROM l2_adj.{BA[freq]} WHERE symbol = :s"),
                             {"s": sym}).scalar() or 0)
                     rec["status"] = "ok"
-                    rec["changed"] = rec["sig_before"] != rec["sig_after"]
             except Exception as e:  # noqa: BLE001 —— 逐条记账，不中断整批
                 rec["status"] = "fail"
                 rec["err"] = f"{type(e).__name__}: {str(e).splitlines()[0][:160]}"

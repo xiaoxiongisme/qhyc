@@ -85,7 +85,8 @@ def main() -> int:
     with eng.connect() as c:
         win = c.execute(text("SELECT win_start, win_end, n_days FROM ops.ab_window_20261109")).fetchone()
         syms = [r[0] for r in c.execute(text(
-            "SELECT variety FROM l3_ref.tradable_variety ORDER BY variety")).fetchall()]
+            "SELECT variety_code FROM l3_ref.tradable_variety "
+            "WHERE effective_to IS NULL ORDER BY variety_code")).fetchall()]
     print(f"A/B 窗口 {win[0]} ~ {win[1]}（{win[2]} 个交易日）/ 品种 {len(syms)} 个\n")
     syms = [f"{s}888" for s in syms]
 
