@@ -3982,6 +3982,68 @@ def _c_mig_proc_baseline(c: Ctx) -> tuple[bool, str, str, str]:
         "并核对本条断言全绿（CL-20261109-13 / 同型前例 20261107-16、20261109-12）")
 
 
+def _c_l1_session_grid(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-14：白名单品种 2015 起的 L1 bucket 必须全部落在**会话网格**上。
+
+    背景：库内 2004-12-22~2026-10-20 共 5,742 个交易日是旧网格
+    （``time_bucket`` 左沿：60m = 09:00/10:00/11:00/13:00/14:00），
+    2026-10-21~10-28 新旧两套并存（一天 15 根 30m），只有 10-29 之后才是会话网格。
+    旧网格「内部自洽」——``30m 09:00 = 15m 09:00 + 09:15`` 同样精确成立 ——
+    所以 ``check_cross_tf_consistency`` 只在**两套并存**时才报红，纯旧网格日抓不到。
+    要把「口径已统一」变成可验证的事实，只能直接检 bucket 的墙钟时刻。
+
+    判据：按频率列出**只可能出现在旧网格**的墙钟标签，命中即判红。
+    不用「必须等于白名单标签集」，因为夜盘收盘时刻随品种而变（23:00/01:00/02:30），
+    白名单会把合法的截断尾段也算成违规。
+
+    | 频率 | 旧网格独有标签（日盘 + 夜盘起点） |
+    |---|---|
+    | 60m | 09:00 11:00 13:00 14:00 21:00 |
+    | 30m | 09:00 10:30 11:00 11:30 13:30 14:00 21:00 |
+    | 15m | 09:00 10:30 13:30 21:00 |
+    | 5m  | 09:00 10:20 10:25 10:30 13:30 21:00 |
+
+    ⚠ 只查 2015-01-01 起：那是本轮重建的边界，2015 年前**有意**保留旧网格
+    （CL-20261109-14 决策 A/B/C 中选了 B：只统一回测窗口）。
+    ⚠ 只查白名单 38 品种（×888 与 ×8888）：非白名单品种不在重建范围内。
+    """
+    label = "白名单 2015+ L1 bucket 全落在会话网格（无旧网格残留）"
+    if not c.whitelist:
+        return False, label, "白名单为空", "l3_ref.tradable_variety 无有效品种"
+    base = sorted({w[:-3] if w.endswith("888") else w for w in c.whitelist})
+    syms = sorted({v + suf for v in base for suf in ("888", "8888")})
+
+    bad_labels: dict[str, list[str]] = {
+        "bar_60m": ["09:00", "11:00", "13:00", "14:00", "21:00"],
+        "bar_30m": ["09:00", "10:30", "11:00", "11:30", "13:30", "14:00", "21:00"],
+        "bar_15m": ["09:00", "10:30", "13:30", "21:00"],
+        "bar_5m":  ["09:00", "10:20", "10:25", "10:30", "13:30", "21:00"],
+    }
+    hits: list[str] = []
+    total = 0
+    for tbl, labs in bad_labels.items():
+        try:
+            n = c.scalar(
+                f"SELECT count(*) FROM l1_mkt.{tbl} "
+                " WHERE symbol = ANY(:syms) "
+                "   AND bucket >= timestamptz '2015-01-01 00:00+08' "
+                "   AND to_char(bucket, 'HH24:MI') = ANY(:labs)",
+                syms=syms, labs=labs) or 0
+        except Exception as exc:                          # noqa: BLE001
+            return False, label, f"{tbl} 查询失败 {type(exc).__name__}: {str(exc)[:70]}", (
+                "查询失败 → 无法判定（不要当成通过）")
+        total += int(n)
+        if n:
+            hits.append(f"{tbl}={int(n):,}")
+    return total == 0, label, (
+        f"{len(syms)} 个 symbol / 2015-01-01 起 / 旧网格残留 {total:,} 根"
+        + (f"（{', '.join(hits)}）" if hits else "")
+    ), ("" if total == 0 else
+        "仍有旧网格 bucket（time_bucket 左沿）→ 该区间未按会话网格重建，"
+        "或重建脚本的 DELETE 窗口漏了边界。见 CL-20261109-14 / "
+        "scripts/ops/rebuild_l1_grid.py")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -4093,6 +4155,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-05：四个频率各自建段，历史上不同频率是在不同版本的检测代码下
     # 生成的，"min5 比 min15 少几段"到底是合法的分辨率合并还是丢事件，肉眼分不出。
     # 用 Σroll_delta 守恒 + 段数单调两条恒等式把"同源"钉住（廉价的聚合，不是重算）。
+    # CL-20261109-14：旧网格（time_bucket 左沿）内部自洽，跨周期对拍抓不到，
+    # 只能直接检 bucket 墙钟。这是「口径已统一」唯一可验证的判据。
+    ("L1-SESSION-GRID", "白名单 2015+ L1 bucket 全落在会话网格（旧网格残留=0）",
+     "block", _c_l1_session_grid),
     ("ROLL-FREQ-PARITY", "四频换月段同源（Σroll_delta 跨频相等 + 段数单调）",
      "block", _c_roll_freq_parity),
     # CL-20261109-12：增量重建只补新桶，l1 历史被修订后 ba 会静默保留错的 close
