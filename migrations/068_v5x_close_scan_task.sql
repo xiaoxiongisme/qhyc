@@ -58,9 +58,9 @@ VALUES
      true,
      'qhyc',
      ARRAY['v5x', 'strategy', 'realtime'],
-     '{"code_cron": "OrTrigger(CronTrigger(hour=H, minute=M, second=10) for (H,M) in live.CLOSE_HM)", '
+     ('{"code_cron": "OrTrigger(CronTrigger(hour=H, minute=M, second=10) for (H,M) in live.CLOSE_HM)", '
      || '"source_of_truth": "app/strategies/v5x/live.py::CLOSE_HM + SCAN_SECOND", '
-     || '"do_not_convert_to_crontab": true}'
+     || '"do_not_convert_to_crontab": true}')::jsonb
     )
 ON CONFLICT (task_id) DO NOTHING;
 
