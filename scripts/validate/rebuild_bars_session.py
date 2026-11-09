@@ -149,7 +149,14 @@ DAY_BOUNDS = {
 }
 
 
-def _build_sql(step: int, sym_filter: str) -> str:
+def _build_sql(step: int, sym_filter: str,
+               src_table: str = "l0_raw.minute_bar") -> str:
+    """聚合 SQL。
+
+    ``src_table`` 默认是 1 分钟真源；补齐工具（``scripts/ops/backfill_bars_from_5m.py``）
+    会把 5m 原生写进 stage 表后传进来复用**同一份**分桶/夜盘截断逻辑，
+    避免两套实现各自解释会话边界（CL-20261109-20）。step=5 时为 1:1 恒等映射。
+    """
     bounds = DAY_BOUNDS[step]
     # 日盘：rel_end = (ts_n+1min - day_start) 的分钟数；取 >= rel_end 的最小边界
     day_when = []
@@ -165,7 +172,7 @@ def _build_sql(step: int, sym_filter: str) -> str:
     return f"""
 WITH m AS (
     SELECT symbol, ts, open, high, low, close, volume, amount, open_interest, src
-    FROM l0_raw.minute_bar
+    FROM {src_table}
     WHERE ts >= :s AND ts < :e
       {sym_filter}
       AND src = ANY(:srcs)

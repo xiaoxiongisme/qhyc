@@ -6,11 +6,15 @@
 说明：
 - C9 去天勤：原为 天勤 get_kline_serial(...,60) 主源，现改为 akshare 新浪主连 1 分钟。
 - akshare 1 分钟标签即该分钟棒的上海时间，直接按上海本地解析入库（不叠加任何 +1h）。
-- ⚠ 已知限制：akshare futures_zh_minute_sina(period="1") 每次仅返回约 1024 根、跨约 6 个
-  交易日（2026-10-04 实测 RB 为 09-24~09-30）。故本采集器仅能刷新「最近 ~6 天」实时分钟；
-  minute_bar 的更长历史由历史 CSV 批量导入维护，upsert 按 (symbol, ts)
-  DO NOTHING 不会覆盖旧历史。这是 C9 收敛到 akshare 单一源后的已知降韧性取舍——
-  天勤 原可拉 ~9000 根（约 21 日），切换后实时回溯窗口缩短，须确保 CSV 导入定期补历史。
+- ⚠ 已知限制：``futures_zh_minute_sina`` **全周期都是 1023 根硬上限**，周期越短回溯
+  越浅。1 分钟只够约 **3 个交易日**（2026-11-09 实测 BR0 回到 11-05 09:13；
+  此前注释写「约 6 个交易日」是按 172 根/日估的，实际 345 根/日，估错了）。
+  故本采集器仅能刷新最近 ~3 个交易日的实时分钟；更长的 1 分钟历史
+  **该源取不回**（local_csv 快照止于 2026-10-30），upsert 按 (symbol, ts)
+  DO NOTHING 不会覆盖旧历史。
+  ★ 但 5 分钟及以上能取回得多得多（period=5 约 15 个交易日、period=60 约 8.5 个月），
+  缺口日用 ``scripts/ops/backfill_bars_from_5m.py`` 以 period=5 为唯一源重建即可，
+  详见 _fetch_akshare 的实测表（CL-20261109-20）。
 - 不强行对齐交易时段整点（那会丢分钟），仅剔除 NaN 价 / 1970 脏戳 / 未来戳，
   以及**时间戳落在非交易时段的合成 bar**（CL-20261109-04，见 _fetch_akshare 内注释）。
 - 写入幂等：ON CONFLICT (symbol, ts) DO NOTHING，重复跑安全。
@@ -195,8 +199,21 @@ class MinuteCollector:
     def _fetch_akshare(self, spec: MainContractSpec) -> list[dict]:
         """akshare 新浪主连 1 分钟（period=1）唯一源。
 
-        ⚠ 限制：akshare 每次仅返回约 1024 根（跨约 6 个交易日），仅刷新最近 ~6 天实时分钟；
-        minute_bar 更长历史由 CSV 导入维护。见模块文档。
+        ⚠ 限制（2026-11-09 实测，不是猜的）：``futures_zh_minute_sina`` 全周期
+        都是 **1023 根硬上限**，周期越短回溯越浅：
+
+            period=1   1023 根 → 约 3 个交易日（BR0 实测回到 11-05 09:13）
+            period=5   1023 根 → 约 15 个交易日（→ 10-20）
+            period=15  1023 根 → 约 50 个交易日（→ 08-28）
+            period=60  1023 根 → 约 8.5 个月（→ 02-25）
+
+        ``datalen`` / ``num`` / ``date`` 参数均被服务端忽略（实测无效），
+        故 1 分钟超过 3 个交易日的历史**无法从该源取回**。
+
+        但 **5 分钟及以上可以**：缺口日用 ``scripts/ops/backfill_bars_from_5m.py``
+        以 period=5 为唯一源重建（经生产同源聚合 SQL 派生 15/30/60，
+        保证跨周期对拍自洽）。CL-20261109-20 即按此法补了 BR888/PF888 的
+        10-30、11-02、11-03 三天。
         """
         import akshare as ak  # type: ignore
 
