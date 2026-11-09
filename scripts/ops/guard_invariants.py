@@ -224,16 +224,17 @@ def _c_scope_wired(c: Ctx) -> tuple[bool, str, str, str]:
     L2 复权、7 个兼容视图**没有一处引用它**。结果「白名单已生效」是一句
     没有任何证据支撑的话，四套口径继续并存。
 
-    本断言检查三处关键路径的定义文本里是否出现口径来源标识：
-      · L1 派生存储过程  → tradable_scope_array
+    本断言检查关键路径的定义文本里是否出现口径来源标识：
       · L2 复权存储过程  → tradable_scope_array
       · public.bar_* 视图 → tradable_variety / tradable_filter_on
+    （L1 派生自 2026-11-09 / 067 起已无库层生产者，改由 Python 侧接入，见下方注释）
     任何一处丢失引用即 block FAIL ——「表建了却没人读」不许再静默通过。
     """
     checks = [
-        ("L1 派生 sp_build_l1_from_minute",
-         "SELECT pg_get_functiondef('public.sp_build_l1_from_minute(text,timestamptz,timestamptz)'::regprocedure)",
-         "tradable_scope_array"),
+        # L1 派生：2026-11-09 CL-20261109-14 / 067 起库层不再有 L1 生产者
+        # （sp_build_l1_from_minute 已弃用为「调用即报错」空壳），口径接入点转移到
+        # app/ingest/synthesizer.py（scope= 传参，由 tests/ 覆盖）。故此处只剩 L2 复权。
+        # 弃用态本身由 MIG-PROC-BASELINE 的 SESSION_GRID_RETIRED token 兜住。
         ("L2 复权 sp_build_l2_back_adjusted",
          "SELECT pg_get_functiondef('l2_adj.sp_build_l2_back_adjusted(text,text,boolean)'::regprocedure)",
          "tradable_scope_array"),
@@ -3946,8 +3947,11 @@ MIG_PROC_BASELINE: dict[str, dict[str, str]] = {
         "LEFT JOIN full_segs s": "056 区间 JOIN 替代相关子查询",
     },
     "public.sp_build_l1_from_minute(text,timestamptz,timestamptz)": {
-        "tradable_scope_array": "053-S2 L1 派生品种口径",
-        "amount=EXCLUDED.amount": "053 amount 列进 ON CONFLICT",
+        # 2026-11-09 CL-20261109-14 / migrations/067：本过程已**弃用**（调用即 RAISE），
+        # 库层不再有第二个 L1 生产者。原来的两个 token（tradable_scope_array /
+        # amount=EXCLUDED.amount）随过程体一起作废，改为只认「弃用态标记」——
+        # 若有人拿 053/009 的旧过程体覆盖回来，token 消失，本条立刻报「067 被回退」。
+        "SESSION_GRID_RETIRED": "067 弃用旧 time_bucket 网格派生",
     },
 }
 

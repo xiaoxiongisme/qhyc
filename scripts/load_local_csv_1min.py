@@ -42,7 +42,11 @@ schema 限定（必须）：
     python scripts/load_local_csv_1min.py --only IC,RB,CU --backup-old   # 冒烟 + 保留 A/B 基线
     python scripts/load_local_csv_1min.py --no-db                       # 只打印将处理的品种
 加载后（库内）：
-    CALL sp_build_l1_from_minute('min15');        -- 聚合 15m（正则仅 888/8888 进 L1）
+    ⚠ 2026-11-09 CL-20261109-14：sp_build_l1_from_minute 已弃用（migrations/067，
+      调用即 RAISE），因为它用 time_bucket 自然整点切桶 = 旧网格，与回测口径冲突。
+      L1 请改用会话网格重建（本脚本写入的是终点约定分钟，M19 已结案）：
+        python scripts/ops/rebuild_l1_grid.py \
+            --symbols ALL --start 2015-01-01 --end <今天> --freqs 60,30,15,5 --apply
     CALL sp_build_l2_roll_segment('min15');       -- 换月段（依赖 8888，已由本脚本写入）
   注意：sp_synth_8888_from_contracts 已废弃为告警空壳（等权/量加权会破坏 L2），不要调用。
 """

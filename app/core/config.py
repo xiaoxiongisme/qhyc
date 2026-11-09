@@ -88,7 +88,10 @@ class IngestConfig(BaseModel):
     #: - "python"（默认）= ``synthesizer.synthesize_bars_incremental``，**会话网格**
     #:   （日盘 10:00/11:15/14:15/15:00、夜盘 22:00/23:00），与回测/盘面一致；
     #: - "sp" = 旧的 ``CALL sp_build_l1_from_minute``，内部用 ``time_bucket`` 自然整点
-    #:   （09:00/10:00/11:00/13:00…），会与回测口径冲突。**仅作回滚开关，勿长期使用**。
+    #:   （09:00/10:00/11:00/13:00…），会与回测口径冲突。
+    #:   ⚠ 2026-11-09 CL-20261109-14 / migrations/067 起该过程已**弃用**（调用即
+    #:   RAISE EXCEPTION），"sp" 不再是可用回滚开关 —— 切过去只会得到明确报错，
+    #:   不会静默写入旧网格。历史重建走 ``scripts/ops/rebuild_l1_grid.py``。
     bar_synth_mode: str = "python"
     #: 2026-11-06 全合约采集（scripts/fetch_contract_1min.py）。
     #: 只写 minute_bar 的 contract 层，L1 合成已加 layer 过滤，不影响主连口径。
