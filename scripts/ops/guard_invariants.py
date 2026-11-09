@@ -3676,6 +3676,110 @@ def _c_v5x_replay_seeded(c: Ctx) -> tuple[bool, str, str, str]:
     return True, label, observed, ""
 
 
+def _c_roll_finer_anchor_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-06：min5 锚点必须取「15m 桶内第一根」，且 SQL/Python 双真源一致。
+
+    为什么这条必须存在
+    ------------------
+    换月映射有两份实现：生产走 ``sp_build_l2_roll_segment``（SQL），
+    人工/研究走 ``scripts/build_roll_segments.py::map_roll_to_freq``（Python）。
+    历史上两份各写各的，044/055/056 三次都是「改了一边忘另一边」。
+    更糟的是 063 首次实施时**从 055 的文本** CREATE OR REPLACE，把 056 的
+    ``%4$L::boolean`` 常数折叠一起覆盖掉——性能从秒级退化到 166s/品种，
+    且把 min5 全量重建重新推回 OOM 路径。这种事必须有断言盯。
+
+    判据（都是「此刻的行为」）：
+      1. pg_proc 里过程体同时含 ① 新分支 ``interval '15 minutes'``/``%5$L``
+         和 ② 056 的短路 ``%4$L::boolean``（缺任何一个都是回归）；
+      2. Python 侧 ``map_roll_to_freq`` 含 finer 分支（``freq_min < ANCHOR_MIN``）。
+    """
+    label = "min5 锚点取桶内第一根（SQL 含 056 短路 + Python 双真源一致）"
+    bad: list[str] = []
+    observed: list[str] = []
+
+    src = c.scalar(
+        "SELECT prosrc FROM pg_proc WHERE proname = 'sp_build_l2_roll_segment'") or ""
+    sql_finer = "interval '15 minutes'" in src and "%5$L" in src
+    sql_short = "%4$L::boolean" in src
+    observed.append(f"sql_finer={sql_finer} sql_shortcircuit={sql_short}")
+    if not sql_finer:
+        bad.append("存储过程缺 CL-20261108-06 的「桶内第一根」分支")
+    if not sql_short:
+        bad.append("存储过程缺 056 的 shift 常数折叠（%4$L::boolean）→ 性能/内存回归")
+
+    try:
+        from pathlib import Path
+        py = (Path(__file__).resolve().parents[2] / "scripts"
+              / "build_roll_segments.py").read_text(encoding="utf-8")
+        py_finer = "freq_min < ANCHOR_MIN" in py
+    except Exception as exc:                              # noqa: BLE001
+        py_finer = False
+        bad.append(f"读 build_roll_segments.py 失败：{type(exc).__name__}")
+    observed.append(f"py_finer={py_finer}")
+    if not py_finer:
+        bad.append("Python 侧 map_roll_to_freq 缺 finer 分支（双真源已分叉）")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad) + " → 见 migrations/063（CL-20261108-06）")
+
+
+def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-06：白名单品种的 5m 后复权序列在换月处不得有「假跳空」。
+
+    判据：取每个 min5 段边界那根 bar，比较
+      · ``ba_cc``  = |后复权 close 差|（本根 - 上一根）
+      · ``raw_cc`` = |原始 close 差|
+    若 ``ba_cc`` 很大（> 50 点）而 ``raw_cc`` 很小（< 10% ba_cc），说明该边界
+    把一段**原本不存在的跳空**贴在了这根 bar 上 —— 正是旧映射（取桶末根）的形状：
+    PF888 2026-11-04 的 21:05/21:10 被留在旧 offset，21:15 一次性跳 240 点。
+
+    50 点是「绝对地板」，为了压掉小品种噪声；它只抓大跳空，不追求尺度归一化。
+    基线（2026-11-09 08:07，38 品种、1427 个边界）：116 根假跳空，最大 716 点。
+
+    ⚠ 只统计**已存在**的边界。边界整条丢失（上游门控把换月事件丢了）时这根 bar
+    根本不在样本里，本断言看不见——那是 CL-20261108-05 的另一半（min5 与 min15
+    段数差），根因是 ``idx_delta`` 门控依赖的 8888 指数连在早年缺失，重跑只会
+    得到更少事件，需要单独拍板，暂不并入这条断言。
+    """
+    label = "白名单 5m 后复权换月处无假跳空（|ba_cc|>50 且 raw 未跳）"
+    if not c.whitelist:
+        return False, label, "白名单为空", "l3_ref.tradable_variety 无有效品种"
+    syms = sorted({w if w.endswith("888") else w + "888" for w in c.whitelist})
+    sql = """
+        SELECT bd.symbol,
+               count(*) FILTER (
+                 WHERE abs(b.close - p.close) > 50
+                   AND abs(r.close - q.close) < 0.1 * abs(b.close - p.close)) AS fake,
+               max(abs(b.close - p.close))::float AS mx
+          FROM (SELECT symbol, seg_start FROM l2_adj.roll_segment
+                 WHERE freq = 'min5' AND symbol = ANY(:syms)) bd
+          JOIN l2_adj.bar_5m_ba b ON b.symbol = bd.symbol AND b.bucket = bd.seg_start
+          JOIN l1_mkt.bar_5m   r ON r.symbol = bd.symbol AND r.bucket = bd.seg_start
+          JOIN LATERAL (SELECT close FROM l2_adj.bar_5m_ba x
+                         WHERE x.symbol = bd.symbol AND x.bucket < bd.seg_start
+                         ORDER BY x.bucket DESC LIMIT 1) p ON true
+          JOIN LATERAL (SELECT close FROM l1_mkt.bar_5m y
+                         WHERE y.symbol = bd.symbol AND y.bucket < bd.seg_start
+                         ORDER BY y.bucket DESC LIMIT 1) q ON true
+         GROUP BY bd.symbol
+    """
+    try:
+        # 64MB /dev/shm 装不下并行 worker 段（实测 DiskFull），关并行再跑
+        c.session.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+        rows = c.rows(sql, syms=syms)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}", (
+            "查询失败 → 无法判定（不要当成通过）")
+    tot = sum(int(r[1]) for r in rows)
+    mx = max((float(r[2]) for r in rows), default=0.0)
+    worst = [f"{r[0]}={int(r[1])}" for r in rows if int(r[1])]
+    return tot == 0, label, (
+        f"边界 {sum(int(r[1]) for r in rows)} 根 / 假跳空 {tot} 根 / 最大 {mx:.0f} 点"
+        + (f"（{','.join(worst)}）" if worst else "")
+    ), ("" if tot == 0 else
+        "换月边界仍落在桶末根 → 见 migrations/063 + CL-20261108-06")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -3774,6 +3878,13 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 而 scheduler 的注释写着「写了就会覆盖」——又一次「口径只存在注释里」。
     ("CFG-STRATEGY-OVERRIDE-WIRED", "策略 config 覆盖层真实生效（strategies.<key>.params）",
      "block", _c_cfg_strategy_override),
+    # CL-20261108-06：换月映射有 SQL / Python 两份实现，历史上三次「改一边忘另一边」。
+    # 063 首次实施还从 055 文本重建、把 056 的 shift 短路一起覆盖掉（166s/品种、
+    # 重新踩 OOM 路径）。两条断言：双真源一致 + 数据层无假跳空。
+    ("ROLL-FINER-ANCHOR-WIRED", "min5 锚点取桶内第一根（SQL+056 短路 / Python 双真源）",
+     "block", _c_roll_finer_anchor_wired),
+    ("ROLL-MIN5-NO-FAKE-JUMP", "白名单 5m 后复权换月处无假跳空（|ba_cc|>50 且 raw 未跳）",
+     "block", _c_roll_min5_no_fake_jump),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
