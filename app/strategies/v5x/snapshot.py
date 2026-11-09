@@ -36,7 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -84,7 +84,12 @@ def theoretical_positions(session, symbols: list[str] | None = None,
     unrealized_yuan/entry_bar/last_bar``，价格全部为**真实可成交价**。
     """
     asof = asof or date.today()
-    md, syms = _load(session, symbols, asof)
+    # ★ 2026-11-09（CL-20261109-16）：``load_market_data`` 的区间是 **[start, end) 半开**，
+    #   这里原样把 ``asof`` 当 end 传 ⇒ 只取到 asof 当天 00:00 之前 ⇒ **永远落后一整天**。
+    #   实测：11-09 15:05 推的快照 ``last_bar = 2026-11-07 01:00``（周五夜盘末），
+    #   当天日盘四根完全没参与，用户拿到的是一份过期清单。
+    #   ``scan_once`` 传的是 ``(now + 1 day).date()``（见 live.py:288），两处必须一致。
+    md, syms = _load(session, symbols, asof + timedelta(days=1))
     if md is None:
         return {"asof": str(asof), "last_bar": None, "rows": [],
                 "n_long": 0, "n_short": 0, "n_flat": 0, "stale_days": None}
