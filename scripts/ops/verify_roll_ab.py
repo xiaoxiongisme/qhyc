@@ -40,14 +40,22 @@ WITH j AS (
      WHERE b.symbol = :s
 ),
 d AS (
-    SELECT bucket, c1 - c0 AS dc,
-           lag(c1 - c0) OVER (ORDER BY bucket) AS pdc
+    SELECT bucket,
+           c1 - c0 AS dc,
+           o1 - o0 AS dof,
+           lag(c1 - c0) OVER (ORDER BY bucket) AS pdc,
+           lag(o1 - o0) OVER (ORDER BY bucket) AS pdof
       FROM j
 ),
-ch AS (
+ch_off AS (
+    -- 偏移真的动了：只允许发生在换月边界上
     SELECT bucket, dc FROM d
-     WHERE abs(dc) > 1e-9
-       AND (pdc IS NULL OR abs(dc - pdc) > 1e-9)
+     WHERE abs(dof) > 1e-9
+       AND (pdof IS NULL OR abs(dof - pdof) > 1e-9)
+),
+ch_px AS (
+    -- 偏移没动但价格变了：l1 原始价被修订，后复权跟着修正（CL-20261109-12）
+    SELECT bucket FROM d WHERE abs(dof) <= 1e-9 AND abs(dc) > 1e-9
 ),
 bd AS (
     SELECT seg_start AS b FROM l2_adj.roll_segment
@@ -62,12 +70,12 @@ mis AS (
       JOIN l1_mkt.{tbl} r ON r.symbol = a.symbol AND r.bucket = a.bucket
      WHERE a.symbol = :s
 )
-SELECT (SELECT count(*) FROM j)                                        AS n_rows,
-       (SELECT count(*) FROM ch)                                       AS n_shift,
-       (SELECT count(*) FROM ch WHERE bucket NOT IN (SELECT b FROM bd)) AS n_bad,
-       (SELECT coalesce(max(abs(c1 - c0)), 0) FROM j)                  AS max_dc,
-       (SELECT count(*) FROM mis WHERE abs(err) > 1e-6)                AS n_ident_bad,
-       (SELECT coalesce(max(abs(err)), 0) FROM mis)                    AS max_ident_err
+SELECT (SELECT count(*) FROM j)                                         AS n_rows,
+       (SELECT count(*) FROM ch_off)                                    AS n_off,
+       (SELECT count(*) FROM ch_off WHERE bucket NOT IN (SELECT b FROM bd)) AS n_bad,
+       (SELECT count(*) FROM ch_px)                                     AS n_px,
+       (SELECT coalesce(max(abs(c1 - c0)), 0) FROM j)                   AS max_dc,
+       (SELECT count(*) FROM mis WHERE abs(err) > 1e-6)                 AS n_ident_bad
 """
 
 
@@ -90,22 +98,27 @@ def main() -> int:
     print(f"A/B 窗口 {win[0]} ~ {win[1]}（{win[2]} 个交易日）/ 品种 {len(syms)} 个\n")
     syms = [f"{s}888" for s in syms]
 
-    print(f"{'freq':5s} {'symbol':7s} {'根数':>7s} {'偏移跳变':>7s} {'非边界跳变':>9s} {'最大|Δ|':>9s} {'恒等式违约':>9s}")
+    print(f"{'freq':5s} {'symbol':7s} {'根数':>7s} {'偏移跳变':>7s} {'越界偏移':>7s} "
+          f"{'价格修正':>7s} {'最大|Δ|':>9s} {'恒等式违约':>8s}")
     bad_total = 0
+    px_total = 0
     for freq in freqs:
         for sym in syms:
             with eng.connect() as c:
                 c.execute(text("SET jit = off"))
                 r = c.execute(text(SQL.format(freq=freq, ba=BA[freq], tbl=TBL[freq])),
                               {"s": sym, "f": freq}).fetchone()
-            n_rows, n_shift, n_bad, max_dc, n_ident, max_ident = r
+            n_rows, n_off, n_bad, n_px, max_dc, n_ident = r
+            px_total += int(n_px)
             mark = ""
             if n_bad or n_ident:
                 bad_total += 1
                 mark = "  ✘"
-            print(f"{freq:5s} {sym:7s} {n_rows:7d} {n_shift:7d} {n_bad:9d} "
-                  f"{float(max_dc):9.2f} {n_ident:9d}{mark}")
-    print(f"\n结论：{'✔ 全部可解释（无越界跳变、价格恒等式成立）' if not bad_total else f'✘ {bad_total} 个组合需人工核查'}")
+            print(f"{freq:5s} {sym:7s} {n_rows:7d} {n_off:7d} {n_bad:7d} "
+                  f"{n_px:7d} {float(max_dc):9.2f} {n_ident:8d}{mark}")
+    print(f"\n结论：{'✔ 全部可解释' if not bad_total else f'✘ {bad_total} 个组合需人工核查'}"
+          f"（偏移跳变全部落在换月边界；价格修正 {px_total} 根 = l1 修订后的后复权对齐，"
+          f"见 CL-20261109-12；恒等式违约必须为 0）")
     return 0 if not bad_total else 1
 
 
