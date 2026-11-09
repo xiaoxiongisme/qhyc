@@ -4610,13 +4610,18 @@ def main() -> int:
         n_info = sum(1 for r in real_fail if r.severity == "info")
         n_warn_fail = sum(1 for r in real_fail
                           if r.severity not in ("block", "info"))
+        # ★ FAIL 只数 block（2026-11-09）：原先用 len(real_fail)，把 warn/info 也算进
+        #   FAIL，于是「58 PASS · FAIL 3 · 仅告警 2 · INFO 1」——3 就是那 2+1 重复计数，
+        #   三项相加还等于 61，看起来自洽但含义是错的：全绿的一轮会显示 FAIL 3，读到的人
+        #   只会记住「有 3 个失败」。这正是要防的「监控骗人」的镜像版本（狼来了）。
+        n_block_fail = sum(1 for r in real_fail if r.severity == "block")
         tail = ""
         if n_warn_fail:
             tail += f" · 仅告警 {n_warn_fail}"
         if n_info:
             tail += f" · INFO {n_info}"
         print(f"合计 {len(results)}：PASS {sum(1 for r in results if r.status == 'PASS')}"
-              f" · FAIL {len(real_fail)}{tail} · WAIVED {len(waived)}")
+              f" · FAIL {n_block_fail}{tail} · WAIVED {len(waived)}")
         if waived:
             print("\n已挂账缺口（不算违约，但必须有人推进）：")
             for r in waived:
