@@ -59,8 +59,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbols", required=True,
                     help="逗号分隔的 symbol 列表（只接受 *888 / *8888）")
-    ap.add_argument("--start", required=True, help="YYYY-MM-DD")
-    ap.add_argument("--end", required=True, help="YYYY-MM-DD")
+    ap.add_argument("--start", required=True,
+                    help="YYYY-MM-DD，按 **UTC** 解析（= 上海当日 08:00），区间左闭")
+    ap.add_argument("--end", required=True,
+                    help="YYYY-MM-DD，按 **UTC** 解析（= 上海当日 08:00），区间右开 —— "
+                         "要覆盖到 D 日就必须传 D+1。起始日建议对齐周六，"
+                         "避免删除窗口落在还有夜盘交易的交易日上")
     ap.add_argument("--freqs", default="60,30,15,5", help="逗号分隔，默认 60,30,15,5")
     ap.add_argument("--max-gap", type=int, default=150)
     ap.add_argument("--apply", action="store_true", help="不带则全部 dry-run")

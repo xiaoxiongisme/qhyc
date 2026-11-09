@@ -352,8 +352,16 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
         #   / 09:15(15m)，旧网格的首个桶是 09:00 —— 落在 dmin 之前，删不到 →
         #   「重建完仍残留旧网格 09:00」且守卫按 symbol 聚合看不出来。放宽 1 天覆盖边界。
         #   仍不放开到「整品种删」，保留窄区间重建不误伤其余历史的保护。
-        dp["dmin"] = min(_buckets) - timedelta(days=1)
-        dp["dmax"] = max(_buckets) + timedelta(days=1)  # 上界取开区间
+        # ★ 2026-11-09 CL-20261109-19：上一条「某一天」的补丁引入了一个更糟的洞 ——
+        #   dmax 取 ``max(bucket)+1天`` 时**越过了本次能合成的范围**：聚合上界 e 是
+        #   ``--end`` 按 UTC 解析（= 上海当日 08:00）的半开区间，而删除上界是 +1 天。
+        #   实测：``--end 2026-10-29`` 把 10-29 一整天（38 品种 × 4 频）删得只剩 1 根
+        #   （5m 单品种最多 13 根，正常 45 根），因为那天根本不在聚合范围内。
+        #   现在把窗口**收口到 [s, e)**：只删「本次真的会重写」的桶。宁可留下未重建
+        #   边界上的旧行（下一次更宽的重建会覆盖），也绝不制造空洞 —— 空洞是静默的，
+        #   旧行至少还在，且能被网格/跨周期守卫看见。
+        dp["dmin"] = max(min(_buckets) - timedelta(days=1), s_dt)
+        dp["dmax"] = min(max(_buckets) + timedelta(days=1), e_dt)  # 上界取开区间
         del_sql = (
             f"DELETE FROM l1_mkt.{tbl} WHERE symbol = ANY(:syms) "
             f"AND bucket >= :dmin AND bucket < :dmax"
