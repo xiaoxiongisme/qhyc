@@ -3781,6 +3781,69 @@ def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
         "换月边界仍落在桶末根 → 见 migrations/063 + CL-20261108-06")
 
 
+def _c_roll_freq_parity(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261108-05：四个频率的换月段必须由**同一组事件**派生。
+
+    换月事件只在 15m 锚点上检测一次（``roll_events``），再映射到各目标频率；
+    映射只能把落进同一根 bar 的多个事件**合并**（``sum(gap)``），不能凭空增删。
+    因此两条恒等式必须同时成立：
+
+    1. **``Σ roll_delta`` 跨频相等**。合并是求和运算，所以总量守恒；某一频偏小 =
+       事件在映射中被静默丢弃（锚点落在目标表覆盖之外 / 门控多杀一行），偏大 =
+       同一事件被重复计入。这是唯一能抓住"丢事件"的廉价聚合。
+       ⚠ 注意不能用 ``Σ|roll_delta|``：相邻两笔符号相反的事件合并后会被抵消，
+       绝对值之和必然变小，那是合法行为（38 品种里 5 个就是这么不同的）。
+    2. **段数单调**：``min5 / min30 / min60 ≤ min15``。分辨率只会合并、不可能
+       拆出更多段；违反说明某个频率混进了不属于当前口径的旧段。
+
+    2026-11-09 四频统一重算后实测：38 品种两条全部成立。BU/FU/OI/SF/SM 段数在
+    四频间不同（如 FU 138/144/142/139）是**合法的分辨率合并**，Σ 总量仍然相等。
+    """
+    label = "四频换月段同源（Σroll_delta 跨频相等 + 段数单调）"
+    if not c.whitelist:
+        return False, label, "白名单为空", "l3_ref.tradable_variety 无有效品种"
+    syms = sorted({w if w.endswith("888") else w + "888" for w in c.whitelist})
+    sql = """
+        SELECT symbol,
+               coalesce(sum(roll_delta) FILTER (WHERE freq = 'min5'),  0),
+               coalesce(sum(roll_delta) FILTER (WHERE freq = 'min15'), 0),
+               coalesce(sum(roll_delta) FILTER (WHERE freq = 'min30'), 0),
+               coalesce(sum(roll_delta) FILTER (WHERE freq = 'min60'), 0),
+               count(*) FILTER (WHERE freq = 'min5'),
+               count(*) FILTER (WHERE freq = 'min15'),
+               count(*) FILTER (WHERE freq = 'min30'),
+               count(*) FILTER (WHERE freq = 'min60')
+          FROM l2_adj.roll_segment
+         WHERE symbol = ANY(:syms)
+         GROUP BY symbol
+         ORDER BY symbol
+    """
+    try:
+        rows = c.rows(sql, syms=syms)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}", (
+            "查询失败 → 无法判定（不要当成通过）")
+    if not rows:
+        return False, label, "无段表数据", "l2_adj.roll_segment 为空"
+
+    bad_sum, bad_mono = [], []
+    for r in rows:
+        vals = [float(x or 0) for x in r[1:5]]
+        if max(vals) - min(vals) > 1e-6:
+            bad_sum.append(f"{r[0]}({'/'.join(f'{v:.1f}' for v in vals)})")
+        n5, n15, n30, n60 = (int(r[5]), int(r[6]), int(r[7]), int(r[8]))
+        if n15 and (n5 > n15 or n30 > n15 or n60 > n15):
+            bad_mono.append(f"{r[0]}({n5}/{n15}/{n30}/{n60})")
+
+    ok = not bad_sum and not bad_mono
+    detail = (f"{len(rows)} 品种 / 总量不符 {len(bad_sum)} / 段数单调违反 {len(bad_mono)}"
+              + (f"；总量异常：{','.join(bad_sum[:4])}" if bad_sum else "")
+              + (f"；段数异常：{','.join(bad_mono[:4])}" if bad_mono else ""))
+    return ok, label, detail, ("" if ok else
+                               "某频率的事件被丢/重复计入，或混入旧口径段 → "
+                               "跑 scripts/ops/rebuild_roll_all_freqs.py 统一重算")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -3886,6 +3949,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_roll_finer_anchor_wired),
     ("ROLL-MIN5-NO-FAKE-JUMP", "白名单 5m 后复权换月处无假跳空（|ba_cc|>50 且 raw 未跳）",
      "block", _c_roll_min5_no_fake_jump),
+    # CL-20261108-05：四个频率各自建段，历史上不同频率是在不同版本的检测代码下
+    # 生成的，"min5 比 min15 少几段"到底是合法的分辨率合并还是丢事件，肉眼分不出。
+    # 用 Σroll_delta 守恒 + 段数单调两条恒等式把"同源"钉住（廉价的聚合，不是重算）。
+    ("ROLL-FREQ-PARITY", "四频换月段同源（Σroll_delta 跨频相等 + 段数单调）",
+     "block", _c_roll_freq_parity),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
