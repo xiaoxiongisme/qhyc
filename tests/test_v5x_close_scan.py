@@ -143,3 +143,23 @@ def test_complete_bucket_is_kept():
     })
     cap = min(_t(14, 16), datetime(2026, 11, 9, 14, 15, tzinfo=SH))
     assert len(df[df["bucket"] <= cap]) == 1
+
+
+def test_offgrid_partial_labels_never_reach_state_machine():
+    """夜盘在途半截桶的标签（21:01/21:31/22:01）必须被挡掉。
+
+    实测 2026-11-09 夜盘：合成器夜盘分支把在途桶标签钳到 ``seg_last + 1min``，
+    L1 里真的出现 21:01 / 21:30 / 21:31 / 21:38 / 22:01 这些标签。它们的 bucket
+    **小于** cap（完备性门按分钟最大 ts 封顶，挡不住），若进状态机就会被当成一根
+    真实的 1 分钟 K 线 —— 指标失真、信号误发，且 dedupe_key 把结果永久固化。
+    """
+    legal = set(live.CLOSE_HM)
+    stamps = [
+        "2026-11-09 21:01", "2026-11-09 21:31", "2026-11-09 22:01",  # 半截桶标签
+        "2026-11-09 22:00",                                          # 合法夜盘桶
+    ]
+    df = pd.DataFrame({"bucket": pd.to_datetime(stamps).tz_localize(SH)})
+    mask = df["bucket"].map(lambda b: (b.hour, b.minute) in legal)
+    kept = df[mask]
+    assert len(kept) == 1
+    assert (kept["bucket"].iloc[0].hour, kept["bucket"].iloc[0].minute) == (22, 0)

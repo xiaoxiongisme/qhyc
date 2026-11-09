@@ -398,6 +398,21 @@ def scan_once(session, symbols: list[str] | None = None, *,
         if n_dropped:
             n_partial += 1
         df = df[df["bucket"] <= cap].reset_index(drop=True)
+        # ★ 只吃「合法 60m 网格标签」（2026-11-09，CL-20261109-19）。
+        #   合成器的夜盘分支把**在途半截桶**的标签钳到 ``seg_last + 1min``，实测夜盘
+        #   会出现 21:01 / 21:31 / 21:38 / 22:01 这类标签（白天分支不会，恒落在网格
+        #   边界上）。这类 bar 的 bucket 远小于 cap（22:01 ≤ 23:00），完备性门挡不住，
+        #   状态机会把它当成一根真实的 1 分钟 K 线 → 指标与信号全被污染，且
+        #   dedupe_key 会把错误结果永久固化。标签白名单是最省事又最硬的过滤：
+        #   合法的 60m 收盘标签只有 CLOSE_HM 这些，其余一律不是「一根 K 线」。
+        legal = set(CLOSE_HM)
+        mask = df["bucket"].map(lambda b: (b.hour, b.minute) in legal)
+        n_offgrid = int((~mask).sum())
+        if n_offgrid:
+            n_partial += 1
+            logger.debug(f"[v5x.live] {sym} 丢弃 {n_offgrid} 根非网格标签 bar"
+                         f"（在途半截桶）")
+        df = df[mask].reset_index(drop=True)
         if len(df) < MIN_BARS:
             skipped.append(sym)
             continue
