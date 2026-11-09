@@ -987,10 +987,19 @@ def _c_roll_gap_data(c: Ctx) -> tuple[bool, str, str, str]:
             bad.append(f"{f} 缺段")
         elif not got[f][0].startswith(want):
             bad.append(f"{f} seg_start={got[f][0]}（应为 {want} 之后，不得是 15:00）")
-        elif str(got[f][1]).split(".")[0] != "320":
-            bad.append(f"{f} cum_offset={got[f][1]}（应为 320）")
-    if off is None or str(off).split(".")[0] != "320":
-        bad.append(f"bar_60m_ba@22:00 adj_offset={off}（应为 320，断层未抹平）")
+        elif not got[f][1] or float(got[f][1]) <= 0:
+            # ★ 不再硬编码 320（2026-11-09，CL-20261109-19）。换会话网格后，换月检测
+            #   的锚点 15m 桶价格变了一档，检出的缺口随之 320→340（PF tick=2，20=10 跳）。
+            #   硬编码的数字一改网格就失效，而本断言的意图只有两条：
+            #   ① 换月必须落在夜盘首桶（上面已断言）；② 后复权按该段 cum_offset 抹平。
+            #   所以这里只要求「累计缺口为正」——具体数值由 ROLL-MIN5-NO-FAKE-JUMP 的
+            #   恒等式（ba 与 raw 的价差恰等于 -roll_delta）来保证自洽。
+            bad.append(f"{f} cum_offset={got[f][1]}（应为正数：该品种的累计换月缺口）")
+    # ② 后复权已抹平：22:00 那根的 adj_offset 必须等于 min60 段的 cum_offset。
+    want_off = float(got["min60"][1]) if "min60" in got and got["min60"][1] else None
+    if off is None or want_off is None or abs(float(off) - want_off) > 1e-6:
+        bad.append(f"bar_60m_ba@22:00 adj_offset={off}"
+                   f"（应与 min60 段 cum_offset={want_off} 相等，断层未抹平）")
     return not bad, label, f"segs={got} ba_adj_offset={off}", (
         "" if not bad else
         "；".join(bad) + " → 换月又归到日盘收盘桶或后复权未重建（CL-20261107-15）")
@@ -1634,10 +1643,17 @@ def _c_v5x_close_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
     #    只查**白名单 ×888 的最近 10 天**：那正是 V5X 扫描覆盖的范围。
     #    扩到全 scope（含 8888 指数层与持仓豁免品种）会把「本轮重建范围之外的历史
     #    残留」算进来 —— 那不是收盘链的缺口，而是一条永远转不绿的断言。
+    #    ★ 必须排除「还没结算」的在途桶（2026-11-09，CL-20261109-19）：
+    #      合成器夜盘分支把在途桶标签钳到 ``seg_last + 1min``，夜盘实跑会写出
+    #      22:07/22:08/21:31 这类标签（日盘分支不会，恒落在网格边界）。这不是
+    #      「CLOSE_HM 没跟上网格」，而是「这根 K 线还没收完」—— 桶完成后
+    #      下一轮 purge+re-synth 会把它改写成 23:00。不排除的话，本断言在每个
+    #      夜盘时段都会假红（白天 09:10 的 cron 反而是绿的，最难查的那种）。
     try:
         rows = c.rows(
             "SELECT DISTINCT to_char(b.bucket, 'HH24:MI') FROM l1_mkt.bar_60m b "
-            "WHERE b.symbol = ANY(:syms) AND b.bucket > now() - interval '10 days'",
+            "WHERE b.symbol = ANY(:syms) AND b.bucket > now() - interval '10 days' "
+            "  AND b.bucket < now() - interval '2 hours'",
             syms=sorted({w + "888" for w in c.whitelist}))
         seen = {str(r[0]) for r in rows}
         known = {f"{hh:02d}:{mm:02d}" for hh, mm in live.CLOSE_HM}
