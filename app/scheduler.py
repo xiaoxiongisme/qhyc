@@ -1903,13 +1903,18 @@ def _build_scheduler() -> BlockingScheduler:
                 + "/".join(f":{m:02d}" for m in _V5X_MINUTES)
                 + " hourly (switch v5x_live_enabled)")
 
-    # V5X 理论持仓快照（CL-20261109-08）：日盘收盘后 15:05 推一份「按规则现在
+    # V5X 理论持仓快照（CL-20261109-08）：日盘收盘后推一份「按规则现在
     # 应该持有什么」。V5X 是无状态回放，只推事件不推持仓 —— V3.4 停用后
     # 「盘前预播报」承担的持仓告知整体消失，用户漏看一条 CLOSE 就与统计永久错位。
     # 只读引擎内部状态，不写任何表（与已关闭的持仓同步 CL-20261108-26 无关）。
+    #
+    # ★ 2026-11-09（CL-20261109-16）：15:05 → **15:20**。
+    #   ``minute_and_bars`` 在 :07/:37 跑（实测 15:07→15:09:52），15:00 那根 60m
+    #   要到那时才落 L1/L2。15:05 触发时拿不到当日最后一根，快照天然缺一段；
+    #   留 13 分钟余量后再推「完整收盘态」。
     sched.add_job(
         _v5x_snapshot_job,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=5,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=15, minute=20,
                             timezone=settings.env.TZ),
         id="v5x_snapshot",
         replace_existing=True,
@@ -1917,7 +1922,7 @@ def _build_scheduler() -> BlockingScheduler:
         coalesce=True,
         misfire_grace_time=1800,
     )
-    logger.info("[scheduler] registered v5x_snapshot at 15:05 mon-fri")
+    logger.info("[scheduler] registered v5x_snapshot at 15:20 mon-fri")
 
     # 复权主连每日重算（adjust_cont_adj）已于 2026-10-04 随 fdf 模块退役停用：
     # cont_adj 不再由定时作业生成（fdf 为唯一生产者，已删）。保留 minute_bar（L0 原始）。
