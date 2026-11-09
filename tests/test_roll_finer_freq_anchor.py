@@ -60,14 +60,25 @@ def test_min5_mid_session_roll_lands_on_first_bar_of_bucket():
 
 # --- 2) 桶内无 bar：回退旧规则，事件不丢 -------------------------------------
 def test_min5_fallback_when_bucket_has_no_bar():
-    # 早年 5m 稀疏：桶 [21:00,21:15) 内一根都没有（21:15 也没有），
-    # 只有 15:00 —— 旧规则把事件归到「最后一个 ts <= 锚点」= 15:00。
+    # 早年 5m 稀疏：桶 [21:00,21:15) 内一根都没有。
+    # 回退到旧规则后走 CL-15 的跨休市分支：锚点 21:15 落在 [15:00+5m, 次日 09:15)
+    # 的空隙里，归「第一个 >= 锚点时刻」的桶 = 次日 09:15（不是丢掉、也不是塞进 15:00）。
     buckets = ["2026-11-04 15:00", "2026-11-05 09:15"]
     closes = [7900, 8000]
     g = _frames(buckets, closes)
     _, roll, _ = map_roll_to_freq(g, [("2026-11-04 21:15", 240.0)], 5)
     got = _roll_idx(buckets, roll)
-    assert got == [pd.Timestamp("2026-11-04 15:00")], f"回退规则应归到 15:00，实际 {got}"
+    assert got == [pd.Timestamp("2026-11-05 09:15")], f"回退+跨休市应归次日首根，实际 {got}"
+
+
+def test_min5_fallback_never_drops_event():
+    # 桶内无 bar 且该周期只有一根 bar（锚点早于全部数据）→ 旧规则 drop，
+    # 这是历史行为，必须保持「宁可丢也不误归」的语义，不能被 finer 分支改成乱归。
+    buckets = ["2026-11-05 09:15"]
+    closes = [8000]
+    g = _frames(buckets, closes)
+    _, roll, _ = map_roll_to_freq(g, [("2020-01-02 10:15", 50.0)], 5)
+    assert not roll.any(), "锚点早于全部 5m 数据时应丢弃，不应误归到 09:15"
 
 
 # --- 3) 不更细的周期：行为不变 -----------------------------------------------
