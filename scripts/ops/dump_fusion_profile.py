@@ -103,10 +103,16 @@ SIGNAL_KEYS: tuple[str, ...] = (
 )
 
 #: 运维 / 展示 / 推送字段（含已废弃但保留兼容的 hourly_src）。
+#: 注：``push_log`` 已于 CL-20261109-18 从 FusionConfig 删除（留痕表 DROP），
+#: 故不在此列 —— 它留在 OPS_KEYS 里会让 build_profile() 直接 AttributeError，
+#: 而 build_profile 是 ``signal_params_hash`` 的唯一来源 ⇒ 两条守卫
+#: （OPS-FUSION-PROFILE-PINNED / OPS-CONFIG-SNAPSHOT-FRESH）一起变红。
+#: signal_params_hash 只覆盖 SIGNAL_KEYS，故本次删除**不改变**该 hash，
+#: 也不影响历史 fusion_signal_log.params_hash 的可比性；仅 full_params_hash 变新。
 OPS_KEYS: tuple[str, ...] = (
     "display_max_age_min", "hourly_src", "pushplus_token", "push_stop_levels",
     "heartbeat", "heartbeat_interval_min", "heartbeat_max_rows",
-    "pre_session_times", "trail_push_atr", "signal_repeat_min", "push_log",
+    "pre_session_times", "trail_push_atr", "signal_repeat_min",
     "fallback_webhook", "push_windows",
 )
 
