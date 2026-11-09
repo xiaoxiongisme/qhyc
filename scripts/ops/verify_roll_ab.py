@@ -65,7 +65,7 @@ mis AS (
 SELECT (SELECT count(*) FROM j)                                        AS n_rows,
        (SELECT count(*) FROM ch)                                       AS n_shift,
        (SELECT count(*) FROM ch WHERE bucket NOT IN (SELECT b FROM bd)) AS n_bad,
-       (SELECT coalesce(max(abs(dc)), 0) FROM j)                       AS max_dc,
+       (SELECT coalesce(max(abs(c1 - c0)), 0) FROM j)                  AS max_dc,
        (SELECT count(*) FROM mis WHERE abs(err) > 1e-6)                AS n_ident_bad,
        (SELECT coalesce(max(abs(err)), 0) FROM mis)                    AS max_ident_err
 """
