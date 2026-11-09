@@ -1565,6 +1565,147 @@ def _c_v5x_snapshot_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。持仓快照失效 = 用户无法核对理论持仓，统计与实盘永久错位（CL-20261109-08）")
 
 
+def _c_v5x_close_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """V5X 收盘即时扫描链真实接线（CL-20261109-17）。
+
+    为什么这条值得 block
+
+    用户要求「每小时 K 线结束后 +10s 扫描推送」。这件事有四个**都可以悄悄错**的
+    接缝，任何一处断掉，表现都是「照常运行、就是不推」：
+
+      1. 收盘标签与合成器网格不同源 → 扫的时点不对（历史上 30m 漏 14:45、
+         5m/15m 退回自然整点桶都是「两边各写一份」造成的）；
+      2. 触发器没注册 → 作业永远不跑（`v5x_snapshot` 就踩过「模块写好了没人调」）；
+      3. 字典里被写成 5 段 cron → `scheduler_resync` 每 30 分钟用整分触发覆盖，
+         second=10 静默消失（skill 坑 #2，062 已栽过一次）；
+      4. 完备性门丢了 → 对**在途半截桶**出信号，且 `dedupe_key` 把错误结果永久固化。
+
+    断言五面（零 DB 全表扫，时间窗 ≤ 20 天）：
+      A. `live.CLOSE_HM` 的日盘部分 == 由 `_SESSION_DAY_BOUNDS[60]` 推出的标签；
+      B. 生产近 20 天池内实际出现的 60m 标签 ⊆ `CLOSE_HM`（网格变了标签没跟会红）；
+      C. `live.SCAN_SECOND` 的语义：对每个标签，`label+10s` 必须命中、
+         `label+5s` 与 `label+4min` 必须不命中（触发器窗口的唯一定义）；
+      D. `scheduler.py` 里 `id="v5x_close_scan"` 的 add_job 用 OrTrigger，
+         且 trigger 子树引用 `_V5X_CLOSE_HM` / `_V5X_SCAN_SECOND`（同源，不抄常量）；
+      E. 字典行存在、executor≠apscheduler、schedule 不是 5 段 cron、meta.code_cron 非空。
+    """
+    label = "V5X 收盘即时扫描链真实接线（+10s → 采集/L1/BA/扫描）"
+    try:
+        import ast
+
+        from app.strategies.v5x import live
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "live 模块不可导入（CL-20261109-17）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+    root = Path(__file__).resolve().parents[2]
+
+    # A. 日盘标签与合成器网格同源
+    try:
+        from app.ingest.synthesizer import _SESSION_DAY_BOUNDS as _grid
+        want_day = tuple((9 + b // 60, b % 60) for b in _grid[60])
+        have_day = tuple(sorted(live._DAY_CLOSE_HM))
+        observed.append(f"day={have_day}")
+        if have_day != tuple(sorted(want_day)):
+            bad.append(f"日盘收盘标签 {have_day} != 合成器网格推出 {tuple(sorted(want_day))}")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"日盘标签同源检查失败：{type(exc).__name__}: {exc}")
+
+    # B. 生产实际出现的 60m 标签必须在 CLOSE_HM 里
+    try:
+        rows = c.rows(
+            "SELECT DISTINCT to_char(b.bucket, 'HH24:MI') FROM l1_mkt.bar_60m b "
+            "JOIN l3_ref.v_tradable_scope s ON s.symbol = b.symbol "
+            "WHERE b.bucket > now() - interval '20 days'")
+        seen = {str(r[0]) for r in rows}
+        known = {f"{hh:02d}:{mm:02d}" for hh, mm in live.CLOSE_HM}
+        extra = sorted(seen - known)
+        observed.append(f"seen={len(seen)} extra={extra[:3]}")
+        if extra:
+            bad.append(f"生产出现未登记的 60m 收盘标签 {extra}（CLOSE_HM 没跟上网格）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"生产标签核对失败：{type(exc).__name__}: {exc}")
+
+    # C. 触发器窗口语义：label+10s 命中，label+5s / label+4min 不命中
+    try:
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+
+        from app.ingest.close_pipeline import current_close_label
+
+        tz = ZoneInfo("Asia/Shanghai")
+        base = datetime(2026, 11, 9, 0, 0, tzinfo=tz)   # 周一，避免周末门干扰
+        miss = []
+        for hh, mm in live.CLOSE_HM:
+            lab = base.replace(hour=hh, minute=mm)
+            ok_hit = current_close_label(lab + timedelta(seconds=live.SCAN_SECOND)) == lab
+            ok_early = current_close_label(lab + timedelta(seconds=5)) is None
+            ok_late = current_close_label(lab + timedelta(minutes=4)) is None
+            if not (ok_hit and ok_early and ok_late):
+                miss.append(f"{hh:02d}:{mm:02d}(hit={ok_hit},early={ok_early},late={ok_late})")
+        observed.append(f"window_miss={len(miss)}")
+        if miss:
+            bad.append(f"收盘窗口语义不符：{miss[:3]}")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"窗口语义检查失败：{type(exc).__name__}: {exc}")
+
+    # D. scheduler 注册：OrTrigger + 同源常量引用
+    try:
+        tree = ast.parse((root / "app/scheduler.py").read_text(encoding="utf-8"))
+        node = None
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            name = getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+            if name != "add_job":
+                continue
+            idv = dict((kw.arg, kw.value) for kw in n.keywords if kw.arg).get("id")
+            if isinstance(idv, ast.Constant) and idv.value == "v5x_close_scan":
+                node = n
+                break
+        if node is None:
+            bad.append("scheduler.py 未注册 v5x_close_scan 作业")
+        else:
+            trig = dict((kw.arg, kw.value) for kw in node.keywords if kw.arg).get("trigger")
+            is_or = (isinstance(trig, ast.Call)
+                     and (getattr(trig.func, "id", None) or
+                          getattr(trig.func, "attr", None)) == "OrTrigger")
+            names = {x.id for x in ast.walk(trig)} if trig is not None else set()
+            same_src = {"_V5X_CLOSE_HM", "_V5X_SCAN_SECOND"} <= names
+            observed.append(f"OrTrigger={is_or} same_src={same_src}")
+            if not is_or:
+                bad.append("v5x_close_scan 的 trigger 不是 OrTrigger（多标签无法表达）")
+            if not same_src:
+                bad.append("trigger 未引用 CLOSE_HM/SCAN_SECOND（另抄常量会漂移）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"scheduler 注册检查失败：{type(exc).__name__}: {exc}")
+
+    # E. 字典行：必须存在且保持惰性
+    try:
+        rows = c.rows(
+            "SELECT executor, coalesce(schedule,''), coalesce(meta->>'code_cron','') "
+            "FROM ops.scheduled_task WHERE task_id = 'v5x_close_scan'")
+        if not rows:
+            bad.append("ops.scheduled_task 缺 v5x_close_scan 行（migrations/068）")
+        else:
+            executor, schedule, code_cron = rows[0][0], rows[0][1], rows[0][2]
+            observed.append(f"dict={executor}/{schedule!r}")
+            if executor == "apscheduler":
+                bad.append("executor=apscheduler → resync 会用 5 段 cron 覆盖 second=10")
+            if len(schedule.split()) == 5:
+                bad.append(f"schedule={schedule!r} 是合法 5 段 cron，会被 resync 覆盖")
+            if not code_cron:
+                bad.append("meta.code_cron 为空（真实节奏意图丢失）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"字典核对失败：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。收盘链断 = 信号晚到甚至永远不到（CL-20261109-17）")
+
+
 def _c_schedule_parity(c: Ctx) -> tuple[bool, str, str, str]:
     """调度频率只有一个真相：字典 schedule 必须等于代码节奏（CL-20261109-07）。
 
@@ -4133,6 +4274,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 首份人工清单 5 个仓抄反了 4 个方向，所以「方向标签」也进断言。
     ("V5X-SNAPSHOT-WIRED", "理论持仓快照真实接线且方向标签正确", "block",
      _c_v5x_snapshot_wired),
+    # CL-20261109-17：用户要求「60m 收盘 +10s 扫描推送」。四个接缝都可静默断掉
+    # （标签不同源 / 没注册 / 字典被写成 5 段 cron / 半截桶门失效），且表现都是
+    # 「照常运行就是不推」。这条把它们钉在一处。
+    ("V5X-CLOSE-SCAN-WIRED", "V5X 收盘即时扫描链接线（标签同源/注册/字典惰性/窗口语义）",
+     "block", _c_v5x_close_scan_wired),
     # CL-20261109-07：ops.scheduled_task.schedule 会覆盖代码 CronTrigger（字典赢）。
     # fusion_scan 字典 1,31 vs 代码 5,35；v5x_scan 靠 executor='manual'+'unknown'
     # 两条巧合才保住节奏 —— 纯属幸存，必须变成断言。

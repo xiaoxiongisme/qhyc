@@ -52,6 +52,7 @@ from sqlalchemy import text
 
 from app.core.logging import logger
 from app.data.tradable_scope import load_tradable_pool
+from app.ingest.synthesizer import _SESSION_DAY_BOUNDS
 from app.strategies.v5x.context import assign_td, build_ctx, build_cost, load_market_data
 from app.strategies.v5x.engine import SymbolEngine
 from app.strategies.v5x.params import config_from
@@ -59,6 +60,8 @@ from app.strategies.v5x.params import config_from
 __all__ = [
     "V5XSignal",
     "SCAN_MINUTES",
+    "SCAN_SECOND",
+    "CLOSE_HM",
     "scan_once",
     "scan_range",
     "format_message",
@@ -88,7 +91,28 @@ MAX_BAR_AGE_MIN = 90
 #: 而 :35 时刻一跑就出来了。这不是「少推一条」的小事——回放对账会把这条算进去，
 #: 于是「回放有、实盘没有」，对账永远对不平。
 #: V3.4 一直就是 :05/:35 双跑，V5X 抄成单跑是移植时的疏漏。
+#:
+#: ★ 2026-11-09（CL-20261109-17）：:05/:35 是**兜底**，不再是主节奏。主节奏改由
+#:   ``CLOSE_HM`` + :data:`SCAN_SECOND` 表达（每根 60m 收盘后 10 秒），见下。
 SCAN_MINUTES = (5, 35)
+#: 收盘后多少秒触发「收盘即时扫描」。
+#:
+#: 为什么不是 0 秒：``bucket`` 是**收盘时刻**，收盘那一瞬 L0 还没把最后一分钟
+#: 落库；留 10 秒给采集/写入的抖动，再由 :func:`app.ingest.close_pipeline.run_close_chain`
+#: 做完备性判定与重试，绝不拿半截桶出信号。
+SCAN_SECOND = 10
+#: 60m 日盘收盘标签（时, 分）—— **从合成器会话网格派生，不另抄一份**。
+#: ``_SESSION_DAY_BOUNDS[60] = [60, 135, 315, 360]`` 是相对 09:00 的分钟偏移，
+#: 展开即 10:00 / 11:15 / 14:15 / 15:00。两处若各写一遍，下一次改网格必然漂移
+#: （历史上 30m 漏 14:45、5m/15m 退回自然整点桶都是这么来的）。
+_DAY_CLOSE_HM = tuple((9 + b // 60, b % 60) for b in _SESSION_DAY_BOUNDS[60])
+#: 60m 夜盘收盘标签：夜盘从 21:00 起、无休市，段尾随品种不同
+#: （23:00 / 01:00 / 02:30 三类）。这里是**全品种并集**——多扫一个不存在的标签
+#: 只多一次空转（完备性门会挡掉），少一个就是漏推。
+#: 守卫 ``V5X-CLOSE-SCAN-WIRED`` 会拿生产实际出现的夜盘标签反向验证本集合。
+NIGHT_CLOSE_HM = ((22, 0), (23, 0), (0, 0), (1, 0), (2, 0), (2, 30))
+#: 全部 60m 收盘标签（日盘 + 夜盘并集，按日内时间升序）。
+CLOSE_HM: tuple[tuple[int, int], ...] = tuple(sorted(_DAY_CLOSE_HM + NIGHT_CLOSE_HM))
 #: V5X 信号价格源（与回测 v5x_backtest.py 默认一致）
 SRC = "bar_60m_ba"
 #: 实盘口径：t-1 门控 + 无前视体制
@@ -162,15 +186,75 @@ def _td_series(buckets: pd.Series, open_days: np.ndarray) -> np.ndarray:
 
 
 def _next_scan_time(t: datetime) -> datetime | None:
-    """``t`` 之后（含）最近的一个扫描触发时刻（``SCAN_MINUTES`` 内的整分）。"""
+    """``t`` 之后（含）最近的一个扫描触发时刻。
+
+    两类触发点取最早者（2026-11-09，CL-20261109-17）：
+
+      * **主节奏**：每根 60m 收盘后 :data:`SCAN_SECOND` 秒（``CLOSE_HM``），
+        由 ``v5x_close_scan`` 作业驱动，数据链同时刷新；
+      * **兜底**：:data:`SCAN_MINUTES` 整分（:05/:35），旧节奏保留 —— 收盘作业
+        失败/数据未就绪时，它仍会在下一轮把漏掉的 bar 补上（dedupe 保证不重复推）。
+
+    返回的是**带秒**的时刻：收盘即时扫描是 :10 秒，不能截断到整分，否则
+    ``_coverable`` 会把「14:15:10 才扫」误算成「14:15:00 扫」，进而把收盘那根
+    错误地判成不可评估。
+    """
+    cands: list[datetime] = []
+
+    # 兜底节奏：整分
     cur = t.replace(second=0, microsecond=0)
     if cur < t:
         cur += timedelta(minutes=1)
     for _ in range(90):
         if cur.minute in SCAN_MINUTES:
-            return cur
+            cands.append(cur)
+            break
         cur += timedelta(minutes=1)
-    return None
+
+    # 主节奏：收盘 + SCAN_SECOND。跨零点/夜盘要用「日期 ±1」构造，
+    # 不能直接 replace(hour=...) —— 那样 00:00 与 23:00 会落到错误的日期上。
+    for hh, mm in CLOSE_HM:
+        for off in (-1, 0, 1):
+            c = (t + timedelta(days=off)).replace(
+                hour=hh, minute=mm, second=SCAN_SECOND, microsecond=0)
+            if c >= t:
+                cands.append(c)
+    return min(cands) if cands else None
+
+
+def _complete_max(session, symbols: list[str], now: datetime) -> dict[str, datetime]:
+    """每个品种「已收完」的最新分钟标签。
+
+    判据：``l0_raw.minute_bar`` 的 ``ts`` 是**分钟终点**标签（实测 14:15 那根覆盖
+    14:14:00→14:15:00），60m 桶 ``bucket`` 也是终点标签，两者可直接比大小 ——
+    桶 ``B`` 已收完 ⟺ 存在分钟 ``ts = B``（等价于 ``max(ts) >= B``）。
+
+    为什么必须有这道门（CL-20261109-17）：``synthesize_bars_incremental`` 会写
+    **在途半截桶**（docstring 原文「覆盖在途桶」）。实测 2026-11-09 14:07 那一轮
+    就把 13:30→14:07 的 60m 半截桶写成了标签 14:15 的 bar。``scan_once`` 原来只按
+    ``bucket <= now`` 过滤，于是 **14:35 的扫描会把半截 14:15 当成已收盘 K 线**，
+    出的信号还会被 ``dedupe_key`` 永久固化（同一根 bar 的重算结果再也进不来）。
+    """
+    since = now - timedelta(days=3)
+    rows = session.execute(
+        text(
+            "SELECT symbol, max(ts) FROM public.minute_bar "
+            "WHERE symbol = ANY(:syms) AND ts >= :a GROUP BY symbol"
+        ),
+        {"syms": list(symbols), "a": since},
+    ).all()
+    out: dict[str, datetime] = {}
+    for sym, ts in rows:
+        if ts is None:
+            continue
+        # 统一时区身份：``now`` 可能是 naive（默认 ``datetime.now()``），
+        # 而 timestamptz 取回来是 aware —— 直接比大小会 TypeError。
+        if now.tzinfo is None and ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        elif now.tzinfo is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=now.tzinfo)
+        out[str(sym)] = ts
+    return out
 
 
 def _coverable(t: datetime, nxt: datetime | None,
@@ -293,14 +377,27 @@ def scan_once(session, symbols: list[str] | None = None, *,
     cfg = config_from(overrides or {})
     sigs: list[V5XSignal] = []
     skipped: list[str] = []
+    n_partial = 0
+    # 完备性门（CL-20261109-17）：只有分钟数据覆盖到桶尾的 bar 才算「已收盘」。
+    # 拿不到某品种的 L0 记录时退化为 now（不额外限制），但会把次数记进 diagnostics ——
+    # 静默退化会让整池「看起来都有信号」或「看起来都没信号」，两种情况都查不出原因。
+    complete_max = _complete_max(session, symbols, now)
 
     for sym in symbols:
         df = md.bars.get(sym)
         if df is None or df.empty:
             skipped.append(sym)
             continue
-        # 只吃已收盘的 bar：bucket 是收盘时刻，未收盘的那根不进状态机
-        df = df[df["bucket"] <= now].reset_index(drop=True)
+        # 只吃已收盘的 bar：bucket 是收盘时刻，未收盘的那根不进状态机。
+        # cap = min(now, 分钟数据已覆盖到的位置) —— 后者挡掉在途半截桶。
+        cap = now
+        cm = complete_max.get(sym)
+        if cm is not None and cm < cap:
+            cap = cm
+        n_dropped = int((df["bucket"] > cap).sum())
+        if n_dropped:
+            n_partial += 1
+        df = df[df["bucket"] <= cap].reset_index(drop=True)
         if len(df) < MIN_BARS:
             skipped.append(sym)
             continue
@@ -324,7 +421,8 @@ def scan_once(session, symbols: list[str] | None = None, *,
             sigs.extend(_to_signals(sym, ts, off, orders))
 
     logger.info(f"[v5x.live] 扫描完成：{len({s.symbol for s in sigs})} 品种出信号，"
-                f"{len(skipped)} 品种跳过（预热不足/无 bar/数据陈旧）")
+                f"{len(skipped)} 品种跳过（预热不足/无 bar/数据陈旧）；"
+                f"{n_partial} 品种因分钟数据未覆盖到桶尾而降级到最后已收完的桶")
     return sigs
 
 

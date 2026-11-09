@@ -1060,6 +1060,58 @@ def _v5x_scan_job() -> dict | None:
     return res
 
 
+def _v5x_close_scan_job() -> dict | None:
+    """V5X 收盘即时扫描（CL-20261109-17）：每根 60m 收盘 **+10s** 跑一条完整链。
+
+    「收盘 → 推送」四步（:mod:`app.ingest.close_pipeline`）：补 L0 分钟 →
+    合成 L1 → 刷 BA(60m) → 扫描推送。**顺序不能换**：任一步缺，扫描读到的
+    就不是这根刚收盘的 K 线（BA 一天只重建 3 次，实测 15:00 那根要到 15:55）。
+
+    触发时刻由 ``live.CLOSE_HM`` + ``live.SCAN_SECOND`` 决定（日盘 10:00/11:15/
+    14:15/15:00，夜盘 22:00/23:00/00:00/01:00/02:00/02:30），与 :05/:35 的
+    兜底扫描并存：本作业负责「准时」，兜底负责「不漏」。
+
+    实测送达时刻约在收盘后 40~60 秒（采集并发 6 路 ≈8s、L1 ≈9s、BA ≈10~30s、
+    扫描 ≈13s）。**10 秒只是触发时刻，不是送达时刻** —— 数据源本身有秒级延迟，
+    53 个品种要逐个拉，这一点写死在台账里，不粉饰。
+    """
+    if not _switch_on("v5x_live_enabled", "QH_V5X_LIVE", default=False):
+        logger.debug("[scheduler] v5x_live_enabled=off → 跳过收盘即时扫描")
+        return
+    now = datetime.now(_SH_TZ)
+
+    from app.ingest.close_pipeline import current_close_label, run_close_chain
+
+    label = current_close_label(now)
+    if label is None:
+        # misfire 补跑、手动触发、或 cron 抖动晚了 >MAX_LAG_S：这根早已被后续 bar
+        # 顶掉，重跑只会对错位的 bar 出信号 → 放弃，交给兜底扫描。
+        logger.info(f"[scheduler] v5x close scan {now:%H:%M:%S} 不在收盘窗口内，跳过")
+        return
+
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    if not is_hourly_collection_allowed(now):
+        logger.info(f"[scheduler] v5x close scan {label:%m-%d %H:%M} 非交易时段，跳过")
+        return
+
+    try:
+        with session_scope() as s:
+            res = run_close_chain(s, label)
+    except Exception as e:  # noqa: BLE001
+        # 与 _v5x_scan_job 同一条纪律：必须外抛，否则「链跑挂了」会被记成 success。
+        logger.exception(f"[scheduler] v5x close scan 失败：{e}")
+        raise
+
+    scan = res.get("scan") or {}
+    if scan.get("n_unsent") and not scan.get("pushed"):
+        raise RuntimeError(
+            f"V5X 收盘链 {label:%H:%M} 有 {scan['n_unsent']} 条信号已落库但推送失败"
+            f"（via={scan.get('via')}）——数据在 v5x_signal_log(notify_ok=false)，"
+            f"2h 内下一轮会自动补发"
+        )
+    return res
+
+
 def _v5x_snapshot_job() -> dict | None:
     """V5X 理论持仓快照（只读 + 推送）— CL-20261109-08。
 
@@ -1902,6 +1954,37 @@ def _build_scheduler() -> BlockingScheduler:
     logger.info("[scheduler] registered v5x_scan at "
                 + "/".join(f":{m:02d}" for m in _V5X_MINUTES)
                 + " hourly (switch v5x_live_enabled)")
+
+    # ★ V5X 收盘即时扫描（CL-20261109-17）：60m 每根收盘 +10s 跑完整数据链 + 推送。
+    #   与上面的 :05/:35 并存 —— 前者是「准时」，后者是「不漏」的兜底。
+    #   触发点用 OrTrigger 一组 CronTrigger 表达（apscheduler 的 cron 无法用单个
+    #   表达式写出 10:00/11:15/14:15/15:00 + 夜盘这几个非整点标签）。
+    #   ⚠ 5 段 cron（minute 粒度）表达不了 second=10；``ops.scheduled_task.schedule``
+    #     里这一项刻意写成**非 cron 描述文本**，否则 scheduler_resync 会用
+    #     ``CronTrigger.from_crontab`` 把它覆盖成整分触发（skill 坑 #2）。
+    from apscheduler.triggers.combining import OrTrigger
+    from app.strategies.v5x.live import CLOSE_HM as _V5X_CLOSE_HM
+    from app.strategies.v5x.live import SCAN_SECOND as _V5X_SCAN_SECOND
+
+    sched.add_job(
+        _v5x_close_scan_job,
+        trigger=OrTrigger([
+            CronTrigger(hour=hh, minute=mm, second=_V5X_SCAN_SECOND,
+                        timezone=settings.env.TZ)
+            for hh, mm in _V5X_CLOSE_HM
+        ]),
+        id="v5x_close_scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        # 补跑窗口要短：晚于 3 分钟的补跑已被 current_close_label 判为「不在窗口」
+        # 并直接跳过，所以这里给超过它的宽限没有意义。
+        misfire_grace_time=120,
+    )
+    logger.info("[scheduler] registered v5x_close_scan at "
+                + "/".join(f"{hh:02d}:{mm:02d}:{_V5X_SCAN_SECOND:02d}"
+                           for hh, mm in _V5X_CLOSE_HM)
+                + " (switch v5x_live_enabled)")
 
     # V5X 理论持仓快照（CL-20261109-08）：日盘收盘后推一份「按规则现在
     # 应该持有什么」。V5X 是无状态回放，只推事件不推持仓 —— V3.4 停用后

@@ -439,7 +439,10 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
     if market_live and (v5x_on or v34_on):
         ok2, out2 = psql_fn(
             "SELECT max(finished_at)::text FROM ops.scheduled_task_run"
-            " WHERE task_id IN ('v5x_scan','fusion_scan') AND status='success'"
+            # v5x_close_scan 是 CL-20261109-17 起的**主节奏**（60m 收盘 +10s），
+            # 漏掉它会让「收盘链停摆」这个故障完全不可见 —— 只剩下兜底的
+            # :05/:35 还能记 success，链路看起来一切正常。
+            " WHERE task_id IN ('v5x_close_scan','v5x_scan','fusion_scan') AND status='success'"
             "   AND finished_at > now() - interval '2 days'")
         if ok2 and out2.strip() and out2.strip() != "None":
             stall_h = _age_h(out2.strip())

@@ -118,26 +118,78 @@ class MinuteCollector:
         only_products: Iterable[str] | None = None,
         data_length: int = 5000,
         dry_run: bool = False,
+        workers: int = 1,
+        symbols: Iterable[str] | None = None,
     ) -> list[dict]:
+        """采集全部（或指定）主连的分钟线。
+
+        ``workers > 1``（2026-11-09，CL-20261109-17）：**并发抓取、串行落库**。
+        收盘即时扫描要在 K 线收盘后十几秒内拿到数据，串行 53 个品种约 37 秒
+        （实测 14:07:00→14:07:37），并发 6 路约 7 秒。抓取是纯 HTTP（akshare 新浪
+        接口），落库才需要单线程：``Session`` 非线程安全，并发 upsert 还会互相等锁。
+        """
         specs = get_settings().main_contracts
         if only_products:
             specs = [s for s in specs if s.product in set(only_products)]
+        if symbols:
+            want = {str(s) for s in symbols}
+            specs = [s for s in specs if s.symbol in want]
         results: list[dict] = []
         try:
-            for spec in specs:
-                try:
-                    n = self.collect_symbol(
-                        spec, data_length=data_length, dry_run=dry_run
-                    )
-                    results.append({"symbol": spec.symbol, "rows": n})
-                except Exception as e:
-                    logger.exception(f"[minute] {spec.symbol} 异常: {e}")
-                    results.append({"symbol": spec.symbol, "error": str(e)})
+            if workers and workers > 1:
+                results = self._collect_parallel(specs, int(workers), dry_run)
+            else:
+                for spec in specs:
+                    try:
+                        n = self.collect_symbol(
+                            spec, data_length=data_length, dry_run=dry_run
+                        )
+                        results.append({"symbol": spec.symbol, "rows": n})
+                    except Exception as e:
+                        logger.exception(f"[minute] {spec.symbol} 异常: {e}")
+                        results.append({"symbol": spec.symbol, "error": str(e)})
         finally:
             self.close()
         ok = sum(1 for r in results if "error" not in r)
         logger.info(f"[minute] collect_all done: {ok}/{len(results)} symbols")
         return results
+
+    def _collect_parallel(
+        self, specs: list, workers: int, dry_run: bool
+    ) -> list[dict]:
+        """并发抓取 + 串行落库（见 :meth:`collect_all` 的 workers 说明）。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _fetch(spec):
+            try:
+                return spec, self._fetch_akshare(spec), None
+            except Exception as e:  # noqa: BLE001 —— 单品种失败不能拖垮整轮
+                return spec, None, e
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            fetched = list(ex.map(_fetch, specs))
+
+        results: list[dict] = []
+        for spec, rows, err in fetched:
+            if err is not None:
+                logger.warning(f"[minute] {spec.symbol} 抓取失败: {err}")
+                results.append({"symbol": spec.symbol, "error": str(err)})
+                continue
+            if not rows:
+                logger.warning(f"[minute] {spec.symbol} akshare 无数据")
+                results.append({"symbol": spec.symbol, "rows": 0})
+                continue
+            if dry_run:
+                results.append({"symbol": spec.symbol, "rows": len(rows)})
+                continue
+            try:
+                self._upsert(rows)
+                results.append({"symbol": spec.symbol, "rows": len(rows)})
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"[minute] {spec.symbol} 落库异常: {e}")
+                results.append({"symbol": spec.symbol, "error": str(e)})
+        return results
+
 
     # ---------- akshare 唯一源 ----------
     def _fetch_akshare(self, spec: MainContractSpec) -> list[dict]:
