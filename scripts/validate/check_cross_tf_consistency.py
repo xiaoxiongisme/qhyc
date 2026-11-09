@@ -98,7 +98,7 @@ def _check_one(conn, *, hi_tbl: str, lo_tbl: str,
 
     sql = f"""
         WITH m(hi_tm, parts) AS (VALUES {frag})
-        -- 每一段都必须 COALESCE：低周期缺桶时 LATERAL 里的 {agg} 为 NULL（count=0），
+        -- 每一段都必须 COALESCE：低周期缺桶时 LATERAL 里的聚合值为 NULL（count=0），
         -- 而 PG 的 || 遇 NULL 会让**整条字符串**变 NULL → Python 侧 r[0].replace() 直接
         -- AttributeError。这个崩溃恰好只发生在「真的缺 bar」的场景，等于「越该报错越崩」。
         SELECT b.symbol || ' ' || to_char(b.bucket, 'YYYY-MM-DD HH24:MI')
