@@ -3221,6 +3221,11 @@ def _back_adjusted_job() -> None:
     )
     try:
         with session_scope() as s:
+            # 2026-11-09 实测（CL-20261109-11）：连续调换月 CTE 时 PG 的 JIT 会把
+            # 「5713 个函数」的计划编译成 32s Optimization + 25s Emission，占总耗时
+            # 58/60 秒；关掉后单品种 min5 从 75s 降到 8.2s，**结果逐位不变**。
+            # 本作业在 roll_segment 签名变化时会走全量重建，正是这条慢路径。
+            s.execute(text("SET LOCAL jit = off"))
             for _f in ("min5", "min15", "min30", "min60"):
                 s.execute(
                     text("CALL l2_adj.sp_build_l2_back_adjusted(:f)"), {"f": _f}
