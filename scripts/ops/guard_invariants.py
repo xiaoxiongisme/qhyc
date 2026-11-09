@@ -75,6 +75,20 @@ class Result:
     waiver_ref: str = ""
 
 
+def _hkey(v):
+    """把 SQL 参数值归一成可哈希形式（缓存键用）。
+
+    断言里大量出现 ``= ANY(:syms)`` 这类 **list** 参数；直接塞进 dict key 会抛
+    ``unhashable type: 'list'``。这不是理论问题：``L1-SESSION-GRID`` 因此整整一天
+    报的是「查询失败 → 无法判定」，既不红也不绿，等于这条断言不存在。
+    """
+    if isinstance(v, (list, set, frozenset)):
+        return tuple(sorted(_hkey(x) for x in v))
+    if isinstance(v, dict):
+        return tuple(sorted((k, _hkey(x)) for k, x in v.items()))
+    return v
+
+
 @dataclass
 class Ctx:
     session: object
@@ -85,7 +99,10 @@ class Ctx:
     def scalar(self, sql: str, **params):
         # 缓存键必须含参数：按 layer 循环查同一句 SQL 时，只按 SQL 文本做键
         # 会让三个 layer 全部命中第一次的结果（曾导致 index 断更被误判为 PASS）。
-        key = (sql, tuple(sorted(params.items())))
+        # 参数里常见 ``ANY(:labs)`` 的 **list**，而 list 不可哈希 → 直接放进 key
+        # 会抛 ``unhashable type: 'list'``（L1-SESSION-GRID 就这么「查询失败 →
+        # 无法判定」了一整天，而不是红也不是绿）。统一归一成 tuple。
+        key = (sql, tuple(sorted((k, _hkey(v)) for k, v in params.items())))
         if key not in self._cache:
             self._cache[key] = self.session.execute(text(sql), params).scalar()
         return self._cache[key]
@@ -1614,11 +1631,14 @@ def _c_v5x_close_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
         bad.append(f"日盘标签同源检查失败：{type(exc).__name__}: {exc}")
 
     # B. 生产实际出现的 60m 标签必须在 CLOSE_HM 里
+    #    只查**白名单 ×888 的最近 10 天**：那正是 V5X 扫描覆盖的范围。
+    #    扩到全 scope（含 8888 指数层与持仓豁免品种）会把「本轮重建范围之外的历史
+    #    残留」算进来 —— 那不是收盘链的缺口，而是一条永远转不绿的断言。
     try:
         rows = c.rows(
             "SELECT DISTINCT to_char(b.bucket, 'HH24:MI') FROM l1_mkt.bar_60m b "
-            "JOIN l3_ref.v_tradable_scope s ON s.symbol = b.symbol "
-            "WHERE b.bucket > now() - interval '20 days'")
+            "WHERE b.symbol = ANY(:syms) AND b.bucket > now() - interval '10 days'",
+            syms=sorted({w + "888" for w in c.whitelist}))
         seen = {str(r[0]) for r in rows}
         known = {f"{hh:02d}:{mm:02d}" for hh, mm in live.CLOSE_HM}
         extra = sorted(seen - known)
@@ -1672,7 +1692,8 @@ def _c_v5x_close_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
             is_or = (isinstance(trig, ast.Call)
                      and (getattr(trig.func, "id", None) or
                           getattr(trig.func, "attr", None)) == "OrTrigger")
-            names = {x.id for x in ast.walk(trig)} if trig is not None else set()
+            names = ({x.id for x in ast.walk(trig) if isinstance(x, ast.Name)}
+                     if trig is not None else set())
             same_src = {"_V5X_CLOSE_HM", "_V5X_SCAN_SECOND"} <= names
             observed.append(f"OrTrigger={is_or} same_src={same_src}")
             if not is_or:
