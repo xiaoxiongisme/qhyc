@@ -75,6 +75,11 @@ def patched(monkeypatch):
     md = SimpleNamespace(bars={"RB888": df},
                          open_days=np.array([np.datetime64("2026-11-06")]))
     monkeypatch.setattr(live, "_load", lambda session, symbols, end: (md, ["RB888"]))
+    # CL-20261109-17 给 scan_once 加了「分钟完备性门」：_complete_max 会真查
+    # l0_raw.minute_bar 才知道某个 60m 桶是否已经收完。本用例只比「回放 vs 实时」
+    # 的价格/方向一致性，不涉及落库完备性，故按「分钟数据已覆盖到 now」打桩
+    # （返回空 dict = 不设上限 = 旧行为）。门本身的用例在 test_v5x_close_scan.py。
+    monkeypatch.setattr(live, "_complete_max", lambda s, syms, now: {})
     return df
 
 
