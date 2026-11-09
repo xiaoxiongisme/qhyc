@@ -3724,24 +3724,32 @@ def _c_roll_finer_anchor_wired(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
-    """CL-20261108-06：白名单品种的 5m 后复权序列在换月处不得有「假跳空」。
+    """CL-20261108-06：5m 后复权序列的换月 delta 必须**精确**落在段首那根 bar 上。
 
-    判据：取每个 min5 段边界那根 bar，比较
-      · ``ba_cc``  = |后复权 close 差|（本根 - 上一根）
-      · ``raw_cc`` = |原始 close 差|
-    若 ``ba_cc`` 很大（> 50 点）而 ``raw_cc`` 很小（< 10% ba_cc），说明该边界
-    把一段**原本不存在的跳空**贴在了这根 bar 上 —— 正是旧映射（取桶末根）的形状：
-    PF888 2026-11-04 的 21:05/21:10 被留在旧 offset，21:15 一次性跳 240 点。
+    为什么从「阈值启发式」换成「精确恒等式」（2026-11-09 修正）：
 
-    50 点是「绝对地板」，为了压掉小品种噪声；它只抓大跳空，不追求尺度归一化。
-    基线（2026-11-09 08:07，38 品种、1427 个边界）：116 根假跳空，最大 716 点。
+    原判据是「``|ba_cc|>50`` 且 ``raw_cc < 10% * ba_cc``」——拿 close-to-close 比。
+    它把 **116 根**旧映射（取桶末根）的假跳空抓了出来，但留下 2 根疑似：
+    OI888@2012-11-02 09:50（ba 10052−10110=−58，raw 10024−10020=+4，delta=62）、
+    SF888@2016-09-28 14:40（−154 / +6 / 160）。查下去发现**它们都是对的**：
+    换月缺口落在段首那根 bar 的**开盘**里（open 从 4640 跳到 4800），close 只动 +6，
+    于是 close-to-close 看着像大跳，实际上 delta 正好在段首兑现 —— 这是 063 的目标形态。
+    阈值法无法区分「delta 在该兑现的 bar 兑现」与「delta 晚一根兑现」，只会误伤。
+
+    新判据（精确、无阈值、无尺度依赖）：
+        对每个 min5 段边界 T：
+        ``(ba.close(T) - ba.close(T-)) - (raw.close(T) - raw.close(T-)) == -roll_delta``
+    后复权 = raw + offset，offset 在 T 处跃变 −roll_delta，故上式恒等成立当且仅当
+    delta 在 T 这根兑现且只兑现一次。旧映射（delta 记在桶末根）会让残差等于
+    该段 roll_delta（未抵消）→ 直接判红。
+    2026-11-09 实测：全池 4,152 个边界，残差偏离 1e-6 以上 **0 个**。
 
     ⚠ 只统计**已存在**的边界。边界整条丢失（上游门控把换月事件丢了）时这根 bar
     根本不在样本里，本断言看不见——那是 CL-20261108-05 的另一半（min5 与 min15
-    段数差），根因是 ``idx_delta`` 门控依赖的 8888 指数连在早年缺失，重跑只会
+    段数差），根因是 ``idx_delta`` 门控依赖的 8888 指数在早年缺失，重跑只会
     得到更少事件，需要单独拍板，暂不并入这条断言。
     """
-    label = "白名单 5m 后复权换月处无假跳空（|ba_cc|>50 且 raw 未跳）"
+    label = "5m 换月 delta 精确落在段首（无假跳空）"
     if not c.whitelist:
         return False, label, "白名单为空", "l3_ref.tradable_variety 无有效品种"
     syms = sorted({w if w.endswith("888") else w + "888" for w in c.whitelist})
@@ -3749,10 +3757,12 @@ def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
         SELECT bd.symbol,
                count(*) AS n,
                count(*) FILTER (
-                 WHERE abs(b.close - p.close) > 50
-                   AND abs(r.close - q.close) < 0.1 * abs(b.close - p.close)) AS fake,
-               max(abs(b.close - p.close))::float AS mx
-          FROM (SELECT symbol, seg_start FROM l2_adj.roll_segment
+                 WHERE abs((b.close - p.close) - (r.close - q.close)
+                           + bd.roll_delta) > 1e-6) AS bad,
+               max(abs((b.close - p.close) - (r.close - q.close)
+                       + bd.roll_delta))::float AS mx,
+               count(*) FILTER (WHERE abs(b.close - p.close) > 50) AS big
+          FROM (SELECT symbol, seg_start, roll_delta FROM l2_adj.roll_segment
                  WHERE freq = 'min5' AND symbol = ANY(:syms)) bd
           JOIN l2_adj.bar_5m_ba b ON b.symbol = bd.symbol AND b.bucket = bd.seg_start
           JOIN l1_mkt.bar_5m   r ON r.symbol = bd.symbol AND r.bucket = bd.seg_start
@@ -3772,13 +3782,17 @@ def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
         return False, label, f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}", (
             "查询失败 → 无法判定（不要当成通过）")
     tot = sum(int(r[2]) for r in rows)
-    mx = max((float(r[3]) for r in rows), default=0.0)
+    mx = max((float(r[3] or 0) for r in rows), default=0.0)
+    n_bd = sum(int(r[1]) for r in rows)
+    n_big = sum(int(r[4]) for r in rows)
     worst = [f"{r[0]}={int(r[2])}" for r in rows if int(r[2])]
     return tot == 0, label, (
-        f"边界 {sum(int(r[1]) for r in rows)} 根 / 假跳空 {tot} 根 / 最大 {mx:.0f} 点"
+        f"边界 {n_bd} 根 / 残差违约 {tot} 根 / 最大 {mx:.3f}"
+        f"（|Δba|>50 的段首 {n_big} 根，均已由 roll_delta 解释）"
         + (f"（{','.join(worst)}）" if worst else "")
     ), ("" if tot == 0 else
-        "换月边界仍落在桶末根 → 见 migrations/063 + CL-20261108-06")
+        "delta 没在段首 bar 兑现（晚一根或记在桶末根）→ 见 migrations/063 + "
+        "CL-20261108-06，需重算该品种 roll_segment 并重建 ba")
 
 
 def _c_roll_freq_parity(c: Ctx) -> tuple[bool, str, str, str]:
@@ -4062,7 +4076,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 重新踩 OOM 路径）。两条断言：双真源一致 + 数据层无假跳空。
     ("ROLL-FINER-ANCHOR-WIRED", "min5 锚点取桶内第一根（SQL+056 短路 / Python 双真源）",
      "block", _c_roll_finer_anchor_wired),
-    ("ROLL-MIN5-NO-FAKE-JUMP", "白名单 5m 后复权换月处无假跳空（|ba_cc|>50 且 raw 未跳）",
+    # 2026-11-09 起判据换成精确恒等式：段首那根的 (Δba − Δraw) 必须正好等于 −roll_delta。
+    # 原阈值法（|Δba|>50 且 raw 未跳）会把「缺口落在段首 bar 的 open 里」的
+    # 正确形态误判成假跳空（OI888@2012-11-02、SF888@2016-09-28 两根即此类）。
+    ("ROLL-MIN5-NO-FAKE-JUMP", "5m 换月 delta 精确落在段首（无假跳空）",
      "block", _c_roll_min5_no_fake_jump),
     # CL-20261108-05：四个频率各自建段，历史上不同频率是在不同版本的检测代码下
     # 生成的，"min5 比 min15 少几段"到底是合法的分辨率合并还是丢事件，肉眼分不出。
