@@ -3747,6 +3747,7 @@ def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
     syms = sorted({w if w.endswith("888") else w + "888" for w in c.whitelist})
     sql = """
         SELECT bd.symbol,
+               count(*) AS n,
                count(*) FILTER (
                  WHERE abs(b.close - p.close) > 50
                    AND abs(r.close - q.close) < 0.1 * abs(b.close - p.close)) AS fake,
@@ -3770,9 +3771,9 @@ def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
     except Exception as exc:                              # noqa: BLE001
         return False, label, f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}", (
             "查询失败 → 无法判定（不要当成通过）")
-    tot = sum(int(r[1]) for r in rows)
-    mx = max((float(r[2]) for r in rows), default=0.0)
-    worst = [f"{r[0]}={int(r[1])}" for r in rows if int(r[1])]
+    tot = sum(int(r[2]) for r in rows)
+    mx = max((float(r[3]) for r in rows), default=0.0)
+    worst = [f"{r[0]}={int(r[2])}" for r in rows if int(r[2])]
     return tot == 0, label, (
         f"边界 {sum(int(r[1]) for r in rows)} 根 / 假跳空 {tot} 根 / 最大 {mx:.0f} 点"
         + (f"（{','.join(worst)}）" if worst else "")
