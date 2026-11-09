@@ -3844,6 +3844,55 @@ def _c_roll_freq_parity(c: Ctx) -> tuple[bool, str, str, str]:
                                "跑 scripts/ops/rebuild_roll_all_freqs.py 统一重算")
 
 
+def _c_ba_price_identity(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-12：后复权行必须满足 ``ba.close - adj_offset == raw.close``。
+
+    为什么这条不平凡：``sp_build_l2_back_adjusted`` 的**增量**模式只补
+    ``bucket > max_bucket`` 的新桶。l1 侧历史一旦被修订（补数、888 连重算、
+    口径回补），旧行会静默保留**错误的 close**，而 ``adj_offset`` 仍是对的——
+    于是价格序列整体错位几十到几百点，整条链路不报任何错。
+
+    2026-11-09 实测（252 交易日 A/B 对拍时发现）：**37/38 品种**在
+    ``2026-10-21 09:15 ~ 2026-10-28 01:00`` 区间违约，60m 最大偏差 215 点
+    （BR888）。修法是全量重建（``--force-ba``），不是改口径。
+
+    窗口取 45 天：够抓"上个月刚被静默改坏"的情况，又不至于每天扫 12 年数据。
+    """
+    label = "后复权行与原始价自洽（ba.close - adj_offset == raw.close）"
+    if not c.whitelist:
+        return False, label, "白名单为空", "l3_ref.tradable_variety 无有效品种"
+    syms = sorted({w if w.endswith("888") else w + "888" for w in c.whitelist})
+    parts = []
+    for freq, ba, raw in (("min5", "bar_5m_ba", "bar_5m"),
+                          ("min15", "bar_15m_ba", "bar_15m"),
+                          ("min30", "bar_30m_ba", "bar_30m"),
+                          ("min60", "bar_60m_ba", "bar_60m")):
+        parts.append(f"""
+            SELECT '{freq}' AS freq,
+                   count(*) FILTER (
+                     WHERE abs(r.close - (a.close - a.adj_offset)) > 1e-6) AS n_bad,
+                   max(abs(r.close - (a.close - a.adj_offset)))::float AS mx
+              FROM l2_adj.{ba} a
+              JOIN l1_mkt.{raw} r ON r.symbol = a.symbol AND r.bucket = a.bucket
+             WHERE a.symbol = ANY(:syms)
+               AND a.bucket >= now() - interval '45 days'""")
+    sql = " UNION ALL ".join(parts)
+    try:
+        rows = c.rows(sql, syms=syms)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"{type(exc).__name__}: {str(exc).splitlines()[0][:90]}", (
+            "查询失败 → 无法判定（不要当成通过）")
+    tot = sum(int(r[1]) for r in rows)
+    worst = max((float(r[2] or 0) for r in rows), default=0.0)
+    per = ", ".join(f"{r[0]}={int(r[1])}" for r in rows if int(r[1]))
+    return tot == 0, label, (
+        f"45 天内违约定价 {tot} 根 / 最大偏差 {worst:.1f} 点"
+        + (f"（{per}）" if per else "")
+    ), ("" if tot == 0 else
+        "l1 历史被修订而后复权只增量补新桶 → 跑 "
+        "rebuild_roll_all_freqs.py --force-ba 全量重建")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -3954,6 +4003,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 用 Σroll_delta 守恒 + 段数单调两条恒等式把"同源"钉住（廉价的聚合，不是重算）。
     ("ROLL-FREQ-PARITY", "四频换月段同源（Σroll_delta 跨频相等 + 段数单调）",
      "block", _c_roll_freq_parity),
+    # CL-20261109-12：增量重建只补新桶，l1 历史被修订后 ba 会静默保留错的 close
+    # （adj_offset 却仍正确）。2026-11-09 252/252 对拍才发现 37/38 品种在
+    # 2026-10-21~10-28 违约、60m 最大 215 点。这条断言把"静默错位"变成红灯。
+    ("BA-PRICE-IDENTITY", "后复权行与原始价自洽（ba.close - adj_offset == raw.close）",
+     "block", _c_ba_price_identity),
     # P2-3 E2：walkforward 此前用 HourlyBar 查范围，src='bar_60m' 时 0 行 →
     # run_walk_forward 默认调用静默「无数据」。行为级同源对拍，防第二条读取路径复活。
     ("BT-WALKFORWARD-SAME-SOURCE", "walk-forward 日期范围取自唯一 K 线真源",
