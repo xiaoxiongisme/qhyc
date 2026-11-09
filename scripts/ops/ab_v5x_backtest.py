@@ -30,13 +30,14 @@ OUT_DIR = Path("/app/output/ab")
 BASELINE = {"n_trades": 8580, "net_yuan": 342152.0}
 
 
-def run(tag: str, start: date, end: date, gate_lag: int) -> dict:
+def run(tag: str, start: date, end: date, gate_lag: int, regime_mode: str) -> dict:
     params = V5XBacktestParams(
         src="bar_60m_ba",
         fill_mode="next_open",
         fill_slip_ticks=1.0,
         max_adverse_gap_atr=0.5,
         gate_lag=gate_lag,
+        regime_mode=regime_mode,
         use_hvol=True, use_blocked=True, use_regime=True, use_p6=True,
         note=f"ab:{tag}",
     )
@@ -44,7 +45,7 @@ def run(tag: str, start: date, end: date, gate_lag: int) -> dict:
         agg = run_v5x_backtest(s, symbols=None, start=start, end=end, params=params)
     keep = {k: agg[k] for k in ("n_trades", "net_yuan", "gross_yuan", "win_rate",
                                 "avg_r", "profit_factor", "fill_mode", "fill_stats",
-                                "gate_lag", "yearly", "per_symbol", "skipped")}
+                                "gate_lag", "regime_mode", "yearly", "per_symbol", "skipped")}
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"v5x_{tag}.json"
     path.write_text(json.dumps(keep, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
@@ -95,13 +96,16 @@ def main() -> int:
     ap.add_argument("--start", default="2015-01-01")
     ap.add_argument("--end", default="2026-11-07")
     ap.add_argument("--gate-lag", type=int, default=1)
+    # gate_lag=1 必须配 strict：frozen 的全样本分位含前视（代码里硬校验）
+    ap.add_argument("--regime-mode", default="strict", choices=["frozen", "strict"])
     args = ap.parse_args()
     if args.compare:
         return compare(*args.compare)
     if not args.tag:
         print("需要 --tag 或 --compare", file=sys.stderr)
         return 2
-    keep = run(args.tag, date.fromisoformat(args.start), date.fromisoformat(args.end), args.gate_lag)
+    keep = run(args.tag, date.fromisoformat(args.start), date.fromisoformat(args.end),
+               args.gate_lag, args.regime_mode)
     if args.tag == "after" and keep["n_trades"] != BASELINE["n_trades"]:
         print(f"⚠ 与归档基线笔数不一致：{keep['n_trades']} vs {BASELINE['n_trades']}")
     return 0
