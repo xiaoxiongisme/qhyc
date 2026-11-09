@@ -3875,7 +3875,10 @@ def _c_ba_price_identity(c: Ctx) -> tuple[bool, str, str, str]:
               FROM l2_adj.{ba} a
               JOIN l1_mkt.{raw} r ON r.symbol = a.symbol AND r.bucket = a.bucket
              WHERE a.symbol = ANY(:syms)
-               AND a.bucket >= now() - interval '45 days'""")
+               AND a.bucket >= now() - interval '45 days'
+               -- 排除当日：盘中/收盘前生成的桶本身会随 l1 推进（半成品），
+               -- 那是正常状态，不该在日常巡检里报红。历史桶必须自洽。
+               AND a.bucket < date_trunc('day', now())""")
     sql = " UNION ALL ".join(parts)
     try:
         rows = c.rows(sql, syms=syms)
