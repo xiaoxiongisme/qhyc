@@ -62,6 +62,12 @@ SIGNAL_STALL_WARN = 3      # 小时；交易时段内无任何推送记录超过
 COOLDOWN_SEC = 3600        # 同类告警冷却 1 小时
 COOLDOWN_CRIT = 1800       # 严重告警冷却 30 分钟
 
+#: 冷却状态最近一次持久化失败的原因（None = 正常）。由 :func:`cooldown_ok` 写入，
+#: 由 :func:`main` 读出来升级成一条**显式告警**——这套机制 2026-10-08~11-09 因
+#: ``/opt/qhyc-ops/state`` 属主为 root 而整整静默失效一个月（每天多推 288 条），
+#: 根因不是权限，是「写不进去却没人知道」。
+_STATE_ERROR: str | None = None
+
 
 def sh(cmd: list[str], timeout: int = 20) -> tuple[int, str]:
     try:
@@ -108,6 +114,23 @@ def push(title: str, content: str, token: str) -> bool:
         return False
 
 
+def state_writable() -> str | None:
+    """探测冷却状态目录可写性；返回错误描述，正常返回 None。
+
+    每轮主动探一次，而不是等 ``cooldown_ok`` 写失败才发现 —— 后者只在「已经
+    有告警要推」时才触发，一旦无事可报就永远暴露不出来（正是这一个月的状态）。
+    """
+    probe = os.path.join(STATE_DIR, ".write_probe")
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        return f"{type(exc).__name__}: {exc}"
+
+
 def _load_state() -> dict:
     """读冷却状态；新路径缺失时从旧路径迁移一次（保留历史冷却进度）。"""
     for path in (STATE_FILE, os.path.join(LEGACY_STATE_DIR, "alert_state.json")):
@@ -142,8 +165,10 @@ def cooldown_ok(key: str, level: str) -> bool:
         os.makedirs(STATE_DIR, exist_ok=True)
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(st, f)
+        globals()["_STATE_ERROR"] = None
         return True
     except Exception as exc:  # noqa: BLE001
+        globals()["_STATE_ERROR"] = f"{type(exc).__name__}: {exc}"
         logger.error("[monitor] 冷却状态无法持久化 %s: %s —— 本轮降级为按小时节流",
                      STATE_FILE, exc)
     # 无持久化时的兜底：每小时只放行一次（10 分钟粒度下 minute<10 即整点那轮）
@@ -476,6 +501,13 @@ def main() -> int:
     data = collect()
     metrics, issues = data["metrics"], data["issues"]
 
+    # 监控自身的健康状况也算一项检查：冷却状态写不进去 ⇒ 「不重复打扰」这个承诺
+    # 已经失效，必须让用户知道，而不是让它在日志里静默一个月。
+    werr = state_writable()
+    if werr:
+        issues.append(("warn", "state_unwritable",
+                       f"监控冷却状态目录不可写 {STATE_DIR}（{werr}）"
+                       f"——重复告警抑制已降级为按小时节流，请修权限/属主"))
     if daily:
         push("qhyc 云端日报", render_daily(metrics, issues), token)
         return 0
