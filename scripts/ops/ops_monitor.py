@@ -24,6 +24,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -43,6 +44,11 @@ STATE_DIR = (os.environ.get("QH_OPS_STATE_DIR")
              or os.path.expanduser("~/qhyc_work/state"))
 LEGACY_STATE_DIR = "/opt/qhyc-ops/state"
 STATE_FILE = os.path.join(STATE_DIR, "alert_state.json")
+#: 主路径不可写时的兜底状态文件（``/tmp`` 通常可写）。
+#: 没有它的话，主路径一坏就只剩「按小时节流」这一档，连**首次**发现故障都推不出去
+#: （实测 2026-11-09 16:57 模拟不可写：报了 1 项问题却推送 0 条，要等到下一个
+#: 整点后 10 分钟窗口才放行 —— 对「监控自身故障」这种低频告警，等 50 分钟不可接受）。
+FALLBACK_STATE_FILE = os.path.join(tempfile.gettempdir(), "qhyc_ops_alert_state.json")
 ENV_FILE = os.environ.get("QHYC_ENV_FILE", "/Docker/qhyc/.env")
 CONTAINERS = ["qhyc-timescaledb", "qhyc-api"]   # 2026-10-08 P3: scheduler/pipeline 已迁 systemd
 # 迁云后生产调度不再是容器，改为检查 systemd 服务，否则会持续误报「容器未运行」
@@ -505,9 +511,13 @@ def main() -> int:
     # 已经失效，必须让用户知道，而不是让它在日志里静默一个月。
     werr = state_writable()
     if werr:
+        # 切到 /tmp 兜底：告警本身必须发得出去，冷却也继续精确生效。
+        _orig_dir = STATE_DIR
+        globals()["STATE_DIR"] = tempfile.gettempdir()
+        globals()["STATE_FILE"] = FALLBACK_STATE_FILE
         issues.append(("warn", "state_unwritable",
-                       f"监控冷却状态目录不可写 {STATE_DIR}（{werr}）"
-                       f"——重复告警抑制已降级为按小时节流，请修权限/属主"))
+                       f"监控冷却状态目录不可写 {_orig_dir}（{werr}）"
+                       f"——已临时改用 {FALLBACK_STATE_FILE}，请修权限/属主"))
     if daily:
         push("qhyc 云端日报", render_daily(metrics, issues), token)
         return 0
