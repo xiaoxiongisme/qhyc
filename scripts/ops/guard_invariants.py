@@ -752,26 +752,111 @@ def _c_signal_writer_unique(c: Ctx) -> tuple[bool, str, str, str]:
         "出现多个写入方 → 无法证明信号纯由策略产生" if len(got) > 1 else "")
 
 
-def _c_weekly_dow(c: Ctx) -> tuple[bool, str, str, str]:
-    """周度作业的 DB 5 段 cron 星期位不能是 6。
+def _fire_weekdays(trigger, n: int = 14) -> set[int]:
+    """用真实 next_fire_time 反推触发星期集合（0=周一…6=周日）。
 
-    apscheduler 的 CronTrigger.from_crontab 里 0=周一 … 6=周日，与标准 crontab
-    错位一天。实测「周六」写成 6 会静默跑在周日（10-18/10-25/11-01 三条成功
-    记录全是周日，而 11-07 周六一条没有）。
+    不看 cron 字符串、不看日志里硬编码的 "sat" 字样 —— 那是
+    CL-20261107 周度作业事故和 CL-20261109-21 inventory 停更的共同盲点。
     """
+    from datetime import datetime, timedelta  # noqa: PLC0415
+    from zoneinfo import ZoneInfo  # noqa: PLC0415
+    tz = ZoneInfo("Asia/Shanghai")
+    cur = datetime.now(tz).replace(second=0, microsecond=0)
+    out: set[int] = set()
+    for _ in range(n):
+        # now 必须随上次触发推进；若每次传 cur+20 天，20 天窗口内第一次触发
+        # 恒落在同一个星期，集合只有 1 个元素 → 断言失去判别力（实测踩过）。
+        nxt = trigger.get_next_fire_time(None, cur)
+        if nxt is None:
+            break
+        out.add(nxt.weekday())
+        cur = nxt + timedelta(minutes=1)
+    return out
+
+
+#: 每个带星期位的 apscheduler 作业，代码侧声明的**意图**（APScheduler 名称语义）。
+#: 真源：cloud.yaml inventory.run_day="mon-fri"、app/pipeline/config.py check_day="mon"、
+#: app/scheduler.py 三个 weekly 的 day_of_week="sat"。DB 的 5 段 cron 由
+#: scheduler_resync 覆盖代码注册，故必须校验两者真实触发星期一致。
+EXPECTED_CRON_DOW: dict[str, str] = {
+    "inventory_weekly": "mon-fri",
+    "pipeline_check": "mon",
+    "lstm_weekly_retrain": "sat",
+    "transmission_weekly_recalc": "sat",
+    "backtest_weekly": "sat",
+}
+
+
+def _c_weekly_dow(c: Ctx) -> tuple[bool, str, str, str]:
+    """DB cron 的真实触发星期必须与代码声明的意图一致（CL-20261109-21 扩展）。
+
+    旧实现只查「三个周度作业星期位 != 6」，挡不住 `1-5` 这种范围错位：
+    `0 17 * * 1-5` 本意工作日，在 CronTrigger.from_crontab 里是周二~周六，
+    于是每个周一 inventory 都不跑（11-02、11-09 无流水），数据静默断供。
+    现在对**全部**带星期位的 apscheduler 作业，直接算真实触发星期集合比对。
+    """
+    from apscheduler.triggers.cron import CronTrigger  # noqa: PLC0415
+    from zoneinfo import ZoneInfo  # noqa: PLC0415
+    tz = ZoneInfo("Asia/Shanghai")
     rows = c.rows("""
         SELECT task_id, schedule FROM ops.scheduled_task
-        WHERE enabled AND task_id IN (
-            'lstm_weekly_retrain','transmission_weekly_recalc','backtest_weekly')
+        WHERE enabled AND executor = 'apscheduler'
+          AND split_part(schedule, ' ', 5) <> '*'
     """)
-    bad = []
+    bad: list[str] = []
+    checked = 0
     for tid, sch in rows:
-        parts = (sch or "").split()
-        if len(parts) == 5 and "6" in parts[4].split(","):
-            bad.append(f"{tid}={sch}")
-    return not bad, "周度作业星期位 != 6（apscheduler 里 6=周日）", (
-        f"检查 {len(rows)} 个，违规 {len(bad)}"), (
+        want_name = EXPECTED_CRON_DOW.get(tid)
+        if want_name is None:
+            bad.append(f"{tid}={sch} 未登记意图（新增作业须补 EXPECTED_CRON_DOW）")
+            continue
+        try:
+            got = _fire_weekdays(CronTrigger.from_crontab(sch, timezone=tz))
+            want = _fire_weekdays(CronTrigger(
+                day_of_week=want_name, hour=0, minute=0, timezone=tz))
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"{tid}={sch} 解析失败 {type(exc).__name__}: {exc}")
+            continue
+        checked += 1
+        if got != want:
+            bad.append(f"{tid}={sch} 实得星期{sorted(got)} 期望{sorted(want)}({want_name})")
+    return not bad, "DB cron 真实触发星期 == 代码意图（0=周一…6=周日）", (
+        f"检查 {len(rows)} 个 / 有效比对 {checked} 个 / 违规 {len(bad)}"), (
         "星期语义错位：" + "; ".join(bad) if bad else "")
+
+
+def _c_daily_refresh_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """日频刷新链必须真的接通，且失败必须冒泡（CL-20261109-21）。
+
+    `235711a` 按文件名清理「未使用脚本」时删掉了仍被
+    `scripts/daily_futures_refresh.py` import 的 `refresh_main_contract_map.py`，
+    而编排脚本的 main() 只 logger.error 后 return 0 → 调度器按「作业函数有没有
+    抛异常」记 success，流水全绿、main_contract_map 从 11-06 静默停更。
+    三项都衡量「此刻」：模块在不在、代码会不会吞异常、两表最新交易日对不对。
+    """
+    root = Path(__file__).resolve().parents[2]
+    bad: list[str] = []
+    mcm = root / "scripts" / "refresh_main_contract_map.py"
+    if not mcm.is_file():
+        bad.append("scripts/refresh_main_contract_map.py 不存在（再次被清理？）")
+    refresh_src = (root / "scripts" / "daily_futures_refresh.py").read_text(
+        encoding="utf-8", errors="ignore")
+    if "import refresh_main_contract_map" not in refresh_src:
+        bad.append("daily_futures_refresh.py 未引用 main_contract_map 步骤")
+    if "raise RuntimeError" not in refresh_src:
+        bad.append("daily_futures_refresh.main() 失败不抛异常 → 流水会假绿")
+
+    exp = c.scalar("""
+        SELECT max(trade_date) FROM futures_rule WHERE trade_date <= CURRENT_DATE
+    """)
+    for tbl, col in (("main_contract_map", "trade_date"), ("inventory", "report_date")):
+        got = c.scalar(f"SELECT max({col}) FROM {tbl}")
+        if exp is None or got is None or got < exp:
+            bad.append(f"{tbl} 最新 {got} < 期望交易日 {exp}")
+    return not bad, "日频刷新链接通 / 失败冒泡 / 两表当日有数", (
+        f"期望交易日 {exp}，模块存在={mcm.is_file()}，失败冒泡="
+        f"{'raise RuntimeError' in refresh_src}，违规 {len(bad)} 项"), (
+        "; ".join(bad) if bad else "")
 
 
 # ---------------------------------------------------------------- 告警口径
@@ -4344,7 +4429,12 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("DATA-EQUITY-FRESH", "组合权益流新鲜", "warn", _c_equity_fresh),
     ("OPS-SWITCH-JOB-CONSIST", "开关表与任务字典同向", "block", _c_switch_job_consistency),
     ("OPS-SIGNAL-WRITER-UNIQUE", "融合信号单一写入方", "warn", _c_signal_writer_unique),
-    ("OPS-WEEKLY-DOW", "周度作业星期语义正确", "warn", _c_weekly_dow),
+    # CL-20261109-21：从「三个周度作业 != 6」扩展到全部带星期位的 apscheduler
+    # 作业真实触发星期比对；`1-5` 这类范围错位此前完全没被覆盖，直接让 inventory
+    # 每个周一停跑。升级 block：这类错误必然静默断供，不能只当告警。
+    ("OPS-WEEKLY-DOW", "DB cron 真实触发星期与代码意图一致", "block", _c_weekly_dow),
+    ("OPS-DAILY-REFRESH-WIRED", "日频刷新链接通且失败冒泡", "block",
+     _c_daily_refresh_wired),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
     ("OPS-LSTM-SNAPSHOT-WRITE", "LSTM 快照共享卷可写且原子写已启用", "warn", _c_lstm_snapshot_write),
     # warn 而非 block：重跑期间最新 run 天然是半成品，靠「活跃写入 <2h」放行；
