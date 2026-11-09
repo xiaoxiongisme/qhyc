@@ -44,6 +44,13 @@ services:
       #   docker 的 data-root 或此路径指到数据盘。
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
+    # /dev/shm 默认只有 **64MB**（Docker 默认值），而 PG 并行查询的动态共享内存段
+    # 走的就是 posix shm。2026-11-09 08:36 重建 bar_5m_ba 时后端被内核 OOM kill，
+    # 直接诱因是 "could not resize shared memory segment ... DiskFull"（申请 16.8MB
+    # 时 /dev/shm 已满）；11-08 两次同类 OOM 也是同一个放大器。
+    # 1g 是按 max_parallel_workers=8 × work_mem=64MB ≈ 512MB 峰值再留一倍余量定的。
+    # ⚠ 该值只在创建容器时生效：改完必须 `docker compose up -d` 重建 DB 容器。
+    shm_size: 1g
     # 仅在宿主环回暴露 5432，供本机 SSH 隧道穿透（ssh -L 15432:127.0.0.1:5432）；
     # 不绑 0.0.0.0 / 不对外网开放。删除本段 = 本地同步链路断供。
     ports:
@@ -54,8 +61,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
-    # 防止单容器吃满内存把 SSH 一起拖死
-    mem_limit: ${DB_MEM_LIMIT:-3g}
+    # 防止单容器吃满内存把 SSH 一起拖死。
+    # 3g → 4g：shm_size 提到 1g 后，shared_buffers(1G) + /dev/shm 峰值(~0.5G)
+    # + 连接/工作内存 已逼近 3g 上限，一旦触顶就是 cgroup OOM kill（不是 swap）。
+    # 宿主实测 7G 内存 / 4G available / 5G swap，4g 上限仍留得住系统。
+    mem_limit: ${DB_MEM_LIMIT:-4g}
 
   api:
     # 云端默认用已推送好的镜像；本地调试想现编可加 `--build`

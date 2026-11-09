@@ -29,6 +29,10 @@ services:
     volumes:
       - ./pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
+    # /dev/shm 默认 64MB，而 PG 并行动态共享内存段走 posix shm → 大查询会
+    # "DiskFull" 并把后端 OOM kill（2026-11-09 实测）。与云端保持一致取 1g。
+    # ⚠ 只在创建容器时生效，改完需 `docker compose up -d` 重建。
+    shm_size: 1g
     ports:
       # 安全：仅绑宿主环回，不要改回 0.0.0.0。
       # 与 api 的 8000（见下）保持同一策略，也与 docker-compose.cloud.yml 一致。
