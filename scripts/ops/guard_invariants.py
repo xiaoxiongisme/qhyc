@@ -3739,10 +3739,15 @@ def _c_roll_min5_no_fake_jump(c: Ctx) -> tuple[bool, str, str, str]:
     新判据（精确、无阈值、无尺度依赖）：
         对每个 min5 段边界 T：
         ``(ba.close(T) - ba.close(T-)) - (raw.close(T) - raw.close(T-)) == -roll_delta``
-    后复权 = raw + offset，offset 在 T 处跃变 −roll_delta，故上式恒等成立当且仅当
-    delta 在 T 这根兑现且只兑现一次。旧映射（delta 记在桶末根）会让残差等于
-    该段 roll_delta（未抵消）→ 直接判红。
-    2026-11-09 实测：全池 4,152 个边界，残差偏离 1e-6 以上 **0 个**。
+    后复权 = raw + offset，且 offset 走 ``seg_start <= bucket`` 的 as-of join ——
+    **只要 ba 是按当前段表重建的，delta 就必然正好在 T 兑现**，上式恒等成立。
+    所以它真正衡量的是「ba 与当前 roll_segment 是否自洽」，抓的是
+    **段表已改 / ba 没重建**（价格序列整体错位但 adj_offset 看着没事，正是
+    CL-20261109-12 的静默形态），以及「offset 被算到别的 bar 上」。
+    旧判据只在 |Δ|>50 时才看得见，且分不清「合法的大缺口」与「错位」。
+
+    ⚠ 它**不**能替代 ROLL-FINER-ANCHOR-WIRED：段若被记错到桶末根，delta 照样
+    在「错误的 T」上自洽，本断言看不出来——两者是互补的，缺一不可。
 
     ⚠ 只统计**已存在**的边界。边界整条丢失（上游门控把换月事件丢了）时这根 bar
     根本不在样本里，本断言看不见——那是 CL-20261108-05 的另一半（min5 与 min15
