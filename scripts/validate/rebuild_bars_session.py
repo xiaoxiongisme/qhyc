@@ -28,8 +28,15 @@ akshare_1min_nov2026 记分钟【终点】（聚合前 -1min 归一）。
 # ⚠ 2026-11-07 P0-1：10-30 换源后的 akshare_1min_nov2026 未登记进
 #   DEFAULT_PRIORITY / END_LABELED_SRCS，113,189 行被 `src = ANY(:srcs)` 整段丢弃，
 #   四张 bar_* 系统性少聚合 1 根。现已登记；新增源必须两处同步登记 + 验证时间戳约定。
-# ⚠ M19 未决：local_csv_20261030（506 万行，2026 全年历史）约定尚未验证，
-#   重算 2026-10-30 之前的历史前须单独确认，本补丁只覆盖 10-30 21:00 之后。
+# ✅ M19 已结案（2026-11-09）：local_csv_20261030 是**终点约定**，三重实证：
+#   ① 本文件上游 scripts/load_local_csv_1min.py 头注释即写明「ts = end-time 标记」；
+#   ② RB888 2026-10-29：225 根，首根 09:01、末根 15:00 —— 恰等于日盘交易分钟数
+#      (75+60+90)；若为起点约定则应为 09:00/14:59；
+#   ③ T888 同日：255 根，首根 09:31、末根 15:15 —— 恰等于 09:30-11:30 + 13:00-15:15。
+#   该源覆盖 2003-11-25 ~ 2026-10-30（全历史唯一 continuous 源），已登记进
+#   DEFAULT_PRIORITY / END_LABELED_SRCS。未登记时的症状：末分钟被当起点多算 1 分钟，
+#   日盘溢出的 15:00 被 ELSE bounds[-1] 兜住看不出来，**夜盘就露出 23:01 伪桶**
+#   （实测 2026-10-29 RB888：22:00 / 23:00 / 23:01，23:01 那根 volume 3,284）。
 
 ## 用法（安全：默认 dry-run）
     set -a; . /home/ubuntu/qhyc_work/qhyc.env; set +a
@@ -94,7 +101,15 @@ def _patch_engine_guc() -> None:
 #   尚未验证；全量重建 2026-10-30 之前的历史前，必须先单独验证该源约定。
 #   本补丁只覆盖 10-30 21:00 之后的重算窗口，不触碰历史。
 DEFAULT_PRIORITY = ["kqm_1m", "wh9999_1m", "tqsdk_1min", "akshare_1min",
-                    "akshare_1min_nov2026"]
+                    "akshare_1min_nov2026",
+                    # ── 2026-11-09 CL-20261109-14 补齐：以下三源是 2015~2026 历史的
+                    #    **唯一**分钟来源，此前不在表内 → 聚合结果恒为空
+                    #    （实测 --start 2026-09-01 得到「交易日数=0」）。
+                    # 顺序依据实测完整度：重叠期(10-23~10-30) local_csv_synth_8888
+                    # 每日 23,295 行 vs incr_synth_8888 2,889 行 → 前者优先。
+                    "local_csv_synth_8888", "incr_synth_8888",
+                    # 实时源优先于批导历史：10-30 两者并存时取 akshare_1min_nov2026
+                    "local_csv_20261030"]
 
 # =============================================================================
 # ★ 正确做法：bar 边界锚定到「交易所固定的交易时段网格」，而非"数分钟"。
@@ -154,6 +169,9 @@ WITH m AS (
     WHERE ts >= :s AND ts < :e
       {sym_filter}
       AND src = ANY(:srcs)
+      -- 只让 888/8888 进 L1：minute_bar 里还有 contract 层（RB2701）和中文名品种，
+      -- 一旦漏进来会污染 l1_mkt.bar_*（历史上 L1 因此只有 82 品种 ×2 = 164 个符号）。
+      AND symbol ~ '^[A-Za-z]+8888?$'
 ), norm AS (
     -- 终点约定源（ts 记分钟终点）减 1 分钟归一到起点约定，后续只需一套公式
     SELECT *, ts - CASE WHEN src = ANY(:end_srcs)
@@ -229,7 +247,12 @@ GROUP BY symbol, bucket_end
 
 
 #: 分钟时间戳约定登记（实测）：这些源把 ts 记为分钟的【终点】
-END_LABELED_SRCS = ["akshare_1min", "wh9999_1m", "akshare_1min_nov2026"]
+END_LABELED_SRCS = ["akshare_1min", "wh9999_1m", "akshare_1min_nov2026",
+                    # 2026-11-09 CL-20261109-14：三源均实测为终点约定（见文件头 M19 结案）。
+                    # local_csv_synth_8888 / incr_synth_8888 沿用合约分钟的时间轴（合约
+                    # 是「+1min 终点」），故同为终点；与 synthesizer.py 侧登记一致。
+                    "local_csv_synth_8888", "incr_synth_8888",
+                    "local_csv_20261030"]
 
 
 def _agg_sql(symbols: list[str] | None, step: int = 60) -> str:
@@ -289,8 +312,15 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
     print(f"\n[apply] 写入 {target}（按完整时间范围删除旧数据后重插，杜绝跨日残留/空洞）…")
     tbl = {60: "bar_60m", 30: "bar_30m", 15: "bar_15m", 5: "bar_5m"}[step]
     if not rows:
-        print("  无产出，跳过")
-        return 0
+        # ★ 2026-11-09 CL-20261109-14：这里必须**失败退出**，不许静默跳过。
+        #   本脚本 2026-11-09 之前的症状：源没登记 → 聚合恒空 → 打一行「无产出，跳过」
+        #   就退 0，调用方（含定时任务）记 success，看起来一切正常，
+        #   实际一个桶都没重建。属于「监控骗人」那一类故障，改 fail-loud。
+        print("  ❌ 聚合产出为 0 根 —— 拒绝静默跳过。请检查："
+              "① 该区间 l0_raw.minute_bar 是否真有数据；"
+              "② 数据源是否已登记在 DEFAULT_PRIORITY / END_LABELED_SRCS；"
+              "③ symbol 是否符合 ^[A-Za-z]+8888?$。")
+        return 1
     print(f"  时间范围 {start} ~ {end}（覆盖全部能重建的分钟区间）")
 
     cols = ("symbol", "bucket", "open", "high", "low", "close",
@@ -317,8 +347,13 @@ def run(symbols: list[str] | None, start: str, end: str, step: int,
         #   现在的做法既规避①又规避②：以**聚合结果的真实 min/max bucket** 为界，
         #   并始终限定 symbol。写入集合 ⊆ 删除集合，幂等且不误伤。
         _buckets = [r[1] for r in rows if r[1] is not None]
-        dp["dmin"] = min(_buckets)
-        dp["dmax"] = max(_buckets) + timedelta(microseconds=1)  # 上界取开区间
+        # ★ 2026-11-09 CL-20261109-14：DELETE 窗口前后各放宽 1 天。
+        #   原写法取 [_buckets.min(), _buckets.max())，而新网格的**首个**桶是 09:05(5m)
+        #   / 09:15(15m)，旧网格的首个桶是 09:00 —— 落在 dmin 之前，删不到 →
+        #   「重建完仍残留旧网格 09:00」且守卫按 symbol 聚合看不出来。放宽 1 天覆盖边界。
+        #   仍不放开到「整品种删」，保留窄区间重建不误伤其余历史的保护。
+        dp["dmin"] = min(_buckets) - timedelta(days=1)
+        dp["dmax"] = max(_buckets) + timedelta(days=1)  # 上界取开区间
         del_sql = (
             f"DELETE FROM l1_mkt.{tbl} WHERE symbol = ANY(:syms) "
             f"AND bucket >= :dmin AND bucket < :dmax"
