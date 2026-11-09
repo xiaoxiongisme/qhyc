@@ -33,7 +33,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 SH = ZoneInfo("Asia/Shanghai")
-STATE_DIR = "/opt/qhyc-ops/state"
+#: 冷却状态目录。原先写死 ``/opt/qhyc-ops/state``（08 日已废弃的旧副本目录）：
+#: 那里的 ``alert_state.json`` 属主是 **root:644**，而 cron 以 ubuntu 运行 →
+#: 每次 ``json.dump`` 都 PermissionError，被 ``silent-swallow`` 吞掉后仍 ``return True``，
+#: 冷却**恒失效**。2026-11-09 实测：``signal_stall`` / ``push_silence`` 两项误报
+#: 每 10 分钟各推一次，日志覆盖范围内 **298 条**，把真正的交易信号在微信里淹没。
+#: 现改为「env 覆盖 → 用户工作目录（cron 用户必然可写）→ 旧路径兜底」。
+STATE_DIR = (os.environ.get("QH_OPS_STATE_DIR")
+             or os.path.expanduser("~/qhyc_work/state"))
+LEGACY_STATE_DIR = "/opt/qhyc-ops/state"
 STATE_FILE = os.path.join(STATE_DIR, "alert_state.json")
 ENV_FILE = os.environ.get("QHYC_ENV_FILE", "/Docker/qhyc/.env")
 CONTAINERS = ["qhyc-timescaledb", "qhyc-api"]   # 2026-10-08 P3: scheduler/pipeline 已迁 systemd
@@ -100,23 +108,46 @@ def push(title: str, content: str, token: str) -> bool:
         return False
 
 
+def _load_state() -> dict:
+    """读冷却状态；新路径缺失时从旧路径迁移一次（保留历史冷却进度）。"""
+    for path in (STATE_FILE, os.path.join(LEGACY_STATE_DIR, "alert_state.json")):
+        try:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[monitor] 读取冷却状态失败 %s: %s", path, exc)
+    return {}
+
+
 def cooldown_ok(key: str, level: str) -> bool:
-    """冷却期内不重复推送同一项。"""
-    try:
-        os.makedirs(STATE_DIR, exist_ok=True)
-        st = json.load(open(STATE_FILE, encoding="utf-8")) if os.path.exists(STATE_FILE) else {}
-    except Exception:  # noqa: BLE001
-        st = {}
+    """冷却期内不重复推送同一项。
+
+    ⚠ 2026-11-09 重构：原实现只要写状态失败就 ``return True`` ⇒ 冷却恒失效 ⇒
+    同一告警每轮（10 分钟）重推一次，一天 288 条。写失败本身是环境问题，不该
+    让「不重复打扰」这个承诺悄悄作废。现在的约定是：
+      · 能持久化 → 按 last 时间精确冷却（原语义）；
+      · 不能持久化 → **确定性地按小时节流**（整点后首个 10 分钟窗口才允许推），
+        宁可少报一次也不刷屏，并把 error 打到日志（不再 silent-swallow）。
+    """
+    st = _load_state()
     last = float(st.get(key, 0))
     cd = COOLDOWN_CRIT if level == "crit" else COOLDOWN_SEC
-    if time.time() - last < cd:
+    now = time.time()
+    if now - last < cd:
         return False
-    st[key] = time.time()
+
+    st[key] = now
     try:
-        json.dump(st, open(STATE_FILE, "w", encoding="utf-8"))
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+        return True
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
-    return True
+        logger.error("[monitor] 冷却状态无法持久化 %s: %s —— 本轮降级为按小时节流",
+                     STATE_FILE, exc)
+    # 无持久化时的兜底：每小时只放行一次（10 分钟粒度下 minute<10 即整点那轮）
+    return datetime.now(SH).minute < 10
 
 
 def psql(sql: str, timeout: int = 30) -> tuple[bool, str]:
@@ -305,37 +336,86 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
     # 市场 6 小时内有过新数据 ⇒ 处于交易时段（含夜盘），推送就应该在跑
     market_live = market_age_h is not None and market_age_h <= MARKET_LIVE_H
 
+    # ★ 2026-11-09（CL-20261109-15）：判据**数据源过期**。
+    #   11-08 起生产推送源唯一化为 V5X.3（cfg_feature_switch.fusion_v34_live_enabled=f），
+    #   信号改落 ``v5x_signal_log``；而这两条判据仍在查 ``fusion_push_log`` ⇒ 该表自
+    #   11-06 23:04 起不再增长 ⇒ 「已 79 小时无成功推送」+「信号链路 65.7 小时无记录」
+    #   成为**永久误报**，每 10 分钟各推一次。现改为：
+    #     · 推送成功时间 = max(fusion_push_log.delivered, v5x_signal_log.notify_ok)
+    #     · 有信号却未送达 = v5x_signal_log 里 notify_ok IS NOT TRUE 的近 3 天记录
+    #     · 链路活性       = ops.scheduled_task_run 里 v5x_scan 最近一次 success
+    #   「无信号」与「推不出去」必须分开衡量：V5X 是事件驱动，一天没事件本来就不推。
     ok, out = psql_fn(
-        "SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered")
-    m["last_push_at"] = out.strip() if ok and out.strip() else None
-    if m["last_push_at"] and m["last_push_at"] not in ("", "None"):
-        try:
-            t = datetime.fromisoformat(m["last_push_at"]).astimezone(timezone.utc)
-            silence_h = (now_utc - t).total_seconds() / 3600
-            m["push_silence_h"] = round(silence_h, 1)
-            if silence_h > PUSH_SILENCE_WARN and market_live:
-                issues.append(("warn", "push_silence",
-                               f"已 {silence_h:.0f} 小时无成功推送（市场数据仍在更新，"
-                               f"最新数据仅 {market_age_h:.1f} 小时前 → 推送通道疑似故障）"))
-        except ValueError as exc:
-            logger.debug("[silent-swallow] 异常被静默忽略（此处原本为 pass）: %s", exc, exc_info=True)
+        "SELECT "
+        " (SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered),"
+        " (SELECT max(created_at)::text FROM v5x_signal_log WHERE notify_ok),"
+        " (SELECT max(created_at)::text FROM v5x_signal_log),"
+        " (SELECT count(*) FROM v5x_signal_log"
+        "   WHERE notify_ok IS NOT TRUE AND created_at > now() - interval '3 days'),"
+        " (SELECT enabled::text FROM cfg_feature_switch WHERE switch_key='v5x_live_enabled'),"
+        " (SELECT enabled::text FROM cfg_feature_switch"
+        "   WHERE switch_key='fusion_v34_live_enabled')")
+    cols = [c.strip() for c in out.strip().split("|")] if ok and out.strip() else []
 
-    # 5b. 信号链路活性：交易时段内连「推送尝试」都没有，说明调度/信号计算停了。
+    def _col(i: int) -> str:
+        return cols[i] if len(cols) > i else ""
+
+    def _age_h(s: str):
+        if not s or s == "None":
+            return None
+        try:
+            t = datetime.fromisoformat(s)
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=SH)
+            return (now_utc - t.astimezone(timezone.utc)).total_seconds() / 3600
+        except ValueError:
+            return None
+
+    v5x_on = _col(4) == "true"
+    v34_on = _col(5) == "true"
+    push_ages = [a for a in (_age_h(_col(0)), _age_h(_col(1))) if a is not None]
+    silence_h = min(push_ages) if push_ages else None
+    last_signal_age = _age_h(_col(2))
+    unsent = int(_col(3) or 0)
+    if silence_h is not None:
+        m["push_silence_h"] = round(silence_h, 1)
+    if last_signal_age is not None:
+        m["last_signal_age_h"] = round(last_signal_age, 1)
+    m["v5x_unsent_3d"] = unsent
+    m["push_sources"] = f"v5x={'on' if v5x_on else 'off'}/v34={'on' if v34_on else 'off'}"
+
+    # 通道故障：只在「确实有推送需求」时下结论 —— 近 24h 内有信号产出才算。
+    # 无信号的自然静默（周末、无事件）不报，否则就是 11-08 那次 60 小时误报的翻版。
+    signal_active = last_signal_age is not None and last_signal_age <= 24
+    if (market_live and signal_active and silence_h is not None
+            and silence_h > PUSH_SILENCE_WARN):
+        issues.append(("warn", "push_silence",
+                       f"已 {silence_h:.0f} 小时无成功推送（近 {last_signal_age:.1f} 小时"
+                       f"内仍有信号产出 → 推送通道疑似故障）"))
+
+    # 有信号但没送达：比「静默」更精确，且不依赖推送表是否还在增长。
+    if unsent > 0:
+        issues.append(("warn", "push_unsent",
+                       f"{unsent} 条 V5X 信号落库但未送达（notify_ok 非真，近 3 天）"
+                       f"——查 PUSHPLUS_TOKEN / fusion.fallback_webhook / 网络"))
+
+    # 5b. 信号链路活性：交易时段内扫描作业压根没成功跑完，说明调度/计算停了。
     #     这与「推送通道失败」是两种故障，必须分开报——通道故障有留痕、链路停摆没有。
-    if market_live:
-        ok, out = psql_fn(
-            "SELECT max(pushed_at)::text FROM fusion_push_log")
-        if ok and out.strip() and out.strip() != "None":
-            try:
-                at = datetime.fromisoformat(out.strip()).astimezone(timezone.utc)
-                attempt_age_h = (now_utc - at).total_seconds() / 3600
-                m["signal_attempt_age_h"] = round(attempt_age_h, 1)
-                if attempt_age_h > SIGNAL_STALL_WARN:
+    #     判据从「推送表有无新行」改为「作业有无成功完成」：事件驱动策略没有事件时
+    #     本来就不写推送表，用推送表衡量活性必然误报。
+    if market_live and (v5x_on or v34_on):
+        ok2, out2 = psql_fn(
+            "SELECT max(finished_at)::text FROM ops.scheduled_task_run"
+            " WHERE task_id IN ('v5x_scan','fusion_scan') AND status='success'"
+            "   AND finished_at > now() - interval '2 days'")
+        if ok2 and out2.strip() and out2.strip() != "None":
+            stall_h = _age_h(out2.strip())
+            if stall_h is not None:
+                m["signal_scan_age_h"] = round(stall_h, 1)
+                if stall_h > SIGNAL_STALL_WARN:
                     issues.append(("crit", "signal_stall",
-                                   f"信号链路已 {attempt_age_h:.1f} 小时无任何推送记录"
+                                   f"信号扫描作业已 {stall_h:.1f} 小时未成功完成"
                                    f"（市场数据仍在更新 → 调度/信号计算疑似停摆）"))
-            except ValueError as exc:
-                logger.debug("[silent-swallow] attempt_age 解析失败: %s", exc, exc_info=True)
 
     return {"metrics": m, "issues": issues}
 
