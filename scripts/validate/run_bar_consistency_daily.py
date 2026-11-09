@@ -103,7 +103,12 @@ def main() -> int:
         failures.append(f"check_db_bar_grid 退出码={rc}\n{out}")
 
     # ---- C2 跨周期聚合自洽（需 DB）----
-    rc, out = _run_guard(GUARD_CROSS, ["--days", str(args.days)], env)
+    #  ★ 2026-11-09 CL-20261109-19：带 --whitelist-only。
+    #  只有 38 个白名单主连迁到会话网格，其余品种历史仍是旧网格（左沿标签），
+    #  而 C2 的映射表按新网格推导 → 全库扫会把「设计如此」算成不一致，每天必红
+    #  并推一条告警。那正是 11-06 把 pushplus 额度打爆的形态：真问题被噪音埋掉。
+    #  当下的标签合法性仍由 C4（check_db_bar_grid，近 3 天，全品种）覆盖。
+    rc, out = _run_guard(GUARD_CROSS, ["--days", str(args.days), "--whitelist-only"], env)
     print("===== check_cross_tf_consistency =====")
     print(out)
     if rc != 0:

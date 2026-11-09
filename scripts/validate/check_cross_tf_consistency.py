@@ -38,6 +38,16 @@
     python scripts/validate/check_cross_tf_consistency.py               # 默认近 30 天
     python scripts/validate/check_cross_tf_consistency.py --days 365
     python scripts/validate/check_cross_tf_consistency.py --symbol RB888
+    python scripts/validate/check_cross_tf_consistency.py --days 365 --whitelist-only
+
+``--whitelist-only`` 的由来（CL-20261109-19）
+-------------------------------------------
+2026-11-09 只把 **38 个白名单主连**迁到会话网格（用户决策：中金所 8 个与其余非
+白名单品种**不动**）。这些品种的历史仍是旧网格（左沿标签），而本脚本的映射表按
+新网格推导 —— 全库扫会把「设计如此」的差异算成不一致，于是每天 09:30 巡检必然
+报红并推送。68,000 行里 9 行真问题会被几千行噪音埋掉，正是要防的「告警疲劳」。
+故巡检默认只看白名单；**当下**的标签合法性仍由 ``check_db_bar_grid.py``（近 3 天，
+全品种）覆盖，历史侧的排除是显式的、会打印排除品种数、且进台账。
 
 退出码：0 = 全部自洽；1 = 发现不一致（会打印前若干条明细）。
 """
@@ -88,13 +98,19 @@ def _values_clause(mapping: dict[str, list[str]]) -> tuple[str, dict]:
 
 def _check_one(conn, *, hi_tbl: str, lo_tbl: str,
                mapping: dict[str, list[str]], days: int,
-               symbol: str | None, limit: int) -> list[str]:
+               symbol: str | None, limit: int,
+               sym_set: list[str] | None = None) -> list[str]:
     frag, params = _values_clause(mapping)
     params["days"] = days
     params["lim"] = limit
     sym_filter = "AND b.symbol = :sym" if symbol else ""
     if symbol:
         params["sym"] = symbol
+    elif sym_set is not None:
+        # 白名单范围。必须用 ANY(:list) 而不是拼 IN 字面量：这个参数会进
+        # Ctx 式的缓存键 / 查询计划，拼字面量会让每次调用生成新 plan。
+        sym_filter = "AND b.symbol = ANY(:sym_set)"
+        params["sym_set"] = list(sym_set)
 
     sql = f"""
         WITH m(hi_tm, parts) AS (VALUES {frag})
@@ -145,6 +161,8 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=30, help="回溯天数，默认 30")
     ap.add_argument("--symbol", default=None, help="只校验某个品种")
     ap.add_argument("--limit", type=int, default=15, help="每种字段打印的明细上限")
+    ap.add_argument("--whitelist-only", action="store_true",
+                    help="只校验 l3_ref.tradable_variety 的 38 个白名单主连")
     args = ap.parse_args()
 
     # get_engine() 从 settings.db_url 取 DSN（容器内 / 已配置环境下可用），
@@ -156,12 +174,29 @@ def main() -> int:
         return 1
     problems: list[str] = []
     with eng.connect() as conn:
+        sym_set = None
+        if args.whitelist_only and not args.symbol:
+            sym_set = [r[0] for r in conn.execute(text(
+                "SELECT variety_code || '888' FROM l3_ref.tradable_variety "
+                "WHERE effective_to IS NULL ORDER BY 1")).fetchall()]
+            if not sym_set:
+                print("[FAIL] --whitelist-only 拿到空白名单，拒绝在「零品种」上判绿")
+                return 1
+            total = conn.execute(text(
+                "SELECT count(DISTINCT symbol) FROM l1_mkt.bar_30m "
+                "WHERE bucket >= now() - make_interval(days => :d)"),
+                {"d": args.days}).scalar() or 0
+            print(f"[scope] 白名单 {len(sym_set)} 个品种；同窗口库内共 {total} 个品种，"
+                  f"排除 {max(int(total) - len(sym_set), 0)} 个（非白名单历史仍为旧网格，"
+                  f"见 CL-20261109-19）")
         problems += _check_one(conn, hi_tbl="bar_30m", lo_tbl="bar_15m",
                                mapping=_MAP_15_TO_30, days=args.days,
-                               symbol=args.symbol, limit=args.limit)
+                               symbol=args.symbol, limit=args.limit,
+                               sym_set=sym_set)
         problems += _check_one(conn, hi_tbl="bar_60m", lo_tbl="bar_30m",
                                mapping=_MAP_30_TO_60, days=args.days,
-                               symbol=args.symbol, limit=args.limit)
+                               symbol=args.symbol, limit=args.limit,
+                               sym_set=sym_set)
 
     if problems:
         print(f"[FAIL] 跨周期聚合不一致 {len(problems)} 处（前 {args.limit * 5} 条）：")
@@ -169,7 +204,9 @@ def main() -> int:
             print("  -", p)
         return 1
 
-    scope = f"symbol={args.symbol}" if args.symbol else "全部品种"
+    scope = (f"symbol={args.symbol}" if args.symbol
+             else f"白名单 {len(sym_set)} 个品种" if sym_set
+             else "全部品种")
     print(f"[OK] 跨周期自洽：30m==15m 两两聚合、60m==30m 两两聚合均一致 "
           f"（近 {args.days} 天日盘，{scope}）")
     return 0
