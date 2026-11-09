@@ -98,9 +98,12 @@ def _check_one(conn, *, hi_tbl: str, lo_tbl: str,
 
     sql = f"""
         WITH m(hi_tm, parts) AS (VALUES {frag})
+        -- 每一段都必须 COALESCE：低周期缺桶时 LATERAL 里的 {agg} 为 NULL（count=0），
+        -- 而 PG 的 || 遇 NULL 会让**整条字符串**变 NULL → Python 侧 r[0].replace() 直接
+        -- AttributeError。这个崩溃恰好只发生在「真的缺 bar」的场景，等于「越该报错越崩」。
         SELECT b.symbol || ' ' || to_char(b.bucket, 'YYYY-MM-DD HH24:MI')
-                 || '  ' || '{{k}}=' || b.{{k}}
-                 || '  agg=' || a.{{k}}
+                 || '  ' || '{{k}}=' || COALESCE(b.{{k}}::text, 'NULL')
+                 || '  agg=' || COALESCE(a.{{k}}::text, 'NULL')
                  || '  n=' || a.n
         FROM l1_mkt.{hi_tbl} b
         JOIN m ON m.hi_tm = to_char(b.bucket, 'HH24:MI')
@@ -131,7 +134,8 @@ def _check_one(conn, *, hi_tbl: str, lo_tbl: str,
     ):
         q = text(sql.format(k=kind, agg=agg))
         rows = conn.execute(q, params).fetchall()
-        bad.extend(r[0].replace("{k}=", f"{kind}: ") for r in rows)
+        # SQL 侧已 COALESCE，这里再兜一层：校验脚本不该在「发现问题的行」上崩掉。
+        bad.extend((r[0] or "<NULL row>").replace("{k}=", f"{kind}: ") for r in rows)
     return bad
 
 
