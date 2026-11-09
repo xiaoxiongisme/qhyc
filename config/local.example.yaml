@@ -300,7 +300,7 @@ fusion:
     - "20:45"
   trail_push_atr: 0.5          # 吊灯止损朝有利方向移动 >=0.5×ATR 时推一条（0=关闭）
   signal_repeat_min: 120       # 开仓信号 120 分钟内每轮复提（防漏看；0=不复提）
-  push_log: true               # 推送留痕（fusion_push_log 表，可回查历史信号）
+  # push_log 开关已删除（fusion_push_log 表 DROP，CL-20261109-18）
   fallback_webhook: ""         # 备用通道：企业微信/钉钉/飞书机器人 URL（pushplus 失败时降级）
   # 允许推送的时间窗（本地时间）；需覆盖"小时K收盘 + 采集延迟"
   # 11:30 收盘的K要到 11:31~11:35 才入库，故上午给到 12:00；盘前提早到 08:45

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _spec = importlib.util.spec_from_file_location(
@@ -71,8 +71,6 @@ def _base_tables():
     psql_table = {
         "SELECT 1": (True, ""),
         "SELECT max(trade_date)::text FROM daily_bar": (True, _now.date().isoformat()),
-        "SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered":
-            (True, (_now - timedelta(minutes=30)).isoformat()),
     }
     return sh_table, psql_table
 
@@ -129,7 +127,6 @@ def test_db_unreachable_raises_db_alarm():
     sh_table, psql_table = _base_tables()
     psql_table["SELECT 1"] = (False, "connection refused")
     psql_table["SELECT max(trade_date)::text FROM daily_bar"] = (False, "")
-    psql_table["SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered"] = (False, "")
     data = ops_monitor.collect(
         sh_fn=_make_sh(sh_table),
         psql_fn=_fake_psql(psql_table),
@@ -137,3 +134,29 @@ def test_db_unreachable_raises_db_alarm():
     )
     db_issues = [d for lvl, k, d in data["issues"] if k == "db"]
     assert db_issues, "DB 不可查询必须触发 db 告警"
+
+
+def test_monitor_sql_never_references_dropped_push_log():
+    """CL-20261109-18：`fusion_push_log` 已 DROP，监控 SQL 里不得再出现它。
+
+    这不是「洁癖」：查一张不存在的表会让**整条**多列 SELECT 失败 → `cols` 为空
+    → `silence_h=None` → push_silence 既不告警也不报错，判据悄悄消失。
+    表还在时它是「永久误报」（CL-20261109-15），表没了就变成「永久沉默」——
+    两种都没人看得见，所以锁死在 SQL 文本层面。
+
+    断言的载体是**实际传给 psql 的语句**，不是源码注释（注释里提到旧表名是正常的）。
+    """
+    seen: list[str] = []
+
+    def psql_fn(sql, timeout=30):
+        seen.append(sql)
+        return (False, "")
+
+    ops_monitor.collect(
+        sh_fn=_make_sh(_base_tables()[0]),
+        psql_fn=psql_fn,
+        system_fn=_healthy_system,
+    )
+    assert seen, "collect() 一句 SQL 都没查，用例失效"
+    bad = [s for s in seen if "fusion_push_log" in s]
+    assert not bad, f"监控仍在查已删除的表: {bad}"

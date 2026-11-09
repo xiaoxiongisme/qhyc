@@ -583,30 +583,16 @@ class FusionPosition(Base):
     lots: Mapped[int] = mapped_column(Integer, default=1)
 
 
-class FusionPushLog(Base):
-    """推送留痕：每条推送落库，用户可随时回查"历史上发过哪些信号"。
-
-    这是「怕错过信号」的第一道保险——即使消息被微信折叠/没看到，记录也不会丢。
-    """
-    __tablename__ = "fusion_push_log"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    pushed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    kind: Mapped[str] = mapped_column(Text, default="heartbeat")  # signal/presession/heartbeat/startup
-    title: Mapped[str] = mapped_column(Text, default="")
-    content: Mapped[str] = mapped_column(Text, default="")
-    n_signals: Mapped[int] = mapped_column(Integer, default=0)
-    n_rows: Mapped[int] = mapped_column(Integer, default=0)
-    delivered: Mapped[bool] = mapped_column(Boolean, default=True)  # 主通道是否发送成功
-    via: Mapped[str] = mapped_column(Text, default="pushplus")      # 实际成功通道
+# 已退役（CL-20261109-18）：原 `FusionPushLog` / `public.fusion_push_log` 于 2026-11-09
+# 删除。它存的是「推送文本留痕」（给人看），11-08 起生产推送源唯一化为 V5X.3 后不再增长，
+# 却仍被 ops_monitor 当作推送活性数据源 → 永久误报。归档 CSV 在
+# /home/ubuntu/qhyc_work/backup/fusion_push_log_20261109.csv。
 
 
 class FusionSignalLog(Base):
     """信号明细落库 —— 每次扫描产生的**结构化**信号逐条留存，供回测/复盘使用。
 
-    与 `fusion_push_log` 的区别：后者存"推送文本"（给人看），本表存"可计算字段"（给程序用）。
+    与已退役的 `fusion_push_log`（推送文本留痕）的分工：本表存"可计算字段"（给程序用）。
     落库为旁路：任何失败只告警，绝不阻塞扫描与推送。
     """
     __tablename__ = "fusion_signal_log"
@@ -659,7 +645,7 @@ def ensure_fusion_table(engine) -> None:
     （不依赖 SQLAlchemy has_table 对视图的可见性）：``v``=视图→跳过 DDL 并留痕；
     ``r``/``p``=真表→照旧建表/补列；``None`=不存在→建表。
     """
-    tables = (FusionPosition.__table__, FusionPushLog.__table__, FusionSignalLog.__table__)
+    tables = (FusionPosition.__table__, FusionSignalLog.__table__)
     with engine.begin() as conn:
         def _relkind(name: str):
             return conn.execute(
@@ -684,7 +670,7 @@ def ensure_fusion_table(engine) -> None:
                 conn.execute(text(stmt))
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[fusion] migration skipped: {stmt[:60]}... ({e})")
-    logger.info("[fusion] ensure fusion_position / fusion_push_log / fusion_signal_log table ok")
+    logger.info("[fusion] ensure fusion_position / fusion_signal_log table ok")
 
 
 def persist_signals(session, signals: list[dict], ts_local: datetime,
@@ -1021,7 +1007,6 @@ def set_push_state(session, symbol: str, *, last_stop=_UNSET, last_be_done=_UNSE
 
 __all__ = [
     "FusionPosition",
-    "FusionPushLog",
     "ensure_fusion_table",
     "read_hourly_bars",
     "drop_forming_bars",

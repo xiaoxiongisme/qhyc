@@ -7,7 +7,7 @@
   2b. 系统服务：scheduler / pipeline 等 systemd 单元是否 active（迁云后存活直监控）
   3. 服务：API /health 是否 200；TimescaleDB 是否可查询
   4. 数据：daily_bar 最新交易日距今滞后天数（回迁期可放宽）
-  5. 推送：fusion_push_log 最近一次推送是否成功（超时 24h 告警）
+  5. 推送：v5x_signal_log 最近一次**送达成功**的时刻（交易时段内静默 > 2h 告警）
 
 告警经 pushplus（与 qhyc 同一通道）发到微信；同一项在冷却期内不重复打扰。
 每日 08:00 可发一份"体检日报"：python3 ops_monitor.py --daily
@@ -371,15 +371,17 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
     #   11-08 起生产推送源唯一化为 V5X.3（cfg_feature_switch.fusion_v34_live_enabled=f），
     #   信号改落 ``v5x_signal_log``；而这两条判据仍在查 ``fusion_push_log`` ⇒ 该表自
     #   11-06 23:04 起不再增长 ⇒ 「已 79 小时无成功推送」+「信号链路 65.7 小时无记录」
-    #   成为**永久误报**，每 10 分钟各推一次。现改为：
-    #     · 推送成功时间 = max(fusion_push_log.delivered, v5x_signal_log.notify_ok)
+    #   成为**永久误报**，每 10 分钟各推一次。
+    # ★ 2026-11-09（CL-20261109-18）：该表已 **DROP**，判据里彻底去掉它（不是注释掉——
+    #   查一张不存在的表会让 psql 整条语句失败 ⇒ cols 为空 ⇒ silence_h=None ⇒
+    #   既不告警也不报错，等于这条判据悄悄消失）。现在：
+    #     · 推送成功时间 = max(v5x_signal_log.created_at WHERE notify_ok)
     #     · 有信号却未送达 = v5x_signal_log 里 **source='live'** 且仍在补发窗口内、
     #       notify_ok 非真的记录（replay 补录行按设计不推送，混进来就是永久误报）
     #     · 链路活性       = ops.scheduled_task_run 里 v5x_scan 最近一次 success
     #   「无信号」与「推不出去」必须分开衡量：V5X 是事件驱动，一天没事件本来就不推。
     ok, out = psql_fn(
         "SELECT "
-        " (SELECT max(pushed_at)::text FROM fusion_push_log WHERE delivered),"
         " (SELECT max(created_at)::text FROM v5x_signal_log WHERE notify_ok),"
         " (SELECT max(created_at)::text FROM v5x_signal_log),"
         " (SELECT count(*) FROM v5x_signal_log"
@@ -404,12 +406,11 @@ def collect(sh_fn=None, psql_fn=None, system_fn=None) -> dict:
         except ValueError:
             return None
 
-    v5x_on = _col(4) == "true"
-    v34_on = _col(5) == "true"
-    push_ages = [a for a in (_age_h(_col(0)), _age_h(_col(1))) if a is not None]
-    silence_h = min(push_ages) if push_ages else None
-    last_signal_age = _age_h(_col(2))
-    unsent = int(_col(3) or 0)
+    v5x_on = _col(3) == "true"
+    v34_on = _col(4) == "true"
+    silence_h = _age_h(_col(0))          # 唯一推送源 = V5X，不必再取 min
+    last_signal_age = _age_h(_col(1))
+    unsent = int(_col(2) or 0)
     if silence_h is not None:
         m["push_silence_h"] = round(silence_h, 1)
     if last_signal_age is not None:

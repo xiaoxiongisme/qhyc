@@ -397,7 +397,8 @@ class FusionConfig(BaseModel):
     trail_push_atr: float = 0.5
     # 开仓信号在此分钟数内每轮复提（防漏看）；0=不复提
     signal_repeat_min: int = 120
-    push_log: bool = True           # 推送留痕写 fusion_push_log 表（可随时回查历史信号）
+    # 注：原 push_log 开关（写 fusion_push_log 留痕表）已随该表 DROP 一并删除，
+    #     CL-20261109-18。留个说明，避免有人照着旧 yaml 找这个开关。
     # 备用通道：pushplus 失败时降级发送（企业微信/钉钉/飞书机器人 webhook，留空=不启用）
     fallback_webhook: str = ""
     # 允许推送的时间窗（本地时间，"HH:MM-HH:MM"，可多个）。窗口需覆盖"小时K收盘+采集延迟"，

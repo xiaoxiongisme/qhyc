@@ -117,7 +117,6 @@ from app.strategies.fusion_signal import (
     persist_signals,
     POS_MAP,
     FusionPosition,
-    FusionPushLog,
     FusionSignalLog,
 )
 from app.notify import send_notify
@@ -765,44 +764,51 @@ def _format_push(rows: list[dict], signals: list[dict], changes: list[dict],
     return title, content
 
 
-def _deliver(s, title: str, content: str, now: datetime, *, kind: str,
-             n_signals: int, n_rows: int, settings) -> bool:
-    """发送（主通道→备用通道）+ 推送留痕。返回是否送达。"""
+#: V3.4 推送节奏闸门（进程内）。原由 `fusion_push_log` 的行时间戳承担，该表已于
+#: 2026-11-09 删除（CL-20261109-18）：
+#:   · ``last_at``      —— 上次**送达成功**时刻（心跳最小间隔 heartbeat_interval_min）
+#:   · ``startup_day``  —— 上次上线通知的自然日（同日去重，防"每 30 分钟一条已启动"）
+#: ⚠ 语义已退化为「同一进程内」：调度器重启会清空，最多多推一条简报/上线通知。
+#:   可接受，因为 V3.4 自 2026-11-06 起停用；若要复活 V3.4，必须补持久化留痕表。
+_PUSH_GATE: dict[str, datetime | None] = {"last_at": None, "startup_day": None}
+
+
+def _deliver(title: str, content: str, settings) -> bool:
+    """发送（主通道→备用通道），返回是否送达。
+
+    ★ 2026-11-09（CL-20261109-18）：**不再写留痕表**。`fusion_push_log` 已 DROP ——
+      它存的是「推送文本」（给人看的），对程序没有消费方；而 11-08 起生产推送源
+      唯一化为 V5X.3 后它不再增长，却被 ops_monitor 当成推送活性数据源，
+      造成「已 79 小时无成功推送」的永久误报。325 行历史已归档 CSV。
+      唯一需要它的两处**节奏闸门**（上线通知同日去重、心跳最小间隔）改用进程内
+      ``_PUSH_GATE``，语义退化为「同一进程内」，重启后最多多推一条。
+      V3.4 自 2026-11-06 起停用（``fusion_v34_live_enabled=f``），本函数在生产
+      不可达；若将来要复活 V3.4，必须补一个持久化留痕表，否则闸门跨重启失效。
+    """
     ok, via = send_notify(title, content, settings.fusion.fallback_webhook)
     if not ok:
-        logger.warning(f"[fusion] 推送未送达: {title}")
-    if settings.fusion.push_log:
-        try:
-            s.add(FusionPushLog(
-                pushed_at=datetime.now(timezone.utc),
-                kind=kind, title=title, content=content,
-                n_signals=n_signals, n_rows=n_rows,
-                delivered=bool(ok), via=via,
-            ))
-            s.flush()
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[fusion] 推送留痕失败: {e}")
+        logger.warning(f"[fusion] 推送未送达: {title}（via={via}）")
+    if ok:
+        _PUSH_GATE["last_at"] = datetime.now(timezone.utc)
     return ok
 
 
-def _push_startup_notice(s, n_symbols: int, now: datetime, settings) -> None:
+def _push_startup_notice(n_symbols: int, now: datetime, settings) -> None:
     """冷启动：只发一条极简上线通知（不列方向清单，避免与'新信号'混淆）
 
     两道闸门（2026-09-24 修复「每 15/30 分钟重复推送」）：
       ① 品种数为 0（无数据）时不推——此时"已记录 0 个品种基线"无意义；
       ② 同一自然日只推一次——数据表为空时 is_cold 会反复为真（无基线可建），
          否则用户每半小时收到一条"已启动"。
+    闸门②原查 ``fusion_push_log(kind='startup')``；该表 2026-11-09 已删（CL-20261109-18），
+    改记进程内 ``_PUSH_GATE['startup_day']``，且**只在送达成功后置位** —— 原实现是先落行
+    再发送，发送失败也会被记成「今日已推」而永不重试。
     """
     if n_symbols <= 0:
         logger.info("[fusion] 冷启动但品种数为 0（无数据），跳过上线通知")
         return
-    day_start = datetime(now.year, now.month, now.day,
-                         tzinfo=now.tzinfo).astimezone(timezone.utc)
-    already = (s.query(FusionPushLog.id)
-                 .filter(FusionPushLog.kind == "startup",
-                         FusionPushLog.pushed_at >= day_start)
-                 .first())
-    if already:
+    day_start = datetime(now.year, now.month, now.day, tzinfo=now.tzinfo)
+    if _PUSH_GATE["startup_day"] == day_start:
         logger.info("[fusion] 今日已推送过上线通知，跳过")
         return
     f = settings.fusion
@@ -818,8 +824,8 @@ def _push_startup_notice(s, n_symbols: int, now: datetime, settings) -> None:
         "> 同一笔开仓信号会在 2 小时内的每份简报里重复置顶，直到出现平仓/反手，避免你漏看。",
         "> 之前已持有的仓位属于历史信号，不会重复提醒。",
     ])
-    _deliver(s, f"融合策略已启动 {now:%H:%M}", content, now, kind="startup",
-             n_signals=0, n_rows=n_symbols, settings=settings)
+    if _deliver(f"融合策略已启动 {now:%H:%M}", content, settings):
+        _PUSH_GATE["startup_day"] = day_start
 
 
 
@@ -1409,7 +1415,7 @@ def _fusion_scan_job() -> None:
 
             if is_cold:
                 n_ok = sum(1 for r in results if not r.get("error"))
-                _push_startup_notice(s, n_ok, now, settings)
+                _push_startup_notice(n_ok, now, settings)
                 logger.info(f"[scheduler] fusion scan 冷启动：已建 {n_ok} 品种基线，已推送上线通知")
                 return
 
@@ -1453,11 +1459,12 @@ def _fusion_scan_job() -> None:
                         })
 
             # 5) 推送决策：信号 > 盘前 > 止损变动 / 定时简报
-            last_push = s.execute(select(func.max(FusionPushLog.pushed_at))).scalar()
+            #    「上次推送时刻」原取 max(fusion_push_log.pushed_at)；该表 2026-11-09 已删
+            #    （CL-20261109-18），改读进程内 _PUSH_GATE（_deliver 送达成功时置位）。
+            last_push = _PUSH_GATE["last_at"]
             gap_ok = True
             if last_push is not None:
-                lp = last_push if last_push.tzinfo else last_push.replace(tzinfo=timezone.utc)
-                gap_ok = (now_utc - lp).total_seconds() >= f.heartbeat_interval_min * 60
+                gap_ok = (now_utc - last_push).total_seconds() >= f.heartbeat_interval_min * 60
             # 作业已固定在整点后 :05/:35 触发，心跳每次扫描均可触发，
             # 由 heartbeat_interval_min 控制最小间隔（gap_ok）。
             due_heartbeat = bool(f.heartbeat and rows and gap_ok)
@@ -1481,8 +1488,7 @@ def _fusion_scan_job() -> None:
                 kind=kind, max_rows=f.heartbeat_max_rows,
                 show_levels=f.push_stop_levels, data_asof=data_asof,
             )
-            ok = _deliver(s, title, content, now, kind=kind,
-                          n_signals=len(signals), n_rows=len(rows), settings=settings)
+            ok = _deliver(title, content, settings)
             for r in rows:
                 set_push_state(s, r["symbol"], pushed_at=now_utc)
             logger.info(

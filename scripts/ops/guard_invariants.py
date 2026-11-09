@@ -4206,11 +4206,86 @@ def _c_l1_session_grid(c: Ctx) -> tuple[bool, str, str, str]:
         "scripts/ops/rebuild_l1_grid.py")
 
 
+def _c_push_log_retired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261109-18：已退役的 `fusion_push_log` 必须「真的没了」，且无人再查它。
+
+    三段衡量的都是**现在的行为**，不是流水账：
+      A 库：任何 schema 下都不存在名为 fusion_push_log 的表/视图；
+      B 码：``app/`` ``scripts/`` 下没有以 SQL 形式引用它的语句（FROM/INTO/JOIN/UPDATE/
+        TABLE 前缀）—— 迁移目录豁免：迁移是历史记录，不回改；
+      C 判据：ops_monitor 的推送活性语句仍必须有 v5x_signal_log。
+
+    B 的后果不是「报错」而是「静默」：查一张不存在的表会让整条多列 SELECT 失败 →
+    ``cols`` 为空 → ``silence_h=None`` → push_silence 既不告警也不报错，判据凭空消失。
+
+    C 单独断言的道理同上：删表时最省事的做法是把整段判据一起注释掉，那会把
+    「信号发不出去」从「每 10 分钟误报」变成「永远沉默」——而沉默没人会抱怨，
+    也就永远不会被发现。
+    """
+    label = "已退役的 fusion_push_log 无残留（库对象/代码引用/监控判据仍在）"
+    bad: list[str] = []
+    observed: list[str] = []
+
+    # A. 库对象（表或视图，任何 schema）
+    n = c.scalar(
+        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        " WHERE c.relname = 'fusion_push_log'") or 0
+    observed.append(f"db_objects={int(n)}")
+    if n:
+        bad.append(f"库里仍有 {int(n)} 个 fusion_push_log 对象（表/视图）"
+                   "→ 069 未执行，或有人从归档恢复了它")
+
+    # B. 代码引用（SQL 形式；注释与文档提及不算）
+    pat = re.compile(
+        r"\b(?:FROM|INTO|JOIN|UPDATE|TABLE)\s+(?:public\.)?fusion_push_log\b",
+        re.IGNORECASE)
+    root = Path(__file__).resolve().parents[2]
+    hits: list[str] = []
+    for sub in ("app", "scripts"):
+        d = root / sub
+        if not d.exists():
+            continue
+        for p in d.rglob("*.py"):
+            if "migrations" in p.parts:
+                continue
+            try:
+                txt = p.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if pat.search(txt):
+                hits.append(str(p.relative_to(root)))
+    observed.append(f"code_refs={len(hits)}")
+    if hits:
+        bad.append(f"{len(hits)} 个文件仍以 SQL 引用该表（查不存在的表 → 判据静默消失）："
+                   f"{hits[:3]}")
+
+    # C. 监控判据不许被顺手删掉
+    mon = root / "scripts" / "ops" / "ops_monitor.py"
+    src = ""
+    try:
+        src = mon.read_text(encoding="utf-8")
+    except OSError as exc:                                   # noqa: BLE001
+        bad.append(f"读不到 ops_monitor.py：{type(exc).__name__}: {exc}")
+    if src:
+        has_v5x = "FROM v5x_signal_log" in src
+        observed.append(f"monitor_v5x_source={'yes' if has_v5x else 'no'}")
+        if not has_v5x:
+            bad.append("ops_monitor 的推送活性判据不再查 v5x_signal_log → "
+                       "「信号发不出去」将永久沉默（比误报更危险）")
+
+    return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
     ("OPS-PUSH-QUOTA", "告警日配额与单轮 digest（不挤爆信号通道）",
      "block", _c_ops_push_quota),
+    # CL-20261109-18：fusion_push_log 于 2026-11-09 DROP（推送源唯一化为 V5X 后它只剩
+    # 「监控误报源」这一个作用）。删表本身很容易，难的是「不许有人再查它」和
+    # 「不许顺手把推送活性判据一起删掉」——两条后果都是沉默。
+    ("PUSH-LOG-RETIRED", "已退役的 fusion_push_log 无残留（库/代码/监控判据）",
+     "block", _c_push_log_retired),
     # CL-20261109-01：11-09 00:00 那条「日线滞后 3 天」是自然日差在周末被顶到阈值，
     # 数据实际零滞后。防「判据回退成自然日差」与「真源退回已死的 l3_ref.trade_calendar」。
     ("OPS-DATA-LAG-TRADE-DAY", "日线滞后按交易日计且真源为 futures_rule",
