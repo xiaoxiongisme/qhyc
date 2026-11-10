@@ -4618,7 +4618,7 @@ def _c_mpr_exchange_coverage(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_backfill_gap_calendar_wired(c: Ctx) -> tuple[bool, str, str, str]:
-    """CL-20261110-07：5m 缺口探测必须接交易日历、按「前夜盘有无」分组。
+    """CL-20261110-07：5m 缺口探测必须接交易日历、按「前后夜盘形态」分组。
 
     旧判据按星期几求众数，把节后首日（2026-10-08）80 根误判成缺口，
     导致 AO/SS 被补进新浪凌晨合成脏 bar。断言做三件事：
@@ -4640,9 +4640,15 @@ def _c_backfill_gap_calendar_wired(c: Ctx) -> tuple[bool, str, str, str]:
     except Exception as e:  # noqa: BLE001
         return False, label, f"判据模块加载失败 {type(e).__name__}", str(e)[:200]
 
-    td = {date(2026, 9, 28), date(2026, 9, 29), date(2026, 9, 30),
-          date(2026, 10, 8), date(2026, 10, 9), date(2026, 11, 9),
-          date(2026, 11, 10)}
+    # 用 2026-09-28~11-10 的**真实**交易日集合（futures_rule 实测），稀疏集合
+    # 会让「下一交易日」距离失真，把普通周五也算成长假。
+    td = {date.fromisoformat(s) for s in (
+        "2026-09-28 2026-09-29 2026-09-30 2026-10-08 2026-10-09 "
+        "2026-10-12 2026-10-13 2026-10-14 2026-10-15 2026-10-16 "
+        "2026-10-19 2026-10-20 2026-10-21 2026-10-22 2026-10-23 "
+        "2026-10-26 2026-10-27 2026-10-28 2026-10-29 2026-10-30 "
+        "2026-11-02 2026-11-03 2026-11-04 2026-11-05 2026-11-06 "
+        "2026-11-09 2026-11-10").split()}
     for d, exp, tag in ((date(2026, 10, 8), False, "节后首日"),
                         (date(2026, 10, 9), True, "节后次日"),
                         (date(2026, 10, 12), False, "周一"),
@@ -4651,6 +4657,14 @@ def _c_backfill_gap_calendar_wired(c: Ctx) -> tuple[bool, str, str, str]:
         obs.append(f"{tag}={got}")
         if got != exp:
             bad.append(f"{tag} {d} 期望 {exp} 实得 {got}")
+    for d, exp, tag in ((date(2026, 9, 30), (True, False), "节前末日"),
+                        (date(2026, 10, 8), (False, True), "节后首日"),
+                        (date(2026, 11, 6), (True, True), "周五"),
+                        (date(2026, 11, 10), (True, False), "窗口末端")):
+        got = tuple(mod.session_shape(d, td))
+        obs.append(f"shape_{tag}={got}")
+        if got != exp:
+            bad.append(f"{tag} {d} 期望形态 {exp} 实得 {got}")
     obs.append(f"src={mod.TRADING_DAY_TABLE}")
     if mod.TRADING_DAY_TABLE != "public.futures_rule":
         bad.append("交易日真源不是 public.futures_rule（停更的 trade_calendar 不可用）")
@@ -4659,7 +4673,8 @@ def _c_backfill_gap_calendar_wired(c: Ctx) -> tuple[bool, str, str, str]:
             encoding="utf-8", errors="ignore")
     except OSError as e:
         return False, label, "读探测脚本失败", str(e)[:200]
-    wired = "trading_day_caliber" in src and "has_prev_session(" in src
+    # 四形态判据：只有 has_prev_session（二分）仍会把节前末日误判成缺口
+    wired = "trading_day_caliber" in src and "session_shape(" in src
     legacy = "extract(dow" in src or "GROUP BY dow" in src
     obs.append(f"wired={wired} legacy_dow={legacy}")
     if not wired:
