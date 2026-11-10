@@ -4674,7 +4674,8 @@ def _c_mpr_exchange_coverage(c: Ctx) -> tuple[bool, str, str, str]:
             bad.append(f"{exch} {syms} 品种仅为中位数 {med:.0f} 的 {ratio:.0%}")
     return (not bad), label, f"基准日 {latest}: " + " ".join(obs), (
         "" if not bad else "；".join(bad)
-        + " → 见 CL-20261110-05（DCE 抓取通道受限，需人工在可达网络侧补采）")
+        + " → 见 CL-20261110-05/11：17:30 rank_position 已自动用新浪单合约补齐；"
+          "若仍缺可跑 scripts/ops/backfill_dce_rank_sina.py --start ... --apply")
 
 
 def _c_backfill_gap_calendar_wired(c: Ctx) -> tuple[bool, str, str, str]:
@@ -4748,6 +4749,117 @@ def _c_backfill_gap_calendar_wired(c: Ctx) -> tuple[bool, str, str, str]:
         bad.append(f"futures_rule 近 30 天仅 {n} 个交易日 → 日历真源可能停更")
     return (not bad), label, " ".join(obs), (
         "" if not bad else "；".join(bad) + " → 见 CL-20261110-07")
+
+
+def _c_dce_sina_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-11：DCE 新浪单合约通道必须**真实接线**且保持正确对齐口径。
+
+    防四种复发（都是本项目踩过的坑）：
+      1) 改回「按会员名合并三表」→ 31 行/合约，member 与 short_pos 错配；
+      2) 改回 ``match_main_contract('dce')`` 批量清单 → 返回非 DCE 品种，
+         历史 393 行 ``src='sina_cot'`` 污染即此因；
+      3) 只把模块放进仓库、``rank_position`` 没人调用 → 「表建了没人读」；
+      4) 新浪接口改为忽略 ``date`` 恒返回最新一天 → 把未来数据写进历史。
+    为此额外锁住门 0（date 敏感性）与门 2（跨日增减自洽）在补数主流程里
+    被真实调用，而不只是「函数定义存在」。
+    """
+    label = "DCE 新浪单合约通道真实接线（按名次对齐 + 三道质量门）"
+    bad, obs = [], []
+    root = Path(__file__).resolve().parents[2]
+    try:
+        mod = (root / "app/ingest/dce_sina.py").read_text(
+            encoding="utf-8", errors="ignore")
+        rp = (root / "app/ingest/rank_position.py").read_text(
+            encoding="utf-8", errors="ignore")
+        cli = (root / "scripts/ops/backfill_dce_rank_sina.py").read_text(
+            encoding="utf-8", errors="ignore")
+    except OSError as e:
+        return False, label, "读源码失败", str(e)[:200]
+
+    body = mod.split("def backfill_missing", 1)[-1]
+
+    # 用 AST 判「有没有真的调用」而不是字符串匹配：docstring 里必须能写明
+    # 「禁止使用 match_main_contract」而不被误判成违规。
+    import ast
+
+    def has_call(src: str, name: str) -> bool:
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            return True  # 解析不了就按违规处理，保守
+        return any(
+            isinstance(n, ast.Call) and (
+                (isinstance(n.func, ast.Attribute) and n.func.attr == name)
+                or (isinstance(n.func, ast.Name) and n.func.id == name))
+            for n in ast.walk(tree))
+
+    checks = [
+        ("futures_hold_pos_sina" in mod, "调用 futures_hold_pos_sina"),
+        ('SRC_TAG = "sina:futures_hold_pos_sina"' in mod, "src 为新标记（非 sina_cot）"),
+        ("range(1, 21)" in mod and "for i in range(20)" in mod, "按名次 1..20 横向拼三表"),
+        (not has_call(mod, "match_main_contract"), "模块无批量合约清单调用"),
+        ("verify_date_sensitive(" in body, "门0 date 敏感性在主流程被调用"),
+        ("cross_day_selfcheck(" in body, "门2 跨日增减自洽在主流程被调用"),
+        ("l0_raw.member_position_rank" in mod, "候选合约来自库内 DCE 真实合约"),
+        ("ON CONFLICT" in mod, "幂等写入（不覆盖官网行）"),
+    ]
+    for ok, tag in checks:
+        obs.append(f"{tag}={'yes' if ok else 'NO'}")
+        if not ok:
+            bad.append(tag)
+    rp_checks = [
+        ("from app.ingest import dce_sina" in rp, "rank_position 真实 import dce_sina"),
+        ("_run_dce(date)" in rp, "DCE 分支调用 _run_dce"),
+        ("merged[member]" not in rp, "已删除按会员合并逻辑"),
+        (not has_call(rp, "match_main_contract"), "已删除批量合约清单调用"),
+        ('SRC = "sina_cot"' not in rp, "不再写旧污染 src"),
+    ]
+    for ok, tag in rp_checks:
+        obs.append(f"{tag}={'yes' if ok else 'NO'}")
+        if not ok:
+            bad.append(tag)
+    obs.append(f"cli_backfill={'yes' if 'backfill_missing' in cli else 'NO'}")
+    if "backfill_missing" not in cli:
+        bad.append("补数 CLI 未引用 backfill_missing")
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-11")
+
+
+def _c_mpr_dce_coverage(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-11：近 30 天**每个** DCE 交易日的品种覆盖都不得塌陷。
+
+    旧的 ``OPS-MPR-EXCHANGE-COVERAGE`` 只比「最新交易日 vs 自身中位数」，
+    一旦断档日被后续正常日盖过就永远看不见（11-09 正是这样只靠人工体检发现）。
+    这条逐日比对，把「补完即通过」变成可判定的当前状态，不依赖时间衰减。
+    排除 ``CURRENT_DATE``：当日 17:30 采集尚未执行时不该算违约。
+    """
+    label = "DCE 会员持仓排名逐日品种覆盖完整（≥ 中位数 90%）"
+    try:
+        rows = c.rows("""
+            WITH d AS (
+              SELECT trade_date,
+                     count(DISTINCT upper(regexp_replace(symbol,'[0-9]+$',''))) v
+              FROM public.member_position_rank
+              WHERE exchange = 'DCE'
+                AND trade_date >= now() - interval '30 days'
+                AND trade_date < CURRENT_DATE
+              GROUP BY 1
+            ), m AS (
+              SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) med FROM d
+            )
+            SELECT d.trade_date, d.v, m.med FROM d CROSS JOIN m ORDER BY 1
+        """)
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"查询失败 {type(e).__name__}", str(e)[:200]
+    bad, obs = [], []
+    for d, v, med in rows:
+        med = float(med or 0)
+        if med and v < med * 0.9:
+            bad.append(f"{d} 仅 {v} 品种（中位数 {med:.0f} 的 {v / med:.0%}）")
+    mins = min((int(v) for _, v, _ in rows), default=0)
+    obs.append(f"近30天 {len(rows)} 个交易日，最低 {mins} 品种")
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad[:6]) + " → 见 CL-20261110-05/11")
 
 
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
@@ -4979,6 +5091,13 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-07：节后首日（10-08）被星期几众数误判成缺口 → 补进合成脏 bar。
     ("BACKFILL-GAP-CALENDAR-WIRED", "5m 缺口探测接交易日历（防节后首日假阳性）",
      "block", _c_backfill_gap_calendar_wired),
+    # CL-20261110-11 / 用户 18:16 拍板①：DCE 官网瑞数 412 时改用新浪单合约补齐。
+    # 源码级锁「按名次对齐 + 禁批量清单 + 三道质量门 + 真实接线」，
+    # 数据级锁「近 30 天逐日品种覆盖」，防止再出现 11-09 那种单所静默断档。
+    ("OPS-DCE-SINA-WIRED", "DCE 新浪单合约通道真实接线且对齐口径正确",
+     "block", _c_dce_sina_wired),
+    ("OPS-MPR-DCE-COVERAGE", "DCE 会员持仓排名逐日品种覆盖未塌陷",
+     "block", _c_mpr_dce_coverage),
 ]
 
 

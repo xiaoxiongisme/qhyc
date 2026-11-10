@@ -8,13 +8,21 @@
 | CZCE | `ak.get_rank_table_czce(date)` 官方全量（122 键，**只取合约级**） | `akshare:get_rank_table_czce` |
 | SHFE | `ak.get_shfe_rank_table(date)` 官方全量（约 74 合约，**绝不能传 `vars_list`**） | `akshare:get_shfe_rank_table` |
 | GFEX | `ak.futures_gfex_position_rank(date, vars_list)` 官方 | `akshare:futures_gfex_position_rank` |
-| DCE  | `app.ingest.dce_scrapling`（Scrapling 真浏览器绕大商所瑞数动态防护） | `scrapling:dce_memberDealPosi` |
+| DCE  | **主源** `app.ingest.dce_scrapling`（真浏览器绕瑞数）＋**缺口自动补齐** `app.ingest.dce_sina`（新浪按单合约） | `scrapling:dce_memberDealPosi` / `sina:futures_hold_pos_sina` |
 | INE  | **无免费源**，不纳入（如实标注，不做空跑） | — |
 | CFFEX| 金融期货，决策 3 不纳入、不补 | — |
 
-**统一原则**：官方源为唯一主源（交易所原始口径、覆盖全合约）；**新浪通道已退役**——
-新浪对 DCE 返回非大商所品种（历史 393 行 `src='sina_cot'` 错标即此因）、对 SHFE 只给 25 个主力合约
-（官方给 74 个）、对 CZCE 用 4 位月份（官方是 3 位），同一合约两套 symbol，是库内 `src` 混杂的根源。
+**统一原则**：官方源仍为唯一主源（交易所原始口径、覆盖全合约）。
+2026-11-10 用户拍板 ①（CL-20261110-11）对 **DCE 单所**开了例外：官网全站瑞数
+412、Scrapling 浏览器通道在三路环境实测不可用，2026-11-09 只采到 V/Y 共 12 合约；
+允许 ``ak.futures_hold_pos_sina`` **按单个明确合约**查询作补齐/兜底。
+
+⚠ 例外只到「单合约查询」为止，历史退役结论依然成立：
+  · 绝不用 ``ak.match_main_contract('dce')`` 批量拉合约清单（会返回非 DCE 品种，
+    历史 393 行 `src='sina_cot'` 污染即此因），候选合约一律从库内 DCE 真实合约取；
+  · SHFE 新浪只给 25 个主力合约（官方 74 个）、CZCE 用 4 位月份（官方 3 位），
+    这两个所仍只走官方接口；
+  · 新浪补数只 INSERT 库内缺失合约，不删不改官网行，见 ``app.ingest.dce_sina``。
 
 各所解析**复用** `app.ingest.member_position` 的同名解析器（同 src、同字段映射），保证矩阵链路
 （手动 `POST /position/collect/{date}`）与本链路（每日 17:30 自动）写出的行完全同构、可互相幂等补齐。
@@ -34,39 +42,27 @@ symbol 口径（2026-09-20 统一）
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Iterable
 
 from app.core.db import get_engine
 from app.core.logging import logger
 from app.ingest.blocked_varieties import is_blocked_symbol
 from sqlalchemy import text
 
-VERSION = "v1.0"
-SRC = "sina_cot"
+# 旧 ``SRC = "sina_cot"`` 与 ``match_main_contract + 按会员合并`` 的新浪批量通道
+# 已于 2026-09-20 退役，2026-11-10 清理删除（CL-20261110-11）：
+# 它按会员名合并三表会写出 31 行/合约且 member 与 short_pos 错配，
+# 批量拉合约清单还会返回非 DCE 品种（393 行污染）。DCE 现走 _run_dce 双通道。
 
-# 新浪通道（match_main_contract + futures_hold_pos_sina）**已退役**。
-# 保留空表与下方循环结构，仅为将来官方源不可用时能快速切回兜底。
-# 退役理由（2026-09-20 用户拍板「官方源为准」）：
-#   · DCE ：新浪对 dce 返回**非大商所品种** → 曾写入 393 行 `sina_cot` 错标；
-#   · SHFE：新浪只给 **25 个主力合约**，官方给 74 个；
-#   · CZCE：新浪用 **4 位月份**（AP2701），官方用 **3 位**（AP701），同合约两套 symbol。
-_AK_EXCHANGE: dict[str, str] = {}
-
-# 走 Scrapling 专用通道的交易所（不进新浪循环）
+# 走 Scrapling 主源 + 新浪缺口补齐的交易所
 _SCRAPLING_EXCHANGES = ("DCE",)
 
-# 走 akshare 官方直连接口的交易所（不进新浪循环）
+# 走 akshare 官方直连接口的交易所
 _OFFICIAL_RANK_EXCHANGES = ("SHFE", "CZCE", "GFEX")
 
 # 无免费源、明确不纳入的交易所（如实标注，不做无谓空跑）
 _NO_SOURCE_EXCHANGES = {
     "INE": "无免费源（新浪对 ine 无有效数据，交易所无公开排名接口）",
 }
-
-# 三个持仓维度 → 对应列名（按返回 DataFrame 列顺序，避免依赖中文列名）
-_CAT_VOLUME = "成交量"
-_CAT_LONG = "多单持仓"
-_CAT_SHORT = "空单持仓"
 
 _INSERT = text(
     """
@@ -89,18 +85,6 @@ _INSERT = text(
 # 历史 DCE 污染的隐患之一正是「数值被新源覆盖、src 仍是旧源」，两边脱节。
 
 
-def _num(v) -> int | None:
-    if v is None:
-        return None
-    s = str(v).replace(",", "").replace(" ", "").replace("\u3000", "")
-    if s in ("", "-", "—", "nan", "NaN"):
-        return None
-    try:
-        return int(float(s))
-    except ValueError:
-        return None
-
-
 def _build_product_map() -> dict[str, str]:
     """品种码（大写）→ 交易所；用于把主力合约代码反查回本项目品种。
 
@@ -112,85 +96,6 @@ def _build_product_map() -> dict[str, str]:
     for spec in get_settings().main_contracts:
         m[spec.product.upper()] = spec.exchange
     return m
-
-
-def _product_of(contract: str, product_map: dict[str, str]) -> str | None:
-    c = contract.upper()
-    best: str | None = None
-    for prod in product_map:
-        if c.startswith(prod):
-            if best is None or len(prod) > len(best):
-                best = prod
-    return best
-
-
-def _main_contracts_of(exchange: str) -> list[str]:
-    """新浪主力合约代码串 → 列表。返回该交易所全部商品主力合约。"""
-    import akshare as ak  # type: ignore
-
-    code = _AK_EXCHANGE[exchange]
-    raw = ak.match_main_contract(symbol=code)
-    if not raw:
-        return []
-    if isinstance(raw, str):
-        return [x.strip() for x in raw.split(",") if x.strip()]
-    # 防御：若未来返回 DataFrame，取首项列
-    try:
-        return [str(x).strip() for x in list(raw) if str(x).strip()]
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def _fetch_contract(contract: str, date_str: str) -> list[dict]:
-    """拉单个主力合约的三类持仓排名，按会员合并成一行（long/short/vol 同列，避免 PK 冲突）。"""
-    import akshare as ak  # type: ignore
-
-    # 名次/会员为各维度共有；按会员名聚合，分别填入 long/short/vol
-    merged: dict[str, dict] = {}
-
-    def _ensure(member: str) -> dict:
-        if member not in merged:
-            merged[member] = {
-                "member": member, "rank": None,
-                "long_pos": None, "long_chg": None,
-                "short_pos": None, "short_chg": None,
-                "vol_pos": None,
-            }
-        return merged[member]
-
-    def _rows(cat: str) -> Iterable[dict]:
-        df = ak.futures_hold_pos_sina(symbol=cat, contract=contract, date=date_str)
-        if df is None or len(df) == 0:
-            return []
-        cols = list(df.columns)
-        # 列序：名次, 会员简称, 数值(成交量/多单/空单), 比上交易增减
-        rank_i, member_i = 0, 1
-        val_i, chg_i = 2, 3
-        for _, r in df.iterrows():
-            try:
-                rank = _num(r.iloc[rank_i])
-                member = str(r.iloc[member_i]).strip()
-                val = _num(r.iloc[val_i])
-                chg = _num(r.iloc[chg_i]) if len(cols) > chg_i else None
-            except Exception:  # noqa: BLE001
-                continue
-            if not member:
-                continue
-            yield {"rank": rank, "member": member, "val": val, "chg": chg, "cat": cat}
-
-    for cat in (_CAT_VOLUME, _CAT_LONG, _CAT_SHORT):
-        for rec in _rows(cat):
-            row = _ensure(rec["member"])
-            if rec["rank"] is not None:
-                row["rank"] = rec["rank"]
-            if cat == _CAT_VOLUME:
-                row["vol_pos"] = rec["val"]
-            elif cat == _CAT_LONG:
-                row["long_pos"], row["long_chg"] = rec["val"], rec["chg"]
-            elif cat == _CAT_SHORT:
-                row["short_pos"], row["short_chg"] = rec["val"], rec["chg"]
-
-    return list(merged.values())
 
 
 def save_rows(rows: list[dict]) -> int:
@@ -228,6 +133,44 @@ def _run_dce_scrapling(date: _dt.date) -> object:
     if not isinstance(st, dict) or not st.get("rows"):
         return f"空数据（{st}）"
     return st.get("rows")
+
+
+def _run_dce(date: _dt.date) -> dict:
+    """DCE 双通道：官网 Scrapling **主源** + 新浪单合约**缺口自动补齐**（CL-20261110-11）。
+
+    官网全站瑞数 412，Scrapling 真浏览器通道在生产容器常不可用；即便可用也可能
+    像 2026-11-09 那样只采到 V/Y 共 12 合约（2 品种），或像 11-06 那样个别远月
+    合约写入残缺值。因此采集后一律以**主表聚合**核对品种覆盖：
+    低于近 30 交易日中位数 → 调 ``dce_sina.backfill_missing`` 只补库内缺失合约。
+
+    官网完全不可用时覆盖为 0，同样触发补齐（即新浪同时充当兜底主通道）。
+    单所失败不抛异常打断其他交易所（§18.13 红线）。
+    """
+    try:
+        from app.ingest import dce_sina
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"dce_sina 导入失败 {type(e).__name__}: {e}",
+                "official": _run_dce_scrapling(date)}
+
+    official = _run_dce_scrapling(date)
+    before = dce_sina.day_coverage(date)
+    expected = dce_sina.expected_varieties()
+    out: dict[str, object] = {
+        "official": official,
+        "varieties_before": before["varieties"],
+        "expected_varieties": expected,
+    }
+    if not expected or before["varieties"] >= expected:
+        out["sina_backfill"] = "skipped(官网覆盖完整)"
+        return out
+    try:
+        st = dce_sina.backfill_missing(date, verify_existing=True, apply=True)
+        out["sina_backfill"] = st
+        out["varieties_after"] = st["after"]["varieties"]
+    except Exception as e:  # noqa: BLE001
+        out["sina_backfill"] = f"失败: {type(e).__name__}: {e}"
+        logger.exception("[rank_position] DCE 新浪单合约补齐失败")
+    return out
 
 
 def _run_shfe_official(date: _dt.date) -> object:
@@ -355,11 +298,9 @@ def run(date: _dt.date | None = None, exchanges: list[str] | None = None) -> dic
       INE 无免费源、CFFEX 属金融期货（决策 3），均不纳入、不补。
     """
     date = date or _dt.date.today()
-    date_str = date.strftime("%Y%m%d")
     product_map = _build_product_map()
     if exchanges is None:
-        # 新浪通道已退役（_AK_EXCHANGE 为空），这里直接展开官方通道集合，
-        # 只保留本项目 config.main_contracts 覆盖的交易所。
+        # 展开官方通道集合（DCE 另有新浪缺口补齐），只保留 config.main_contracts 覆盖的所
         exchanges = []
         covered = set(product_map.values())
         for special in (*_SCRAPLING_EXCHANGES, *_OFFICIAL_RANK_EXCHANGES):
@@ -368,11 +309,11 @@ def run(date: _dt.date | None = None, exchanges: list[str] | None = None) -> dic
 
     summary: dict[str, object] = {}
     for exch in exchanges:
-        # ---- DCE：Scrapling 专用通道（不进新浪循环）----
+        # ---- DCE：官网 Scrapling 主源 + 新浪单合约缺口补齐 ----
         if exch in _SCRAPLING_EXCHANGES:
-            summary[exch] = _run_dce_scrapling(date)
+            summary[exch] = _run_dce(date)
             continue
-        # ---- SHFE / CZCE / GFEX：akshare 官方直连全量接口（不进新浪循环）----
+        # ---- SHFE / CZCE / GFEX：akshare 官方直连全量接口 ----
         if exch in _OFFICIAL_RANK_EXCHANGES:
             if exch == "SHFE":
                 summary[exch] = _run_shfe_official(date)
@@ -381,48 +322,11 @@ def run(date: _dt.date | None = None, exchanges: list[str] | None = None) -> dic
             else:
                 summary[exch] = _run_gfex_official(date)
             continue
-        # ---- 无免费源的交易所：如实标注，不做空跑 ----
+        # ---- 无免费源 / 非本项目覆盖：如实标注，不做空跑 ----
         if exch in _NO_SOURCE_EXCHANGES:
             summary[exch] = f"跳过：{_NO_SOURCE_EXCHANGES[exch]}"
             continue
-        # ---- 以下为已退役的新浪通道（_AK_EXCHANGE 恒空 → 实际不可达）----
-        # 保留结构，供将来官方源不可用时切回兜底。
-        if exch not in _AK_EXCHANGE:
-            summary[exch] = "跳过（非商品交易所，决策 3 不纳入）"
-            continue
-        try:
-            contracts = _main_contracts_of(exch)
-            if not contracts:
-                summary[exch] = "空数据"
-                continue
-            rows: list[dict] = []
-            for c in contracts:
-                prod = _product_of(c, product_map)
-                if prod is None:
-                    continue  # 非本项目覆盖品种，跳过
-                ex = product_map[prod]
-                try:
-                    for rec in _fetch_contract(c, date_str):
-                        rows.append({
-                            "trade_date": date,
-                            "exchange": ex,
-                            "symbol": c,            # 主力合约代码（如 RB2510）
-                            "member": rec["member"],
-                            "rank": rec["rank"] or 0,
-                            "long_pos": rec["long_pos"],
-                            "short_pos": rec["short_pos"],
-                            "long_chg": rec["long_chg"],
-                            "short_chg": rec["short_chg"],
-                            "vol_pos": rec["vol_pos"],
-                            "src": SRC,
-                            "version": VERSION,
-                        })
-                except Exception as ce:  # noqa: BLE001
-                    logger.warning(f"[rank_position] {exch} {c} 失败: {ce}")
-            n = save_rows(rows)
-            summary[exch] = n
-        except Exception as e:  # noqa: BLE001
-            summary[exch] = f"失败: {type(e).__name__}: {e}"
+        summary[exch] = "跳过（非商品交易所，决策 3 不纳入）"
     return summary
 
 
