@@ -5225,6 +5225,187 @@ def _c_factor_retired_consist(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad) + " → 见 CL-20261110-16")
 
 
+def _c_vwap_caliber_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-17：f_vwap_dev 必须真用成交量加权典型价，且数值不再退化。
+
+    旧式 ``(cl - amt/vol)/atr*100`` 在 X888 的 amount 全 NULL 时静默变成
+    ``cl/atr*100``：有值、有逐日覆盖，所有新鲜度巡检都看不出语义失真。
+    所以这里同时锁「源码真实接线（AST，防注释蒙混）」和「库内数值量级」，
+    并要求历史行仍在（防删数据让断言转绿）。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "f_vwap_dev 采用成交量加权典型价口径且数值未退化"
+    p = Path(__file__).resolve().parents[2] / "scripts" / "factor_ic_scan.py"
+    bad, obs = [], []
+    try:
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+               and n.name == "build_factors"), None)
+    if fn is None:
+        return False, label, "build_factors 不存在", "factor_ic_scan.py 结构已变"
+    expr = None
+    has_tpv = False
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) \
+                        and t.value.id == "out" and isinstance(t.slice, ast.Constant) \
+                        and t.slice.value == "f_vwap_dev":
+                    expr = ast.unparse(n.value)
+                if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) \
+                        and t.value.id == "ds" and isinstance(t.slice, ast.Constant) \
+                        and t.slice.value == "tpv":
+                    has_tpv = True
+    if expr is None or "vwap_vol" not in expr:
+        bad.append("f_vwap_dev 未真实引用 vwap_vol（旧 amt/vol 口径可能回来了）")
+    elif "amt" in expr:
+        bad.append("f_vwap_dev 仍引用 amt")
+    else:
+        obs.append("AST: 赋值仅用 vwap_vol")
+    if not has_tpv:
+        bad.append("build_factors 未构造逐根 tpv（典型价×成交量）")
+    else:
+        obs.append("tpv 已构造")
+
+    try:
+        rows = c.rows("""
+            SELECT count(*) AS n,
+                   coalesce(max(abs(raw_value)), 0) AS mx,
+                   coalesce(percentile_cont(0.99) WITHIN GROUP
+                            (ORDER BY abs(raw_value)), 0) AS p99
+            FROM l2_adj.factor_value
+            WHERE factor_id = 'f_vwap_dev'
+              AND trade_date >= current_date - interval '30 days'
+        """)
+        n, mx, p99 = int(rows[0][0]), float(rows[0][1]), float(rows[0][2])
+        # 旧口径近 30 天均值 >5,000、最大 >30,000；新口径是「收盘价偏离 VWAP
+        # 几个 ATR」，p99 应远小于 1,000。阈值留了一个数量级余量。
+        if n < 100:
+            bad.append(f"近 30 天仅 {n} 行（疑似删数据或因子断供）")
+        elif p99 >= 1000 or mx >= 5000:
+            bad.append(f"数值量级异常 p99={p99:.1f} max={mx:.1f}（疑似退化成 cl/atr*100）")
+        else:
+            obs.append(f"近30天 {n:,} 行 p99={p99:.1f} max={mx:.1f}")
+        mark = c.rows("""SELECT count(*) FROM factor_registry
+                         WHERE factor_id='f_vwap_dev'
+                           AND description LIKE '%CL-20261110-17%'""")
+        if int(mark[0][0]) < 1:
+            bad.append("factor_registry 缺口径变更标记")
+        else:
+            obs.append("registry 已声明口径")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-17")
+
+
+def _c_task_status_source(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-13：不写宿主流水的作业必须声明真实状态源，且该来源当前健康。
+
+    防两种复发：① 把「作业在跑但流水没写」误判成停摆，或反过来靠置 NULL
+    掩盖真停摆；② 只改字典不改断言，下次漂移又只能靠人发现。
+    状态结论一律取自主表/系统视图聚合，不取事件表推断（skill 铁律 #4）。
+    """
+    label = "非流水监控作业声明真实状态源且来源健康"
+    bad, obs = [], []
+    # 这些作业**结构上**不写 ops.scheduled_task_run，允许 no_heartbeat；
+    # 任何别的作业被置 NULL 都视为「想掩盖停摆」。
+    allowed = {
+        "cloud_local_sync", "sp_build_l1_from_minute",
+        "tsdb_job_1", "tsdb_job_3", "tsdb_job_1000", "tsdb_job_1001",
+        "tsdb_job_1002", "tsdb_job_1004", "tsdb_job_1005", "tsdb_job_1007",
+    }
+    try:
+        rows = c.rows("""
+            SELECT task_id, coalesce(meta->>'status_source', '')
+            FROM ops.scheduled_task
+            WHERE enabled AND expected_gap_days IS NULL
+        """)
+        unexpected = sorted(t for t, _ in rows if t not in allowed)
+        no_src = sorted(t for t, s in rows if not s.strip())
+        if unexpected:
+            bad.append("未授权置 NULL: " + ",".join(unexpected[:6]))
+        if no_src:
+            bad.append("缺 status_source: " + ",".join(no_src[:6]))
+        if not unexpected and not no_src:
+            obs.append(f"no_heartbeat {len(rows)} 个均有来源声明")
+
+        # TSDB 后台作业：字典 enabled 项必须在 jobs 表存在且 scheduled，
+        # 且 job_stats 最近一次运行成功、下次触发在未来。
+        orphan = c.rows("""
+            SELECT t.task_id FROM ops.scheduled_task t
+            WHERE t.enabled AND t.executor = 'timescaledb_job'
+              AND regexp_replace(t.task_id, '^tsdb_job_', '')::int
+                  NOT IN (SELECT job_id FROM timescaledb_information.jobs)
+        """)
+        if orphan:
+            bad.append("字典有陈旧 tsdb_job: " + ",".join(r[0] for r in orphan[:6]))
+        js = c.rows("""
+            SELECT count(*) FILTER (WHERE s.last_run_status <> 'Success') AS n_fail,
+                   count(*) FILTER (WHERE s.next_start <= now()) AS n_overdue,
+                   count(*) AS n_total
+            FROM timescaledb_information.jobs j
+            JOIN timescaledb_information.job_stats s USING (job_id)
+            WHERE j.scheduled
+        """)
+        n_fail, n_overdue, n_total = (int(x) for x in js[0])
+        if n_fail or n_overdue:
+            bad.append(f"TSDB job_stats 失败 {n_fail} / 逾期 {n_overdue}（共 {n_total}）")
+        else:
+            obs.append(f"TSDB {n_total} job 全 Success")
+
+        bt = c.rows("""SELECT count(*) FROM public.backtest_result
+                       WHERE created_at >= now() - interval '14 days'""")
+        if int(bt[0][0]) < 1:
+            bad.append("backtest_result 近 14 天无产出（周度回测状态源断供）")
+        else:
+            obs.append(f"backtest_result 近14天 {int(bt[0][0]):,} 行")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-13")
+
+
+def _c_reaped_abort_only(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-13 F：aborted 只能是进程重启自愈遗留，不能成为真故障的垃圾桶。
+
+    ``_reap_stale_running`` 每次启动把上一进程遗留的 running 置 aborted 并写明原因；
+    11-09/10 因密集发布重启产生 127 条，全部带 reaped 标记，journal 明确写
+    「非任务故障」。若哪天真挂死被塞进这个状态、或自愈失效留下僵尸 running，
+    这条断言立刻 FAIL。
+    """
+    label = "近 24h aborted 全为重启自愈遗留且无僵尸 running"
+    try:
+        rows = c.rows("""
+            SELECT count(*) FILTER (WHERE status='aborted') AS n_ab,
+                   count(*) FILTER (WHERE status='aborted'
+                     AND (message IS NULL OR message NOT LIKE '%reaped%')) AS n_bad,
+                   (SELECT count(*) FROM ops.scheduled_task_run
+                     WHERE status='running'
+                       AND started_at < now() - interval '2 hours') AS n_zombie
+            FROM ops.scheduled_task_run
+            WHERE started_at >= now() - interval '24 hours'
+        """)
+        n_ab, n_bad, n_zombie = (int(x) for x in rows[0])
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+    bad = []
+    if n_bad:
+        bad.append(f"{n_bad} 条 aborted 非 reaped（真故障被误归类）")
+    if n_zombie:
+        bad.append(f"{n_zombie} 条 running 超 2 小时（自愈未生效）")
+    if n_ab > 80:
+        bad.append(f"近 24h aborted {n_ab} 条（重启过于频繁，查部署动作）")
+    return (not bad), label, (
+        f"近24h aborted={n_ab} / 非reaped={n_bad} / 僵尸running={n_zombie}"), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-13")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -5481,6 +5662,16 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 正式退役。锁「代码真接线 + registry 标记 + 历史不删」，防只改注释或删数据蒙混。
     ("OPS-FACTOR-RETIRED-CONSIST", "退役因子在巡检中真接线且历史数据保留",
      "block", _c_factor_retired_consist),
+    # CL-20261110-17：f_vwap_dev 有值但语义失真（amount=0 退化成 cl/atr*100），
+    # 逐日覆盖类巡检看不见 → 必须锁源码口径 + 数值量级。
+    ("OPS-VWAP-CALIBER-WIRED", "f_vwap_dev 成交量加权典型价口径真接线且数值未退化",
+     "block", _c_vwap_caliber_wired),
+    # CL-20261110-13：作业在跑、流水没写 ≠ 停摆。置 NULL 必须声明真实状态源，
+    # 且该来源（job_stats / backtest_result）当前真的健康。
+    ("OPS-TASK-STATUS-SOURCE", "非流水监控作业声明真实状态源且来源健康",
+     "block", _c_task_status_source),
+    ("OPS-REAPED-ABORT-ONLY", "aborted 仅为重启自愈遗留且无僵尸 running",
+     "block", _c_reaped_abort_only),
 ]
 
 

@@ -137,15 +137,29 @@ def build_factors(df: pd.DataFrame) -> pd.DataFrame:
 
     关键：所有「当日统计量」只使用**决策时点（日盘最后一根 14:45）及以前**的 bar，
     否则日 VWAP 里会含 15:00 那根收盘价，因子与未来收益产生机械相关（虚假 IC）。
+
+    ★ CL-20261110-17 口径变更：``f_vwap_dev`` 的 VWAP 由「成交额 / 成交量」改为
+    **成交量加权典型价** ``sum(((H+L+C)/3) * volume) / sum(volume)``。
+    原因：``bar_15m`` 里 ``X888`` 主力连续的 ``amount`` 结构性全 NULL
+    （2026-09~10 实测 35,158 根 has_amt=0，而 volume / H / L / C 全部齐备），
+    旧式 ``(cl - amt/vol)/atr*100`` 的 ``amt`` 被 pandas 求和成 0，因子静默退化成
+    ``cl/atr*100``（11-04 均值 12,578、最大 340,750），有值但语义完全失真。
+    新口径只用可信字段，是标准 VWAP 近似，**不编造成交额**；全历史按 trade_date
+    重算，口径声明见 migration 072 与 ``factor_registry.description``。
+    ``f_amt_conc`` 仍依赖 amount，已于 CL-20261110-16 正式退役，不受本改动影响。
     """
-    ds = df[df["hm"] < "15:00"]                      # 日盘 bar
+    ds = df[df["hm"] < "15:00"].copy()               # 日盘 bar
     if ds.empty:
         return pd.DataFrame()
+    # 典型价 × 成交量的逐根累加量；任一 H/L/C 缺失该根为 NaN，按日求和后
+    # 若为 0/NaN 则在下面置 NaN，绝不退回「VWAP=0」的假值。
+    ds["tpv"] = ((ds["high"] + ds["low"] + ds["close"]) / 3.0) * ds["volume"]
     dec = ds.groupby("day", sort=True).tail(1)       # 决策行（14:45）
     agg = ds.groupby("day", sort=True).agg(
         day_open=("open", "first"), day_high=("high", "max"),
         day_low=("low", "min"), amt=("amount", "sum"),
         vol=("volume", "sum"), oi_open=("oi", "first"),
+        tpv=("tpv", "sum"),
     ).reset_index()
     # 开盘前 2 根的成交额占比（用开盘 30 分钟衡量当日资金集中度）
     first2 = ds.groupby("day", sort=True)["amount"].apply(lambda x: x.head(2).sum())
@@ -175,7 +189,10 @@ def build_factors(df: pd.DataFrame) -> pd.DataFrame:
     cl = out["close_d"]
     atr = out["atr14"].replace(0, np.nan)
     vol_ma = out["vol"].shift(1).rolling(20, min_periods=10).mean()
-    out["f_vwap_dev"] = (cl - out["amt"] / out["vol"].replace(0, np.nan)) / atr * 100
+    # CL-20261110-17：成交量加权典型价口径。tpv<=0 说明当日 H/L/C 或 volume 不可信，
+    # 宁可不给值，也不写回退化的 cl/atr*100（旧口径正是这样静默骗过所有巡检）。
+    vwap_vol = (out["tpv"] / out["vol"].replace(0, np.nan)).where(out["tpv"] > 0)
+    out["f_vwap_dev"] = (cl - vwap_vol) / atr * 100
     rng = (out["day_high"] - out["day_low"]).replace(0, np.nan)
     out["f_close_loc"] = (cl - out["day_low"]) / rng
     out["f_close_loc14"] = (cl - out["day_low"].rolling(14, min_periods=10).min()) / atr
