@@ -1065,6 +1065,76 @@ def _c_jobhb_cron_aware(c: Ctx) -> tuple[bool, str, str, str]:
         "；".join(bad) if bad else "")
 
 
+def _c_compress_log_path(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-14：压缩脚本日志不得依赖 /var/log，且失败不得假绿。
+
+    /var/log 默认仅 root 可写，旧版靠 sudo 预创建 + chown 才能跑，主机重装即复发；
+    而 psql -f 不带 ON_ERROR_STOP 时报错仍退 0，task_runner 按 returncode 记 success。
+    这里不只查字符串：默认日志目录交给 sh 真实展开、整份脚本跑 sh -n，
+    再查作业字典仍启用（防「脚本改了但没人调用」）。
+    """
+    import os  # noqa: PLC0415
+    import re  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    label = "压缩脚本日志落在项目可写目录且失败可冒泡"
+    candidates = [
+        "/app/scripts/db/run_compress.sh",  # 生产容器：/Docker/qhyc ro bind 到 /app
+        str(Path(__file__).resolve().parents[2] / "scripts/db/run_compress.sh"),
+    ]
+    path = next((p for p in candidates if os.path.isfile(p)), None)
+    if not path:
+        return False, label, "run_compress.sh 可读", "两处候选路径均不存在"
+
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    # 注释里会提到 /var/log 作为历史说明，只检查有效代码行。
+    code = "\n".join(ln for ln in src.splitlines()
+                      if ln.strip() and not ln.lstrip().startswith("#"))
+    bad: list[str] = []
+    if "/var/log" in code:
+        bad.append("有效代码仍引用 /var/log（root-only，ubuntu 不可写）")
+
+    m = re.search(r'LOG_DIR="\$\{QHYC_LOG_DIR:-([^}]+)\}"', code)
+    if not m:
+        bad.append("未找到 QHYC_LOG_DIR 带默认值的定义")
+    else:
+        default = m.group(1)
+        if default != "/home/ubuntu/qhyc_work/logs":
+            bad.append(f"默认日志目录漂移: {default}")
+        try:
+            got = subprocess.run(
+                ["sh", "-c",
+                 f'LOG_DIR="${{QHYC_LOG_DIR:-{default}}}"; printf "%s" "$LOG_DIR"'],
+                capture_output=True, text=True, timeout=5).stdout.strip()
+            if got != default:
+                bad.append(f"shell 实际展开 {got} != {default}")
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"shell 展开失败 {type(exc).__name__}: {exc}")
+
+    if "ON_ERROR_STOP=1" not in code:
+        bad.append("psql 未启用 ON_ERROR_STOP，SQL 报错仍退 0 假绿")
+    if 'exit "$rc"' not in code and "exit $rc" not in code:
+        bad.append("失败分支未把非 0 退出码冒泡给 task_runner")
+    try:
+        syn = subprocess.run(["sh", "-n", path], capture_output=True, text=True, timeout=5)
+        if syn.returncode != 0:
+            bad.append(f"sh -n 失败: {syn.stderr.strip()[:120]}")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"sh -n 异常 {type(exc).__name__}: {exc}")
+    try:
+        row = c.rows(
+            "SELECT enabled::text FROM ops.scheduled_task "
+            "WHERE task_id='cron_compress_chunks'")
+        if not row or str(row[0][0]).lower() not in ("true", "t"):
+            bad.append("cron_compress_chunks 字典未登记或已禁用（定义了没人用）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"字典接线检查失败 {type(exc).__name__}: {exc}")
+
+    return not bad, label, f"6 项检查 / 违规 {len(bad)} / path={path}", "；".join(bad)
+
+
 def _c_daily_refresh_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """日频刷新链必须真的接通，且失败必须冒泡（CL-20261109-21）。
 
@@ -4948,6 +5018,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 判据换成 cron 感知后，必须用行为对拍锁住「改期不误报 + 连续漏跑仍告警 + 真实接线」。
     ("OPS-JOBHB-CRON-AWARE", "周/月频心跳按 cron 推算应触发且判据真实接线", "block",
      _c_jobhb_cron_aware),
+    # CL-20261110-14 C：/var/log 硬编码靠 sudo 维持，且 psql 无 ON_ERROR_STOP 会假绿。
+    ("OPS-COMPRESS-LOG-PATH", "压缩脚本日志落在项目可写目录且失败可冒泡", "block",
+     _c_compress_log_path),
     ("OPS-DAILY-REFRESH-WIRED", "日频刷新链接通且失败冒泡", "block",
      _c_daily_refresh_wired),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
