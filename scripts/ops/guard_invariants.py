@@ -1245,6 +1245,46 @@ def _c_factor_freshness_coverage(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, f"6 例对拍 + 集成对拍 / 违规 {len(bad)}", "；".join(bad)
 
 
+def _c_mpr_dce_contract_continuity(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-12：DCE 会员持仓必须**逐合约**检查规模连续性。
+
+    ``OPS-MPR-EXCHANGE-COVERAGE`` / ``OPS-MPR-DCE-COVERAGE`` 只数品种数，
+    2026-11-06 官网 87 个 DCE 合约里 11 个数值腰斩/行数不足（P2705
+    long 220849→11955、PP2701 447868→26249），品种覆盖照样 16/16 PASS。
+    判据：每个合约逐日 ``sum(long_pos)`` 相对**上一个有数据交易日**，
+    腰斩 <0.3× 或暴涨 >3× 即违规；11-06 的坏值还会在 11-09 制造
+    「暴涨 17×」的二次假象，修复后两者一并消失。
+
+    窗口 = 近 10 天 + 事故区间 11-05~11-09（永久锚点，防靠时间衰减转 PASS）。
+    只查小表 member_position_rank，不做 minute_bar 全表聚合。
+    """
+    label = "DCE 会员持仓逐合约规模连续（无腰斩/暴涨）"
+    try:
+        rows = c.rows("""
+            WITH daily AS (
+              SELECT trade_date, symbol, sum(long_pos) sl
+              FROM l0_raw.member_position_rank
+              WHERE exchange='DCE'
+                AND (trade_date >= CURRENT_DATE - INTERVAL '10 days'
+                     OR trade_date BETWEEN DATE '2026-11-05' AND DATE '2026-11-09')
+              GROUP BY 1,2
+            ), lagd AS (
+              SELECT trade_date, symbol, sl,
+                     lag(sl) OVER (PARTITION BY symbol ORDER BY trade_date) prev_sl
+              FROM daily
+            )
+            SELECT trade_date, symbol, sl, prev_sl,
+                   round(sl::numeric / nullif(prev_sl, 0), 3) ratio
+            FROM lagd
+            WHERE prev_sl > 10000 AND (sl < prev_sl * 0.3 OR sl > prev_sl * 3.0)
+            ORDER BY 1,2 LIMIT 40
+        """)
+    except Exception as exc:  # noqa: BLE001
+        return False, label, f"查询失败 {type(exc).__name__}", str(exc)[:200]
+    bad = [f"{r[0]} {r[1]} long={r[2]} prev={r[3]} ratio={r[4]}" for r in rows]
+    return not bad, label, f"逐合约腰斩/暴涨 {len(bad)} 处", "；".join(bad[:10])
+
+
 def _c_daily_refresh_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """日频刷新链必须真的接通，且失败必须冒泡（CL-20261109-21）。
 
@@ -5188,6 +5228,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_roll_yield_zero_loud),
     ("OPS-FACTOR-FRESHNESS-COVERAGE", "因子巡检按交易日出覆盖判据且补算链路真实接线",
      "block", _c_factor_freshness_coverage),
+    # CL-20261110-12：11-06 DCE 11 个合约数值腰斩，品种数型监控全 PASS。
+    ("OPS-MPR-DCE-CONTRACT-CONTINUITY", "DCE 会员持仓逐合约规模连续（无腰斩/暴涨）",
+     "block", _c_mpr_dce_contract_continuity),
     ("OPS-DAILY-REFRESH-WIRED", "日频刷新链接通且失败冒泡", "block",
      _c_daily_refresh_wired),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
