@@ -5314,27 +5314,42 @@ def _c_task_status_source(c: Ctx) -> tuple[bool, str, str, str]:
     """
     label = "非流水监控作业声明真实状态源且来源健康"
     bad, obs = [], []
-    # 这些作业**结构上**不写 ops.scheduled_task_run，允许 no_heartbeat；
-    # 任何别的作业被置 NULL 都视为「想掩盖停摆」。
-    allowed = {
-        "cloud_local_sync", "sp_build_l1_from_minute",
-        "tsdb_job_1", "tsdb_job_3", "tsdb_job_1000", "tsdb_job_1001",
-        "tsdb_job_1002", "tsdb_job_1004", "tsdb_job_1005", "tsdb_job_1007",
+    # 本轮（migration 073）显式声明状态来源的作业。锁死这个集合，防有人
+    # 随便给别的作业贴个 status_source 就把心跳关掉。
+    declared = {
+        "cloud_local_sync", "sp_build_l1_from_minute", "backtest_weekly",
+        "tsdb_job_1003", "tsdb_job_1", "tsdb_job_3", "tsdb_job_1000",
+        "tsdb_job_1001", "tsdb_job_1002", "tsdb_job_1004",
+        "tsdb_job_1005", "tsdb_job_1007",
     }
     try:
         rows = c.rows("""
             SELECT task_id, coalesce(meta->>'status_source', '')
-            FROM ops.scheduled_task
-            WHERE enabled AND expected_gap_days IS NULL
+            FROM ops.scheduled_task WHERE meta->>'status_source' IS NOT NULL
         """)
-        unexpected = sorted(t for t, _ in rows if t not in allowed)
-        no_src = sorted(t for t, s in rows if not s.strip())
-        if unexpected:
-            bad.append("未授权置 NULL: " + ",".join(unexpected[:6]))
-        if no_src:
-            bad.append("缺 status_source: " + ",".join(no_src[:6]))
-        if not unexpected and not no_src:
-            obs.append(f"no_heartbeat {len(rows)} 个均有来源声明")
+        unknown = sorted(t for t, _ in rows if t not in declared)
+        empty = sorted(t for t, s in rows if not s.strip())
+        if unknown:
+            bad.append("未授权的 status_source: " + ",".join(unknown[:6]))
+        if empty:
+            bad.append("status_source 为空: " + ",".join(empty[:6]))
+        if not unknown and not empty:
+            obs.append(f"声明来源 {len(rows)} 个全部合规")
+
+        # 真正防「置 NULL 掩盖停摆」：近 24h 有 >=20 次 success 流水的作业
+        # 明明由流水监控，就绝不能 expected_gap_days=NULL。低频/月频作业
+        # （既有 no_heartbeat 共 19 个）不受影响，不误伤历史设计。
+        masked = c.rows("""
+            SELECT t.task_id FROM ops.scheduled_task t
+            WHERE t.enabled AND t.expected_gap_days IS NULL
+              AND (SELECT count(*) FROM ops.scheduled_task_run r
+                    WHERE r.task_id = t.task_id AND r.status = 'success'
+                      AND r.started_at >= now() - interval '24 hours') >= 20
+        """)
+        if masked:
+            bad.append("高频流水作业被置 NULL: " + ",".join(r[0] for r in masked[:6]))
+        else:
+            obs.append("高频流水作业均保留心跳")
 
         # TSDB 后台作业：字典 enabled 项必须在 jobs 表存在且 scheduled，
         # 且 job_stats 最近一次运行成功、下次触发在未来。
