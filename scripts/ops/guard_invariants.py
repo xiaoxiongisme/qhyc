@@ -1135,6 +1135,116 @@ def _c_compress_log_path(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, f"6 项检查 / 违规 {len(bad)} / path={path}", "；".join(bad)
 
 
+def _load_script_module(name: str, relpath: str):
+    """从仓库路径加载脚本模块（守卫运行时 scripts/ 未必在 sys.path）。"""
+    import importlib.util  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    root = Path(__file__).resolve().parents[2]
+    for p in (str(root), str(root / "scripts")):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    spec = importlib.util.spec_from_file_location(name, root / relpath)
+    mod = importlib.util.module_from_spec(spec)
+    # 动态加载模块需注册进 sys.modules，否则 Python 3.13 的 dataclasses
+    # 解析 string annotation 时查不到 cls.__module__，@dataclass 会抛异常。
+    sys.modules.setdefault(name, mod)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _c_roll_yield_zero_loud(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-15 E1：roll_yield 整日 0 行不得再记 success。
+
+    11-09 上游 contract_daily 晚到，``save_rows([]) -> 0``，旧脚本只认
+    字符串「失败」→ fails=0 → 退出码 0 → ``_require_subprocess_success`` 放行
+    → ``scheduled_task_run`` 假绿。数据次日才靠续跑补回。这里做行为对拍
+    （真实 ``day_written_rows``）+ 判据接线 + 调度传参三查。
+    """
+    label = "roll_yield 整交易日零写入必须非零退出且调度已接线"
+    bad: list[str] = []
+    try:
+        import inspect  # noqa: PLC0415
+
+        m = _load_script_module("_g_roll_yield_check", "scripts/collect_roll_yield.py")
+        fn = m.day_written_rows
+        cases = [
+            ("全零", {"RB": 0, "CU": 0}, 0),
+            ("正常", {"RB": 47, "CU": 0}, 47),
+            ("db_fallback 字符串", {"RB": "47(db_fallback)"}, 47),
+            ("双失败字符串", {"RB": "失败: Timeout"}, 0),
+            ("空字典", {}, 0),
+        ]
+        for name, res, want in cases:
+            got = fn(res)
+            if got != want:
+                bad.append(f"{name}: got={got} want={want}")
+        src = inspect.getsource(m.main)
+        if not all(k in src for k in ("--require-rows", "written == 0", "fails += 1")):
+            bad.append("main() 未把 0 行接入失败计数")
+        from app import scheduler  # noqa: PLC0415
+
+        if "--require-rows" not in inspect.getsource(scheduler._collect_roll_yield_job):
+            bad.append("_collect_roll_yield_job 未传 --require-rows（定义了没人用）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"导入/对拍失败 {type(exc).__name__}: {str(exc)[:150]}")
+    return not bad, label, f"5 例对拍 / 违规 {len(bad)}", "；".join(bad)
+
+
+def _c_factor_freshness_coverage(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-15 E2/E3：因子巡检必须看逐交易日覆盖，且断供能触发长窗口补算。
+
+    只看 ``max(trade_date)`` 时，``f_atr_pctile`` 11-07 残留 11 行把 max 顶住，
+    lag=3 不满足 ``lag > 3``，420 天补算永不触发，11-09/10 逐日 0 行无人发现。
+    """
+    label = "因子新鲜度巡检按交易日出覆盖判据且补算链路真实接线"
+    bad: list[str] = []
+    try:
+        import inspect  # noqa: PLC0415
+        from datetime import date, timedelta  # noqa: PLC0415
+
+        m = _load_script_module("_g_factor_fresh_check", "scripts/factor_freshness_check.py")
+        d0 = date(2026, 11, 3)
+        days = [d0 + timedelta(days=i) for i in range(5)]
+
+        def cov(vals):
+            return [("f_atr_pctile", d, n) for d, n in zip(days, vals)]
+
+        cases = [
+            ("正常逐日完整", cov([80, 81, 80, 80, 79]), 1, 0),
+            ("某日 0 行必报", cov([80, 81, 80, 80, 0]), 1, 1),
+            ("多日 0 行必报", cov([80, 0, 80, 0, 0]), 1, 1),
+            ("全窗口 0 行交表级判据", cov([0, 0, 0, 0, 0]), 1, 0),
+            ("部分行可按阈值报", cov([80, 11, 80, 80, 80]), 20, 1),
+            ("部分行不低于阈值不报", cov([80, 11, 80, 80, 80]), 1, 0),
+        ]
+        for name, rows, mn, want in cases:
+            got = len(m.coverage_gaps(rows, mn))
+            if got != want:
+                bad.append(f"{name}: got={got} want={want}")
+        if m._group_of("f_atr_pctile") != "v1v6" or "f_atr_pctile" not in m.LONG_HISTORY_FACTORS:
+            bad.append("f_atr_pctile 未归入 v1v6 长窗口组，补算窗口不会放宽")
+
+        # 集成对拍：lag=3 恰好不报，但逐日 0 行必须把它送进需补算列表。
+        class _Cur:
+            def __init__(self): self.sql = ""
+            def execute(self, sql, params=None): self.sql = sql
+            def fetchall(self):
+                if "CROSS JOIN td" in self.sql:
+                    return cov([80, 81, 80, 80, 0])
+                return [("f_atr_pctile", date(2026, 11, 7), 137647)]
+        need = m.needs_attention(_Cur(), 3, date(2026, 11, 10))
+        if "f_atr_pctile" not in [x["factor_id"] for x in need]:
+            bad.append("needs_attention 漏掉逐日 0 行因子（巡检盲区未修）")
+        src = inspect.getsource(m.main)
+        if "needs_attention" not in src or "backfill(stale" not in src:
+            bad.append("main() 未接入逐日覆盖判据或补算（定义了没人用）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"导入/对拍失败 {type(exc).__name__}: {str(exc)[:150]}")
+    return not bad, label, f"6 例对拍 + 集成对拍 / 违规 {len(bad)}", "；".join(bad)
+
+
 def _c_daily_refresh_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """日频刷新链必须真的接通，且失败必须冒泡（CL-20261109-21）。
 
@@ -5073,6 +5183,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-14 C：/var/log 硬编码靠 sudo 维持，且 psql 无 ON_ERROR_STOP 会假绿。
     ("OPS-COMPRESS-LOG-PATH", "压缩脚本日志落在项目可写目录且失败可冒泡", "block",
      _c_compress_log_path),
+    # CL-20261110-15：11-09 roll_yield 0 行假绿 + f_atr_pctile 逐日 0 行巡检盲区。
+    ("OPS-ROLL-YIELD-ZERO-LOUD", "roll_yield 整交易日零写入必须非零退出且调度已接线",
+     "block", _c_roll_yield_zero_loud),
+    ("OPS-FACTOR-FRESHNESS-COVERAGE", "因子巡检按交易日出覆盖判据且补算链路真实接线",
+     "block", _c_factor_freshness_coverage),
     ("OPS-DAILY-REFRESH-WIRED", "日频刷新链接通且失败冒泡", "block",
      _c_daily_refresh_wired),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),

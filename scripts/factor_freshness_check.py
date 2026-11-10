@@ -18,11 +18,28 @@
   3. **补后复查仍断供 → 硬告警**（``app.ops.alerting.send_alert``），
      并把结果写 ``ops.scheduled_task`` 口径的日志，便于次日对比。
 
+★ 2026-11-10（CL-20261110-15 E2/E3）：补上**逐交易日覆盖**判据。
+事故：``factor_freshness_check.py --report-only`` 11-10 只报 3 个断供，
+但 ``f_atr_pctile`` 实际 11-09/11-10 **逐日 0 行**、11-07 只有 11 行（正常 80）。
+两个原因叠加：① ``fetch_freshness`` 只看整表 ``max(trade_date)``，
+11-07 残留的 11 行把 max 顶到 11-07，``lag=3`` 恰好不满足 ``lag > 3``；
+② 因此 420 天长窗口补算（``LONG_HISTORY_FACTORS``）**永不触发**，
+而 16:20 日常作业只给 60 天窗口，算不出 250 交易日 ATR 分位。
+新增 ``fetch_daily_coverage`` + ``coverage_gaps``：对最近 N 个已结束交易日，
+逐因子逐日数行；近期活跃（窗口内有数据）却在某日 0 行的因子照样进 ``stale``，
+从而触发对应组的长窗口补算。``lag > 3`` 的边界本身保留（改 ``>=`` 会在周末误报），
+由逐日判据兜住。
+
+⚠ ``factor_registry.enabled`` 是**信号权重开关**，不是计算开关：实测 29 个注册因子
+里 22 个 ``enabled=f`` 仍每天写入 ``factor_value``。故巡检不按 enabled 过滤，
+也不改它的值（CL-20261110-15 初判 E3 的归因已纠正）。
+
 用法::
 
     python scripts/factor_freshness_check.py                # 巡检 + 自动补算
     python scripts/factor_freshness_check.py --report-only   # 只报告不补算
     python scripts/factor_freshness_check.py --lag-days 5    # 自定义阈值
+    python scripts/factor_freshness_check.py --coverage-days 7 --min-daily-rows 1
 
 ⚠ 口径说明
   * 补算是**幂等 UPSERT**（各 compute_* 脚本都用 ON CONFLICT DO UPDATE）→ 重复补算安全。
@@ -68,6 +85,80 @@ LONG_HISTORY_FACTORS = {"f_atr_pctile": 420}
 
 #: 补算脚本 → 作业分组
 GROUPS = ("A", "B", "C")
+
+
+#: 逐日覆盖判据窗口（已结束的交易日数）与单日最小行数。
+#: 不含「今天」——盘中因子层本来就没跑完，把今天算进去会全量误报。
+COVERAGE_TRADE_DAYS = 5
+MIN_DAILY_ROWS = 1
+
+
+def fetch_daily_coverage(cur, days: int = COVERAGE_TRADE_DAYS) -> list[tuple[str, object, int]]:
+    """返回 [(factor_id, trade_date, rows)]，覆盖最近 ``days`` 个**已结束**交易日。
+
+    交易日真源与 ``extend_index_8888`` / ``trading_window`` 一致：``daily_bar``
+    的 distinct trade_date。只查窗口内的 ``factor_value``（分区裁剪），
+    不做全表 GROUP BY。
+    """
+    cur.execute(
+        "WITH td AS ("
+        "  SELECT DISTINCT trade_date FROM daily_bar "
+        "  WHERE trade_date < CURRENT_DATE ORDER BY trade_date DESC LIMIT %s"
+        ") SELECT f.factor_id, td.trade_date, "
+        "       coalesce((SELECT count(*) FROM factor_value v "
+        "                 WHERE v.factor_id=f.factor_id AND v.trade_date=td.trade_date), 0) AS n "
+        "FROM factor_registry f CROSS JOIN td "
+        "ORDER BY f.factor_id, td.trade_date", (int(days),))
+    return [(r[0], r[1], int(r[2] or 0)) for r in cur.fetchall()]
+
+
+def coverage_gaps(cov_rows, min_daily_rows: int = MIN_DAILY_ROWS) -> list[dict]:
+    """近期活跃但在某个交易日行数不足的因子（含逐日 0 行）。
+
+    「近期活跃」= 窗口内至少一天有 >= min_daily_rows 行；窗口内全空的因子
+    属于早已停更，交给 ``stale_factors`` 的 max 判据处理，避免重复告警。
+    """
+    from collections import defaultdict  # noqa: PLC0415
+
+    by_f: dict[str, dict] = defaultdict(dict)
+    all_days: set = set()
+    for fid, td, n in cov_rows:
+        by_f[fid][td] = int(n)
+        all_days.add(td)
+    days = sorted(all_days)
+    out: list[dict] = []
+    for fid, per_day in by_f.items():
+        if not any(n >= min_daily_rows for n in per_day.values()):
+            continue
+        missing = [d for d in days if per_day.get(d, 0) < min_daily_rows]
+        if missing:
+            out.append({
+                "factor_id": fid,
+                "max_td": max((d for d, n in per_day.items() if n >= min_daily_rows),
+                              default=None),
+                "lag_days": 0,
+                "rows": sum(per_day.values()),
+                "reason": "coverage_gap",
+                "missing_days": [str(d) for d in missing],
+            })
+    return out
+
+
+def needs_attention(cur, lag_days: int, today: date,
+                    coverage_days: int = COVERAGE_TRADE_DAYS,
+                    min_daily_rows: int = MIN_DAILY_ROWS) -> list[dict]:
+    """表级新鲜度 + 逐日覆盖，按 factor_id 去重合并（覆盖判据补齐后者的盲区）。"""
+    out: dict[str, dict] = {}
+    for s in stale_factors(fetch_freshness(cur), lag_days, today):
+        s.setdefault("reason", "max_trade_date_lag")
+        out[s["factor_id"]] = s
+    for g in coverage_gaps(fetch_daily_coverage(cur, coverage_days), min_daily_rows):
+        if g["factor_id"] in out:
+            out[g["factor_id"]]["reason"] = "max_lag+coverage_gap"
+            out[g["factor_id"]]["missing_days"] = g["missing_days"]
+        else:
+            out[g["factor_id"]] = g
+    return list(out.values())
 
 
 def _group_of(factor_id: str) -> str | None:
@@ -153,6 +244,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="因子级新鲜度巡检 + 自动补算")
     ap.add_argument("--lag-days", type=int,
                     default=int(os.getenv("FACTOR_FRESH_LAG_DAYS", "3")))
+    ap.add_argument("--coverage-days", type=int,
+                    default=int(os.getenv("FACTOR_FRESH_COVERAGE_DAYS",
+                                         str(COVERAGE_TRADE_DAYS))))
+    ap.add_argument("--min-daily-rows", type=int,
+                    default=int(os.getenv("FACTOR_FRESH_MIN_DAILY_ROWS",
+                                         str(MIN_DAILY_ROWS))))
     ap.add_argument("--report-only", action="store_true", help="只报告不补算")
     ap.add_argument("--no-alert", action="store_true", help="不推送告警")
     add_conn_args(ap)
@@ -163,12 +260,16 @@ def main() -> int:
     try:
         cur = conn.cursor()
         rows = fetch_freshness(cur)
-        stale = stale_factors(rows, a.lag_days, today)
-        print(f"[fresh] 注册因子 {len(rows)} 个；断供（滞后 > {a.lag_days} 天）{len(stale)} 个")
+        stale = needs_attention(cur, a.lag_days, today, a.coverage_days, a.min_daily_rows)
+        gaps = [s for s in stale if "coverage_gap" in s.get("reason", "")]
+        print(f"[fresh] 注册因子 {len(rows)} 个；需补算 {len(stale)} 个 "
+              f"(滞后 > {a.lag_days} 天 或 近 {a.coverage_days} 个交易日逐日缺行；逐日缺口 {len(gaps)} 个)")
         for s in stale:
-            print(f"[fresh]   断供 {s['factor_id']}  最新={s['max_td']} 滞后={s['lag_days']}天 行数={s['rows']}")
+            extra = (" 缺日=" + ",".join(s["missing_days"])) if s.get("missing_days") else ""
+            print(f"[fresh]   {s['factor_id']}  最新={s['max_td']} 滞后={s['lag_days']}天 "
+                  f"行数={s['rows']} 判据={s.get('reason')}{extra}")
         if not stale:
-            print("[fresh] ✅ 全部因子新鲜")
+            print("[fresh] ✅ 全部因子新鲜且逐日覆盖完整")
             return 0
 
         if a.report_only:
@@ -181,10 +282,10 @@ def main() -> int:
         conn2 = psycopg2.connect(**conn_from_args(a))
         try:
             cur2 = conn2.cursor()
-            rows2 = fetch_freshness(cur2)
+            still = needs_attention(cur2, a.lag_days, today,
+                                    a.coverage_days, a.min_daily_rows)
         finally:
             conn2.close()
-        still = stale_factors(rows2, a.lag_days, today)
         print(f"[fresh] 补算后仍断供 {len(still)} 个: {[s['factor_id'] for s in still]}")
 
         if still and not a.no_alert:

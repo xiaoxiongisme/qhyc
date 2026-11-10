@@ -1716,8 +1716,10 @@ def _collect_roll_yield_job() -> None:
     if start > today:
         logger.info(f"[scheduler] roll_yield 已最新（start={start} > today），跳过")
         return
+    # CL-20261110-15 E1：传入 --require-rows，让「整个交易日 0 行」退出码非 0。
+    # 旧行为把 save_rows([])->0 当成成功，11-09 上游晚到时流水假绿（数据次日才补回）。
     cmd = [_sys.executable, str(script), "--start", start, "--end", today,
-           "--sleep", os.getenv("ROLL_YIELD_SLEEP", "0.5")]
+           "--sleep", os.getenv("ROLL_YIELD_SLEEP", "0.5"), "--require-rows"]
     logger.info(f"[scheduler] collect_roll_yield start: {' '.join(cmd)}")
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
