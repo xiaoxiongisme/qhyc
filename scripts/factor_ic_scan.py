@@ -164,8 +164,11 @@ def build_factors(df: pd.DataFrame) -> pd.DataFrame:
     # 开盘前 2 根的成交额占比（用开盘 30 分钟衡量当日资金集中度）
     first2 = ds.groupby("day", sort=True)["amount"].apply(lambda x: x.head(2).sum())
     agg["amt2"] = agg["day"].map(first2)
+    # tpv 是「逐根量」列，dec 里那根只是决策行的单根值，改名避免与 agg 的日累计
+    # tpv 在 merge 时撞列变成 tpv_x/tpv_y（CL-20261110-17 预演实测 KeyError: 'tpv'）。
     dec = dec.rename(columns={"close": "close_d", "oi": "oi_d", "volume": "vol_d",
-                              "amount": "amt_d", "high": "high_d", "low": "low_d"})
+                              "amount": "amt_d", "high": "high_d", "low": "low_d",
+                              "tpv": "tpv_d"})
     out = agg.merge(dec[["day"] + [c for c in dec.columns if c != "day"]],
                     on="day", how="inner").dropna(subset=["close_d"])
     if out.empty:
