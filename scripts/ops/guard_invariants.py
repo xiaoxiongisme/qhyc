@@ -4945,6 +4945,58 @@ def _c_mpr_dce_coverage(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad[:6]) + " → 见 CL-20261110-05/11")
 
 
+def _c_factor_mpr_coverage(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-08：上游补数后，会员类因子必须按 trade_date 同步重算。
+
+    事故形状：DCE 补数把 ``member_position_rank_summary`` 11-09 从 41 → 55 品种，
+    但当日 18:00 的 B 组作业已经跑完；因子层停在 41 品种，而因子巡检只看
+    整表 ``max(trade_date)``（=11-10，判为新鲜）→ 永远不会自动重算。
+    判据衡量「此刻」而非历史流水：近 7 个已完成交易日里，5 个会员类因子
+    当日 distinct symbol 数均须 ≥ 该日 summary 品种数的 90%，且 5 个因子
+    不得整体缺席。排除 ``CURRENT_DATE``（当日 18:00 作业尚未执行）。
+    只检查 summary 有数据的交易日，避免把休市日误判成违约。
+    """
+    label = "会员类因子逐日品种覆盖与 summary 一致（补数后须重算）"
+    try:
+        rows = c.rows("""
+            WITH d AS (
+              SELECT DISTINCT trade_date FROM public.futures_rule
+              WHERE trade_date < CURRENT_DATE
+                AND trade_date >= CURRENT_DATE - interval '14 days'
+              ORDER BY trade_date DESC LIMIT 7
+            ), s AS (
+              SELECT report_date AS trade_date, count(DISTINCT symbol) AS n
+              FROM l1_mkt.member_position_rank_summary
+              WHERE report_date >= CURRENT_DATE - interval '14 days'
+              GROUP BY 1
+            ), f AS (
+              SELECT trade_date, count(DISTINCT factor_id) AS fac_n, min(n) AS min_n
+              FROM (
+                SELECT trade_date, factor_id, count(DISTINCT symbol) AS n
+                FROM l2_adj.factor_value
+                WHERE factor_id IN ('member_net_z','member_net_ts_z','member_ls_z',
+                                    'member_trend_z','vol_concentration_z')
+                  AND trade_date >= CURRENT_DATE - interval '14 days'
+                GROUP BY 1,2
+              ) x GROUP BY 1
+            )
+            SELECT d.trade_date, s.n, coalesce(f.fac_n, 0), coalesce(f.min_n, 0)
+            FROM d JOIN s ON s.trade_date = d.trade_date
+            LEFT JOIN f ON f.trade_date = d.trade_date
+            ORDER BY 1 DESC
+        """)
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"查询失败 {type(e).__name__}", str(e)[:200]
+    bad, obs = [], []
+    for d, n_summary, fac_n, min_n in rows:
+        n_summary, fac_n, min_n = int(n_summary), int(fac_n), int(min_n)
+        obs.append(f"{d}:{min_n}/{n_summary}({fac_n}因子)")
+        if fac_n < 5 or min_n < n_summary * 0.9:
+            bad.append(f"{d} summary {n_summary} 品种 / 因子仅 {fac_n} 个、最少 {min_n} 品种")
+    return (not bad), label, f"近 {len(rows)} 个交易日 " + " ".join(obs[:4]), (
+        "" if not bad else "；".join(bad[:5]) + " → 见 CL-20261110-08，按 trade_date 重算 B 组")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -5184,6 +5236,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_dce_sina_wired),
     ("OPS-MPR-DCE-COVERAGE", "DCE 会员持仓排名逐日品种覆盖未塌陷",
      "block", _c_mpr_dce_coverage),
+    # CL-20261110-08：明细补数 → summary 55 品种，但 18:00 B 组作业已跑完，
+    # 因子层停在 41 品种；因子巡检只看整表 max(trade_date)，永远等不到重算。
+    # 逐日比对 summary 与 5 个会员类因子的品种数，把「补数后忘记重算」变成可判定的当前状态。
+    ("OPS-FACTOR-MPR-COVERAGE", "会员类因子逐日品种覆盖与 summary 一致",
+     "block", _c_factor_mpr_coverage),
 ]
 
 
