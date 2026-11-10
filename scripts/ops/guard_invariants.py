@@ -234,6 +234,47 @@ def _c_l1_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
         f"口径生效后仍在派生：{','.join(late[:15])}" if late else "")
 
 
+def _c_index_in_scope(c: Ctx) -> tuple[bool, str, str, str]:
+    """L1 的 ``*8888`` 指数层新数据必须 ⊆ 口径（CL-20261110-03）。
+
+    为什么单列一条：``VAR-L1-IN-WHITELIST`` 的 SQL 写死 ``symbol ~ '...888$'``，
+    **只覆盖主连**，指数层 8888 完全在视野之外。11-10 数据体检实测
+    ``l1_mkt.bar_60m`` 基表近 3 天 103 个 symbol、兼容视图 80 个，
+    其中 15 个口径外 8888（AG/AL/AU/B/CS/CU/J/LC/LH/NI/PB/RU/SC/SN/ZN）
+    在口径生效（11-09 07:43）后一直派生到 11-10 10:00。
+
+    ⚠ 更正体检报告的一处误判：基表 103 / 视图 80 **不是**「断言查了被过滤的
+    视图所以假绿」—— ``public.bar_*`` 本来就是按口径过滤的兼容视图，基表保留
+    全量是 D1「只导出不删」的要求。真正的盲区是断言只看 ``888$``，
+    以及 ``synthesizer._synth_one(layer='index')`` 在 CL-20261107-13 被有意
+    设为「不过口径」。CL-20261110-03 已把指数层派生/purge/追平校验统一收窄。
+
+    判据与口径生效时刻比较，衡量「现在是否还在派生」，不靠历史窗口衰减。
+    """
+    eff = c.scalar(
+        "SELECT COALESCE(verified_at, updated_at) FROM ops.change_log "
+        "WHERE change_id = 'CL-20261107-01'")
+    if eff is None:
+        eff = c.scalar("SELECT now() - interval '3 days'")
+    n_scope = c.scalar(
+        "SELECT count(*) FROM l3_ref.v_tradable_scope WHERE symbol LIKE '%8888'")
+    if not n_scope:
+        return True, "L1 指数层新数据 ⊆ 口径", (
+            "口径视图无 8888 符号（fail-open），跳过本断言"), ""
+    rows = c.rows("""
+        SELECT symbol, max(bucket) AS mx
+        FROM l1_mkt.bar_60m
+        WHERE symbol LIKE '%8888' AND bucket >= :eff
+          AND symbol NOT IN (SELECT symbol FROM l3_ref.v_tradable_scope)
+        GROUP BY 1 ORDER BY 1
+    """, eff=eff)
+    bad = [f"{s}@{mx:%m-%d %H:%M}" for s, mx in rows]
+    return not bad, "L1 指数层新数据 ⊆ 口径", (
+        f"口径内 8888 {n_scope} 个，生效({eff:%m-%d %H:%M})后口径外仍在派生的 "
+        f"{len(bad)} 个"), (
+        f"口径外指数连仍在派生：{','.join(bad[:15])}" if bad else "")
+
+
 def _c_scope_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """口径**真的被引用**了吗？——直接针对本次事故的根因断言。
 
@@ -431,6 +472,89 @@ def _c_l0_index_coverage(c: Ctx) -> tuple[bool, str, str, str]:
     return ok, "口径内 8888 在最近完整交易日覆盖率 ≥ 90%", obs, (
         "" if ok else f"覆盖塌陷：{obs}；8888 是换月 ratio 门唯一输入，"
                       "断更会让换月检测静默停摆")
+
+
+def _c_bar_grid_valid(c: Ctx) -> tuple[bool, str, str, str]:
+    """L1/L2 近 14 天不得有非网格「在途半截桶」，BA 桶集必须是 L1 的子集。
+
+    CL-20261110-02：``synthesizer._session_insert_sql`` 的夜盘分支用
+    ``LEAST(网格上界, seg_last + 1min)`` 截断残段。残段若由**数据缺失**（而非
+    自然收盘）造成，桶标签会落在 21:01 / 22:31 / 22:59 / 00:38 这类位置：
+    实测 11-09 的 8888 指数层品种写出 32 根，另有 57 根 BA 幽灵桶在 L1 里
+    已不存在（L1 被 purge 重建后没同步清 BA）。V5X 读的是 BA，而
+    ``check_cross_tf_consistency.py`` 只查 L1 → 这层污染完全没人看见。
+
+    合法会话网格标签的分钟数一律是 5 的倍数，故 ``%5<>0`` 能精准抓残段、
+    不误杀 10:00/11:15/02:30 等合法桶。BA ⊆ L1 单独判，防「L1 修好了但
+    BA 还留着幽灵」。窗口 14 天覆盖 V5X 回看，且靠 Timescale chunk 剪枝。
+    """
+    bad = {tf: int(n) for tf, n in c.rows("""
+        SELECT tf, count(*) FROM (
+          SELECT 'l1_5m'  tf FROM l1_mkt.bar_5m    WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+          UNION ALL SELECT 'l1_15m' FROM l1_mkt.bar_15m   WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+          UNION ALL SELECT 'l1_30m' FROM l1_mkt.bar_30m   WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+          UNION ALL SELECT 'l1_60m' FROM l1_mkt.bar_60m   WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+          UNION ALL SELECT 'ba_5m'  FROM l2_adj.bar_5m_ba  WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+          UNION ALL SELECT 'ba_15m' FROM l2_adj.bar_15m_ba WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+          UNION ALL SELECT 'ba_30m' FROM l2_adj.bar_30m_ba WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+          UNION ALL SELECT 'ba_60m' FROM l2_adj.bar_60m_ba WHERE bucket >= now() - interval '14 days' AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5) <> 0
+        ) x GROUP BY 1
+    """) if n}
+    orphan = int(c.scalar("""
+        SELECT count(*) FROM l2_adj.bar_60m_ba a
+        WHERE a.bucket >= now() - interval '14 days'
+          AND NOT EXISTS (SELECT 1 FROM l1_mkt.bar_60m l
+                          WHERE l.symbol = a.symbol AND l.bucket = a.bucket)
+    """) or 0)
+    ok = not bad and orphan == 0
+    detail = ", ".join(f"{k}:{v}" for k, v in sorted(bad.items()))
+    obs = (f"非网格桶 {sum(bad.values())} 根"
+           + (f"（{detail}）" if detail else "")
+           + f"；BA_60m 孤儿 {orphan} 根")
+    return ok, "L1/L2 近 14 天桶标签合法且 BA_60m ⊆ L1_60m", obs, (
+        "" if ok else f"网格污染：{obs}；V5X 直接读 BA，幽灵桶会占状态机的桶位")
+
+
+def _c_ba_nonpositive_guarded(c: Ctx) -> tuple[bool, str, str, str]:
+    """非正价只能是加法后复权的产物，且必须可被 V5X 反解回真实价。
+
+    CL-20261110-04 核实结论：**不修数据**。``sp_build_l2_back_adjusted`` 用
+    ``ba = raw + adj_offset``（等差后复权），2013 年以来多次换月的累计偏移
+    可达 -9465 点，于是 BA 出现负价（近月 600 根，白名单 JD888 连续 23 个
+    交易日每日 4 根、最低 -820）；``synth_8888`` 同样产出负的 8888 指数连
+    （L1 近 30 天 496 根，全部是 ``*8888``）。把它们「改成正数」会破坏
+    后复权连续性与全部回测基准，是错的修复。
+
+    真正要防的是「在 BA 空间做比例运算」：CL-20261108-25 已让
+    ``v5x/context._daily_frame`` 先用 ``raw_c`` 反解真实价再算
+    ``amp=(hh-ll)/c`` 与 ``lret=log(c/c.shift(1))``。本断言锁住三件事：
+      · 白名单**主连 888** 的 L1 原始价不得有非正价（负价只允许在复权/指数层）；
+      · 白名单 BA 非正价行的 ``adj_offset`` 必须非空（否则反解不出真实价）；
+      · ``_daily_frame`` 仍在用 ``raw_c``（防未来有人改回 BA 空间）。
+    """
+    root = Path(__file__).resolve().parents[2]
+    ctx_src = (root / "app" / "strategies" / "v5x" / "context.py").read_text(
+        encoding="utf-8", errors="ignore")
+    guard = ('"close": bars["raw_c"]' in ctx_src
+             and "np.log(" in ctx_src)
+    raw_bad = int(c.scalar("""
+        SELECT count(*) FROM l1_mkt.bar_60m
+        WHERE bucket >= now() - interval '30 days'
+          AND symbol ~ '^[A-Za-z]+888$'
+          AND (high < low OR open <= 0 OR close <= 0 OR low <= 0)
+    """) or 0)
+    no_off = int(c.scalar("""
+        SELECT count(*) FROM l2_adj.bar_60m_ba b
+        WHERE b.bucket >= now() - interval '30 days'
+          AND (b.high < b.low OR b.open <= 0 OR b.close <= 0 OR b.low <= 0)
+          AND b.symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope)
+          AND b.adj_offset IS NULL
+    """) or 0)
+    ok = guard and raw_bad == 0 and no_off == 0
+    obs = (f"V5X 真实价反解={'在' if guard else '丢失'}；"
+           f"主连 L1 非正价 {raw_bad} 根；白名单 BA 负价缺 adj_offset {no_off} 根")
+    return ok, "非正价仅在复权层且 V5X 已反解真实价", obs, (
+        "" if ok else f"比例运算风险：{obs}；log/除法类因子会因负价符号翻转或除零")
 
 
 def _c_equity_fresh(c: Ctx) -> tuple[bool, str, str, str]:
@@ -905,6 +1029,16 @@ def _c_daily_refresh_wired(c: Ctx) -> tuple[bool, str, str, str]:
     exp = c.scalar("""
         SELECT max(trade_date) FROM futures_rule WHERE trade_date <= CURRENT_DATE
     """)
+    # 日频刷新作业在 17:00（inventory）/ 18:10（daily_futures_refresh）跑。
+    # 白天把「今天」当期望日会每天上午误报：两表本来就该等收盘后才有数。
+    # 19:00 之前期望前一交易日；19:00 之后作业该跑完，仍缺就是真断更。
+    # （CL-20261110-01 验收时实测 09:54 全天守卫被这条判据误判为 FAIL。）
+    now_sh = c.scalar("SELECT now() AT TIME ZONE 'Asia/Shanghai'")
+    if exp is not None and now_sh.hour < 19:
+        prev = c.scalar(
+            "SELECT max(trade_date) FROM futures_rule WHERE trade_date < :d", d=exp)
+        if prev is not None:
+            exp = prev
     for tbl, col in (("main_contract_map", "trade_date"), ("inventory", "report_date")):
         got = c.scalar(f"SELECT max({col}) FROM {tbl}")
         if exp is None or got is None or got < exp:
@@ -4468,6 +4602,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-CONFIG-IN-WHITELIST", "cloud.yaml 主连（采集口径，允许超集）", "info", _c_config_in_whitelist),
     ("VAR-WHITELIST-IN-CONFIG", "白名单 ⊆ cloud.yaml 主连", "block", _c_whitelist_in_config),
     ("VAR-L1-IN-WHITELIST", "L1 主连新数据 ⊆ 白名单 ∪ 持仓豁免", "warn", _c_l1_in_whitelist),
+    # CL-20261110-03：上面那条只匹配 '888$'，15 个口径外 8888 指数连
+    # 在口径生效后持续派生却完全看不见。指数层收窄后单列 block 断言锁住。
+    ("VAR-INDEX-IN-SCOPE", "L1 指数层新数据 ⊆ 口径", "block", _c_index_in_scope),
     # 直接针对 2026-11-07 事故根因：白名单落库 38 行，但 L1/L2/视图**零引用**。
     # 「建了表却没人读」= 口径永远不生效，且不报错，所以必须 block。
     ("VAR-SCOPE-WIRED", "口径被 L1/L2/视图真实引用", "block", _c_scope_wired),
@@ -4476,6 +4613,13 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-01：上面那条只看 max(ts)，45 个 8888 品种全天 1 根也会被 8 个
     # 跑到 23:00 的品种「代表」成 PASS。补上覆盖广度维度，专治「只看有数据的 symbol」。
     ("DATA-L0-INDEX-COVERAGE", "index 层覆盖广度未塌陷", "block", _c_l0_index_coverage),
+    # CL-20261110-02：跨周期对拍只查 L1，而 V5X 读 BA；非网格在途桶与
+    # BA 孤儿桶两层都没人看。必须同时断言标签合法性与 BA ⊆ L1。
+    ("BAR-GRID-VALID", "L1/L2 桶标签合法且 BA ⊆ L1", "block", _c_bar_grid_valid),
+    # CL-20261110-04：负价是加法后复权的数学必然，不该「修数据」；
+    # 要锁的是 V5X 真实价反解别被改回去，以及负价不渗进主连原始层。
+    ("BA-NONPOSITIVE-GUARDED", "非正价仅在复权层且 V5X 已反解", "block",
+     _c_ba_nonpositive_guarded),
     ("DATA-CALENDAR-FRESH", "官方交易日历覆盖到最新数据日", "block", _c_calendar_fresh),
     # CL-20261109-04：休市期 akshare 会给「时间戳=当前时刻」的合成 bar，
     # 采集作业无时段门 → 周一凌晨写入 11 根幽灵 bar，一路进 V5X 信号源且不报错。

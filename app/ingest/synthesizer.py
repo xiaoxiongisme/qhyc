@@ -136,10 +136,12 @@ _SESSION_DAY_BOUNDS = {
 #: 使 ``_session_insert_sql`` 里各 CTE 的列引用一字不改。
 _INDEX_FROM = ("(SELECT * FROM l0_raw.minute_bar WHERE layer = 'index') AS minute_bar")
 
-#: 指数层符号谓词（CL-20261107-13）。品种口径 80 个符号里只有 **38** 个是 ``*8888``，
-#: 而指数层实际有 82 个符号 —— 另外 **44 个在口径外**（FB/WR/TL/CS/CY/LU/NR/OP/PL/PG/PR/SN/SP…）。
-#: 若 purge 与合成都按口径走，这 44 条指数连既不会被删也不会被重建：口径外品种一旦
-#: 进入指数层，它的旧桶就永久冻结在那里，再没人校正。
+#: 指数层符号谓词（CL-20261107-13 定义，CL-20261110-03 改语义）。
+#: 品种口径 80 个符号里只有 **38** 个是 ``*8888``，L0 指数层实际有 82 个符号。
+#: 11-07 曾因此让指数层**不过口径**（怕口径外旧桶冻结）；11-10 审计发现这使
+#: L1 基表 103 symbol / 视图 80，15 个口径外 8888 在口径生效后仍持续派生，
+#: 且断言只看 ``888$`` 主连完全看不见。现统一按 scope 收窄，**L0 全量保留**，
+#: 口径外历史 L1 桶也保留（只停新增、不删历史），故不存在「永久冻结」问题。
 _INDEX_SYM_PRED = "symbol LIKE '%8888'"
 
 
@@ -225,6 +227,16 @@ def _session_insert_sql(step: int, where: str, tail: str, t: str = "",
         "       (array_agg(open_interest ORDER BY ts_n DESC))[1]\n"
         "FROM bucketed\n"
         "GROUP BY symbol, bucket_end\n"
+        # CL-20261110-02：夜盘分支用 ``LEAST(网格上界, seg_last + 1min)`` 把残段
+        # 截断到「本段最后一根 +1 分钟」。若残段是**数据缺失**造成的（而非自然
+        # 收盘），标签就会落在 21:01 / 22:31 / 22:59 / 00:38 这种非网格位置：
+        # 实测 11-09 有 8888 指数层品种因此写出 32 根半截桶，它们一路进
+        # l2_adj.bar_*_ba，而 V5X 读的正是 BA。合法会话网格标签（日盘
+        # 10:00/11:15/14:15/15:00，夜盘 22:00/23:00/00:00/01:00/02:30，
+        # 以及 5m/15m/30m 的细分边界）分钟数一律是 5 的倍数，所以这个门
+        # 只挡残段，不会误杀任何正常桶；自然收盘残段若恰好落在 5 的倍数
+        # （如 23:00）仍照常保留。
+        "HAVING extract(minute FROM (bucket_end AT TIME ZONE 'Asia/Shanghai'))::int % 5 = 0\n"
         f"{tail}"
     ).format(t=t)
 
@@ -500,7 +512,8 @@ def _max_minute_ts(session: Session,
         {"syms": symbols}).scalar()
 
 
-def _index_layer_stale(session: Session, since: datetime) -> dict[str, list[str]]:
+def _index_layer_stale(session: Session, since: datetime,
+                       scope: Scope | None = None) -> dict[str, list[str]]:
     """指数层 ``bar_*`` 落后于 L0 指数分钟的符号（按**日期**比较，口径无关）。
 
     CL-20261107-13：原有的「追平」校验是**层次盲**的 —— 它取 ``_max_minute_ts(scope_syms)``
@@ -517,22 +530,29 @@ def _index_layer_stale(session: Session, since: datetime) -> dict[str, list[str]
     并留 1 天容忍，避免「当天只剩一根不完整分钟、被 maxgap 门丢掉」这种正常情形
     变成每轮都刷的假告警（实测停更场景是 4 天，1 天余量不影响检出）。
     """
+    # CL-20261110-03：指数层派生已按口径收窄，这里也必须同步收窄。
+    # 否则口径外 8888 的 L0 分钟照常更新（L0 保留全量），L1 桶却停在收窄
+    # 时刻 → 每轮都刷「指数层落后」的 ERROR，把真告警淹掉。
+    if scope is None:
+        scope = load_scope(session)
+    wc = where_clause(scope)
+    params: dict = {"since": since, **scope_params(scope)}
     stale: dict[str, list[str]] = {}
     for t, _ in _BARS:
         rows = session.execute(text(f"""
             WITH l0 AS (
                 SELECT symbol, max(ts)::date AS d0
                 FROM l0_raw.minute_bar
-                WHERE layer = 'index' AND ts >= :since AND {_INDEX_SYM_PRED}
+                WHERE layer = 'index' AND ts >= :since AND {_INDEX_SYM_PRED} {wc}
                 GROUP BY 1
             ), l1 AS (
                 SELECT symbol, max(bucket)::date AS d1
-                FROM l1_mkt.{t} WHERE {_INDEX_SYM_PRED} GROUP BY 1
+                FROM l1_mkt.{t} WHERE {_INDEX_SYM_PRED} {wc} GROUP BY 1
             )
             SELECT l0.symbol FROM l0 LEFT JOIN l1 USING (symbol)
             WHERE l1.d1 IS NULL OR l1.d1 < l0.d0 - 1
             ORDER BY 1
-        """), {"since": since}).scalars().all()
+        """), params).scalars().all()
         if rows:
             stale[t] = list(rows)
     return stale
@@ -551,25 +571,33 @@ def _synth_one(session: Session, t: str, iv: str, since: datetime | None,
     指数连，改从基表读 ``layer='index'``。两条链路符号不相交（``RB888`` / ``RB8888``），
     同一张 ``bar_*`` 表里互不覆盖。
 
-    ``layer='index'`` **不过品种口径**（CL-20261107-13）：品种口径是「可交易品种池」，
-    80 个符号里只有 38 个是 ``*8888``，而指数层实际有 82 个符号 —— 另外 44 个在口径外
-    （FB/WR/TL/CS/CY/LU/NR/OP/PL/PG/PR/SN/SP…）。指数层是 L2 换月检测 ratio 门的
-    **唯一**输入，属于派生基础设施而不是池成员：若也套口径，这 44 条指数连永远不刷新，
-    且 ``purge`` 同样删不到它们 → 旧桶永久冻结、无人校正。
-    指数层的符号范围应当由 L0 里「有哪些品种的合约分钟」决定，不需要再按池收口。
+    ``layer='index'`` **按品种口径收窄**（CL-20261110-03，覆盖 11-07 的旧决策）。
+    11-07 认为指数层是「换月 ratio 门的派生基础设施、不是池成员」，于是故意不过
+    口径；结果 L1 基表近 3 天有 103 个 symbol，而兼容视图只露出 80 个，其中
+    **15 个口径外 8888**（AG/AL/AU/B/CS/CU/J/LC/LH/NI/PB/RU/SC/SN/ZN）在口径
+    生效后仍持续派生到 11-10 10:00。它们不服务任何可交易品种，却占掉指数层
+    约 60% 的合成量，且 ``VAR-L1-IN-WHITELIST`` 只查 ``888$`` 主连、完全看不见。
+
+    现在两层统一按 ``v_tradable_scope`` 收口（38 个白名单 8888）：
+      · ``purge_recent_buckets`` 的指数层 DELETE 同步收窄 —— 否则口径外旧桶
+        每轮被删一批却不再重建，就从「停派生」变成「分批删除」，违反 D1；
+      · ``_index_layer_stale`` 同步收窄 —— 否则 L0 全量分钟继续更新，
+        L1 停在收窄时刻，每轮刷假 ERROR。
+    L0 指数分钟仍保留全量（只导出不删），口径外历史 L1 桶也保留，只停新增。
+    ``synthesize_bars_full`` 是全量迁移工具，仍有意不过滤（TRUNCATE 后必须全建）。
     """
     step = _SESSION_BARS.get(t)
     # 「WHERE TRUE」打底：这样 since / 口径两个条件都能无条件以 AND 追加，
     # 不必为四种组合各写一套拼接（写死条件顺序是这类 SQL 拼装 bug 的高发点）。
+    # 两层的过滤条件完全一致，避免「主连收窄了、指数层没有」的口径分裂。
     where = "WHERE TRUE"
     if since is not None:
         where += " AND ts >= :since"
-    if layer != "index":
-        where += where_clause(scope, "symbol")
+    where += where_clause(scope, "symbol")
     params: dict = {}
     if since is not None:
         params["since"] = since
-    if scope is not None and layer != "index":
+    if scope is not None:
         params.update(scope_params(scope))
 
     if step is None:
@@ -645,14 +673,14 @@ def purge_recent_buckets(session: Session, days_back: int = 4,
         c = cutoff_session if t in _SESSION_BARS else cutoff
         r = session.execute(
             text(f"DELETE FROM {t} WHERE bucket >= :c{wc}"), {"c": c, **extra})
-        # ★ 2026-11-07（CL-20261107-13）：指数层单独删。
-        #   品种口径 80 个符号里只有 38 个是 *8888，指数层实际 82 个符号 ——
-        #   另外 44 个在口径外，只按口径删就永远删不到它们，旧桶会永久冻结。
-        #   删除范围 ⊆ 重建范围：`_synth_one(layer='index')` 不过口径，会在同一窗口
-        #   按 L0 全量重建这些符号，所以不会「删了不补」。
+        # ★ 2026-11-10（CL-20261110-03）：指数层也按同一 scope 删。
+        #   11-07 的版本故意不过口径（怕口径外旧桶「永久冻结」），但那样会让
+        #   口径外 8888 每轮继续派生、口径分裂。现在两层都收窄，且
+        #   **删除范围必须 ⊆ 重建范围**：若仍按全部 8888 删，口径外旧桶会被
+        #   一批批删掉却不再重建 → 从「停派生」悄悄变成「分批删除」，违反 D1。
         r2 = session.execute(
-            text(f"DELETE FROM {t} WHERE bucket >= :c AND {_INDEX_SYM_PRED}"),
-            {"c": c})
+            text(f"DELETE FROM {t} WHERE bucket >= :c AND {_INDEX_SYM_PRED} {wc}"),
+            {"c": c, **extra})
         out[t] = r.rowcount + r2.rowcount
     log_scope(scope, f"purge {days_back}d")
     logger.info(
@@ -758,7 +786,7 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
     logger.info(f"[synth] incremental done: 主连 {stats}；指数层 {idx_stats}")
 
     # 指数层新鲜度必须单独盯（CL-20261107-13）：上面的追平校验只覆盖口径符号。
-    stale = _index_layer_stale(session, since_session)
+    stale = _index_layer_stale(session, since_session, scope)
     if stale:
         logger.error(
             f"[synth] 指数层 bar_* 落后于 L0 指数分钟（8888 是换月 ratio 门唯一输入，"
