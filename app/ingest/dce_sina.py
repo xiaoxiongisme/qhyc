@@ -263,20 +263,24 @@ def verify_date_sensitive(contract: str, d1: _dt.date, d2: _dt.date):
 
 
 def cross_day_selfcheck(rows: list[dict], contract: str, prev_date) -> tuple[int, int]:
-    """门 2：按**会员名**校验 ``今日持仓 - 增减 == 上一交易日持仓``。
+    """门 2：用**新浪自身**上一交易日数据，按会员名校验增减自洽。
 
-    不按名次校验（榜单名次每天会变，第 i 名未必是同一会员）。实测在
-    正常数据上命中率 100%（M2701 19/19、V2701 20/20、PP2701 18/18、
-    PG2701 17/17），因此低命中率可强力识别「错日 / 错合约 / 回落主力」。
+    ``今日持仓 - 比上交易增减 == 上一交易日持仓``。不按名次校验（榜单名次
+    每天会变，第 i 名未必是同一会员）。实测正常数据命中率 100%
+    （M2701 19/19、V2701 20/20、PP2701 18/18、PG2701 17/17），低命中率可
+    强力识别「错日 / 错合约 / 回落主力」。
+
+    ⚠ 基准**不能取官网库表**：2026-11-10 首轮预演拿官网 11-06 作 prev，
+    而官网 11-06 的 P2705/PP2701/PG2701 等 7 个远月合约本身就是残缺值
+    （20 名合计仅为前一日 5%），把新浪 11-09 的正确数据全判成 0/9~0/13
+    而拒写（见 CL-20261110-12）。改用同源 prev 日后完全自证。
     """
     if prev_date is None:
         return 0, 0
-    with get_engine().connect() as conn:
-        rs = conn.execute(text(
-            f"SELECT member, long_pos FROM {TABLE} "
-            "WHERE trade_date = :d AND exchange = :e AND symbol = :s"
-        ), {"d": prev_date, "e": EXCHANGE, "s": contract}).all()
-    prev = {r[0]: r[1] for r in rs if r[1] is not None}
+    prev_rows, _err = fetch_contract_rows(contract, prev_date)
+    if prev_rows is None:
+        return 0, 0  # prev 日不可取 → 样本不足，跳过该门（不拒写）
+    prev = {r["member"]: r["long_pos"] for r in prev_rows}
     hit = tot = 0
     for r in rows:
         p = prev.get(r["member"])
