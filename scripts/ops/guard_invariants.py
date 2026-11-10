@@ -5147,6 +5147,84 @@ def _c_factor_mpr_coverage(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad[:5]) + " → 见 CL-20261110-08，按 trade_date 重算 B 组")
 
 
+def _c_factor_retired_consist(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-16：因子退役必须「代码真接线 + 库里有标记 + 历史不删」。
+
+    防的是反复出现的「改一半」：退役只写进注释/台账，巡检照样每天告警、
+    补算照样每天白跑；或者干脆删掉历史行，让断供看起来消失。
+    用 AST 判真实赋值与真实引用（字符串 count 会被注释骗过，见 OPS-DCE-SINA-WIRED）。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "退役因子 f_amt_conc 在巡检中真接线且历史数据保留"
+    p = Path(__file__).resolve().parents[2] / "scripts" / "factor_freshness_check.py"
+    bad, obs = [], []
+    try:
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+
+    # 1) RETIRED_FACTORS 必须是真实赋值（不是注释），且真包含 f_amt_conc
+    retired_vals: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(t, ast.Name) and t.id == "RETIRED_FACTORS" for t in targets):
+            continue
+        val = node.value
+        if isinstance(val, ast.Call) and isinstance(val.func, ast.Name) \
+                and val.func.id in ("frozenset", "set", "tuple", "list"):
+            containers = [a for a in val.args if isinstance(a, (ast.Set, ast.List, ast.Tuple))]
+        else:
+            containers = [val] if isinstance(val, (ast.Set, ast.List, ast.Tuple)) else []
+        for cont in containers:
+            for el in cont.elts:
+                if isinstance(el, ast.Constant) and isinstance(el.value, str):
+                    retired_vals.add(el.value)
+    if "f_amt_conc" not in retired_vals:
+        bad.append("RETIRED_FACTORS 未真实包含 f_amt_conc")
+    else:
+        obs.append("常量含 f_amt_conc")
+
+    # 2) needs_attention 两个判据入口必须各有一次真实过滤
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+               and n.name == "needs_attention"), None)
+    n_ref = 0
+    if fn is not None:
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Compare) and any(
+                    isinstance(x, ast.Name) and x.id == "RETIRED_FACTORS"
+                    for x in [n.left] + list(n.comparators)):
+                n_ref += 1
+    if n_ref < 2:
+        bad.append(f"needs_attention 的 RETIRED_FACTORS 过滤仅 {n_ref} 处（应 2 处）")
+    else:
+        obs.append(f"过滤 {n_ref} 处")
+
+    # 3) registry 有退役标记；4) 历史行不得被删
+    try:
+        rows = c.rows("""
+            SELECT (SELECT count(*) FROM factor_registry
+                     WHERE factor_id='f_amt_conc' AND description LIKE '%CL-20261110-16%'),
+                   (SELECT count(*) FROM l2_adj.factor_value WHERE factor_id='f_amt_conc')
+        """)
+        n_mark, n_hist = int(rows[0][0]), int(rows[0][1])
+        if n_mark < 1:
+            bad.append("factor_registry 缺退役标记")
+        else:
+            obs.append("registry 已标记")
+        if n_hist < 120000:
+            bad.append(f"历史行仅 {n_hist}（疑似误删）")
+        else:
+            obs.append(f"历史 {n_hist:,} 行保留")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-16")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -5399,6 +5477,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 逐日比对 summary 与 5 个会员类因子的品种数，把「补数后忘记重算」变成可判定的当前状态。
     ("OPS-FACTOR-MPR-COVERAGE", "会员类因子逐日品种覆盖与 summary 一致",
      "block", _c_factor_mpr_coverage),
+    # CL-20261110-16：f_amt_conc 因 X888 主力连续 amount 全 NULL 而结构性不可算，
+    # 正式退役。锁「代码真接线 + registry 标记 + 历史不删」，防只改注释或删数据蒙混。
+    ("OPS-FACTOR-RETIRED-CONSIST", "退役因子在巡检中真接线且历史数据保留",
+     "block", _c_factor_retired_consist),
 ]
 
 

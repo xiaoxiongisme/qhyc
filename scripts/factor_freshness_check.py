@@ -34,6 +34,12 @@
 里 22 个 ``enabled=f`` 仍每天写入 ``factor_value``。故巡检不按 enabled 过滤，
 也不改它的值（CL-20261110-15 初判 E3 的归因已纠正）。
 
+★ 2026-11-10（CL-20261110-16）：加上**显式退役口径** ``RETIRED_FACTORS``。
+事故：``f_amt_conc`` 断供 255 天，巡检每天报一次、补算每天白跑一次 A 组，
+但根因是 ``bar_15m`` 的 X888 主力连续行根本没有成交额，``amt2/amt`` 恒除零，
+**原口径下永远算不出来**（详见常量处实测证据）。该因子权重 0、从未进信号，
+正式退役比伪造替代值更诚实：巡检跳过、历史 122,753 行保留不删。
+
 用法::
 
     python scripts/factor_freshness_check.py                # 巡检 + 自动补算
@@ -82,6 +88,22 @@ C_FACTORS = ("f_basis_mean60_z", "f_basis_chg5_z")
 
 #: 需要长历史（>60 天）才能算出的因子 → 补算时放宽窗口
 LONG_HISTORY_FACTORS = {"f_atr_pctile": 420}
+
+#: 已退役因子（CL-20261110-16，2026-11-10）：结构性不可算，巡检不再告警、
+#: 也不再触发补算。⚠ 不能拿 factor_registry.enabled 代替 —— enabled 是信号
+#: 权重开关，实测 29 个注册因子里 22 个 enabled=f 仍每天写入 factor_value。
+#:
+#: f_amt_conc 退役依据（主表实测，非推断）：
+#:   build_factors: out["f_amt_conc"] = amt2 / amt.replace(0, np.nan) * 100
+#:   pick_symbols: 优先选 X888 主力连续、剔除 X8888 商品指数
+#:   public.bar_15m 2026-09~10 日盘：X8888 22,015 根 amount 全为正值；
+#:                                   X888  24,932 根 has_amt=0（全 NULL）
+#:   → amt=0 → replace(0, nan) → 整列 NaN → compute_a 的 dropna 后 0 行。
+#:   A 组 dry-run 在 2026-09-01~11-01 / 2026-10-01~11-11 两窗口均只产出
+#:   10 个因子，f_amt_conc 恒 0 行；停更自 2026-02-28，断供 255 天。
+#:   该因子 enabled=f / default_weight=0，从未进入信号；122,753 行历史保留不删，
+#:   原口径不可补回（除非先给 X888 补成交额并声明口径变更，见 CL-20261110-17）。
+RETIRED_FACTORS = frozenset({"f_amt_conc"})
 
 #: 补算脚本 → 作业分组
 GROUPS = ("A", "B", "C")
@@ -147,12 +169,20 @@ def coverage_gaps(cov_rows, min_daily_rows: int = MIN_DAILY_ROWS) -> list[dict]:
 def needs_attention(cur, lag_days: int, today: date,
                     coverage_days: int = COVERAGE_TRADE_DAYS,
                     min_daily_rows: int = MIN_DAILY_ROWS) -> list[dict]:
-    """表级新鲜度 + 逐日覆盖，按 factor_id 去重合并（覆盖判据补齐后者的盲区）。"""
+    """表级新鲜度 + 逐日覆盖，按 factor_id 去重合并（覆盖判据补齐后者的盲区）。
+
+    已退役因子（结构性不可算，见 ``RETIRED_FACTORS``）在**两个判据入口**都跳过：
+    既不算断供、也不触发补算。只在一处过滤会漏掉另一条路径。
+    """
     out: dict[str, dict] = {}
     for s in stale_factors(fetch_freshness(cur), lag_days, today):
+        if s["factor_id"] in RETIRED_FACTORS:
+            continue
         s.setdefault("reason", "max_trade_date_lag")
         out[s["factor_id"]] = s
     for g in coverage_gaps(fetch_daily_coverage(cur, coverage_days), min_daily_rows):
+        if g["factor_id"] in RETIRED_FACTORS:
+            continue
         if g["factor_id"] in out:
             out[g["factor_id"]]["reason"] = "max_lag+coverage_gap"
             out[g["factor_id"]]["missing_days"] = g["missing_days"]
@@ -262,7 +292,9 @@ def main() -> int:
         rows = fetch_freshness(cur)
         stale = needs_attention(cur, a.lag_days, today, a.coverage_days, a.min_daily_rows)
         gaps = [s for s in stale if "coverage_gap" in s.get("reason", "")]
-        print(f"[fresh] 注册因子 {len(rows)} 个；需补算 {len(stale)} 个 "
+        retired_hit = sorted(RETIRED_FACTORS & {r[0] for r in rows})
+        print(f"[fresh] 注册因子 {len(rows)} 个（退役不巡检 {len(retired_hit)} 个: "
+              f"{','.join(retired_hit) or '-'}）；需补算 {len(stale)} 个 "
               f"(滞后 > {a.lag_days} 天 或 近 {a.coverage_days} 个交易日逐日缺行；逐日缺口 {len(gaps)} 个)")
         for s in stale:
             extra = (" 缺日=" + ",".join(s["missing_days"])) if s.get("missing_days") else ""
