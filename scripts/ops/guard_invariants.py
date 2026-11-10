@@ -474,6 +474,57 @@ def _c_l0_index_coverage(c: Ctx) -> tuple[bool, str, str, str]:
                       "断更会让换月检测静默停摆")
 
 
+def _c_l0_index_hist_coverage(c: Ctx) -> tuple[bool, str, str, str]:
+    """index 层近 6 个已收盘交易日不得留历史洞（CL-20261107-11）。
+
+    ``DATA-L0-INDEX-COVERAGE`` 只盯「最近一个完整交易日」。2026-11-02 / 11-03
+    因 contract 层残缺只合成出 25 / 65 个 8888 品种；洞一旦变成历史、基准日
+    往后挪一天，就再没有任何断言看得见它 —— 换月 ratio 门在那两天静默关闭，
+    实测漏检 7 个真实换月（EB/L/MA/PF/PP/PX/TA），直到本轮从 contract 层
+    补数并窗口化重建指数后才重算出来。
+
+    所以这里把窗口拉到最近 6 个**官方**已收盘交易日，逐日要求口径内覆盖率
+    ≥ 90%。交易日真源 ``futures_rule``（禁止 weekday 猜测）；排除今天是为了
+    不把盘中未走完的交易日误判成断更；查询固定 ``ts >= now() - 14 days``
+    窗口化，不对 6000 万行基表做全表 GROUP BY。
+    """
+    days = [r[0] for r in c.rows(
+        "SELECT DISTINCT trade_date FROM futures_rule "
+        "WHERE trade_date < CURRENT_DATE ORDER BY trade_date DESC LIMIT 6")]
+    if not days:
+        return False, "官方交易日历可用", "futures_rule 无已收盘交易日", (
+            "先跑 scripts/seed_futures_rule.py（禁止退回 weekday 猜测）")
+    rows = c.rows("""
+        WITH sc AS (
+          SELECT symbol FROM l3_ref.v_tradable_scope WHERE symbol LIKE '%8888'
+        ), per AS (
+          SELECT (b.ts AT TIME ZONE 'Asia/Shanghai')::date AS d, b.symbol,
+                 count(*) AS n
+          FROM l0_raw.minute_bar b JOIN sc USING (symbol)
+          WHERE b.layer = 'index' AND b.ts >= now() - interval '14 days'
+          GROUP BY 1, 2
+        )
+        SELECT d, count(*) FILTER (WHERE n >= 30) AS active
+        FROM per GROUP BY 1 ORDER BY 1
+    """)
+    have = {r[0]: int(r[1]) for r in rows}
+    scope_n = int(c.scalar(
+        "SELECT count(*) FROM l3_ref.v_tradable_scope "
+        "WHERE symbol LIKE '%8888'") or 0)
+    bad: list[str] = []
+    seen: list[str] = []
+    for d in days:
+        a = have.get(d, 0)
+        seen.append(f"{d:%m-%d} {a}/{scope_n}")
+        if scope_n and a / scope_n < 0.90:
+            bad.append(f"{d} {a}/{scope_n}")
+    ok = scope_n >= 20 and not bad
+    obs = f"近 {len(days)} 个已收盘交易日：" + " ".join(reversed(seen))
+    return ok, "近 6 个已收盘交易日每日口径内 8888 覆盖率 ≥ 90%", obs, (
+        "" if ok else f"历史指数洞：{', '.join(bad)}；8888 是换月 ratio 门唯一输入，"
+                      "洞不会自愈，必须从 contract 层补数后窗口化重建")
+
+
 def _c_bar_grid_valid(c: Ctx) -> tuple[bool, str, str, str]:
     """L1/L2 近 14 天不得有非网格「在途半截桶」，BA 桶集必须是 L1 的子集。
 
@@ -5472,6 +5523,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-01：上面那条只看 max(ts)，45 个 8888 品种全天 1 根也会被 8 个
     # 跑到 23:00 的品种「代表」成 PASS。补上覆盖广度维度，专治「只看有数据的 symbol」。
     ("DATA-L0-INDEX-COVERAGE", "index 层覆盖广度未塌陷", "block", _c_l0_index_coverage),
+    # CL-20261107-11：11-02/11-03 的历史指数洞（25/65 品种）在基准日滚动后
+    # 逃出上面那条断言的视野，换月 ratio 门静默关闭、漏检 7 个真实换月。
+    # 洞不会自愈，必须逐交易日盯住最近 6 个已收盘日。
+    ("DATA-L0-INDEX-HIST-COVERAGE", "近 6 个已收盘交易日指数层无历史洞",
+     "block", _c_l0_index_hist_coverage),
     # CL-20261110-02：跨周期对拍只查 L1，而 V5X 读 BA；非网格在途桶与
     # BA 孤儿桶两层都没人看。必须同时断言标签合法性与 BA ⊆ L1。
     ("BAR-GRID-VALID", "L1/L2 桶标签合法且 BA ⊆ L1", "block", _c_bar_grid_valid),
