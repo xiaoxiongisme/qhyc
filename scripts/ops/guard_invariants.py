@@ -5280,6 +5280,7 @@ def _c_vwap_caliber_wired(c: Ctx) -> tuple[bool, str, str, str]:
             FROM l2_adj.factor_value
             WHERE factor_id = 'f_vwap_dev'
               AND trade_date >= current_date - interval '30 days'
+              AND symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope)
         """)
         n, mx, p99 = int(rows[0][0]), float(rows[0][1]), float(rows[0][2])
         # 旧口径近 30 天均值 >5,000、最大 >30,000；新口径是「收盘价偏离 VWAP

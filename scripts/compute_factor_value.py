@@ -338,6 +338,11 @@ def main():
     ap.add_argument("--until", default="2026")
     ap.add_argument("--groups", default="A,B", help="逗号分隔，默认 A,B（A=日内价量 B=基本面 C=基差时序）")
     ap.add_argument("--dry-run", action="store_true")
+    # CL-20261110-17：口径订正时只写指定因子，避免把其余 9 个 A 组因子的全历史
+    # 一起 UPSERT（80 万行级写入）。默认 None = 保持原有全量行为，生产调度不受影响。
+    # 计算仍走 compute_a 原口径，只是过滤写出行，故横截面 z 与日常作业完全一致。
+    ap.add_argument("--only-factor", default=None,
+                    help="逗号分隔，只写这些 factor_id（口径订正用；默认写全部）")
     add_conn_args(ap)
     a = ap.parse_args()
     # ★ 2026-11-06 部署兜底：--until 默认值 "2026" 会被 factor_ic_scan._ymd 展开成
@@ -382,6 +387,12 @@ def main():
             print(f"      C 组 {len(cr):,} 行")
             all_rows += cr
         conn.commit()
+
+        if a.only_factor:
+            keep = {x.strip() for x in a.only_factor.split(",") if x.strip()}
+            n0 = len(all_rows)
+            all_rows = [r for r in all_rows if r[0] in keep]
+            print(f"[only-factor] {n0:,} -> {len(all_rows):,} 行（{','.join(sorted(keep))}）")
 
         # 统计
         df = pd.DataFrame(all_rows, columns=["factor_id", "trade_date", "symbol", "raw", "z"])
