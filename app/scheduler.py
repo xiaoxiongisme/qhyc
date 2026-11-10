@@ -3174,8 +3174,11 @@ def _extend_index_8888() -> None:
             # CL-20261107-19 的有意例外：本函数是 _minute_and_bars_job 内部的一个
             # 步骤，**不是独立作业**，抛异常会连带中断整条 bar 合成链路（更糟）。
             # 它有独立的机器兜底：扩展失败 ⇒ L0 index 层停更 ⇒
-            # DATA-L0-LAYERS-FRESH（block）次日 09:10 必报 FAIL，不是静默绿。
-            # exit 2 = 有品种接缝校验没过（合约层缺主力），数据未写入，需人工看。
+            # DATA-L0-LAYERS-FRESH + DATA-L0-INDEX-COVERAGE（block）
+            # 次日 09:10 必报 FAIL，不是静默绿。
+            # exit 2（CL-20261110-01）= 有品种接缝价格真不一致（主力选错），
+            # 这些品种本轮未写入、**其余品种照常写入**；锚点异常与休眠品种
+            # 已降级为逐品种 warning，不再让整条链路每 30 分钟刷 ERROR。
             logger.error(f"[scheduler] index_8888 扩展返回 {p.returncode}: "
                          f"{' | '.join(tail)}")
             if p.returncode == 2:

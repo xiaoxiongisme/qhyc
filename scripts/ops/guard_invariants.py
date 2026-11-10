@@ -377,6 +377,62 @@ def _c_l0_layers_fresh(c: Ctx) -> tuple[bool, str, str, str]:
         "断层：" + "; ".join(bad) if bad else "")
 
 
+def _c_l0_index_coverage(c: Ctx) -> tuple[bool, str, str, str]:
+    """index 层「最近一个完整交易日」的活跃品种数不得腰斩（CL-20261110-01）。
+
+    ``DATA-L0-LAYERS-FRESH`` 只看各 layer 的 ``max(ts)``：2026-11-09 有 8 个
+    8888 品种跑到 23:00 就让整层 PASS，而同期另外 **45 个品种全天只有 1~2 根**
+    （``extend_index_8888`` 接缝锚点死锁，见该脚本 ``_seam_anchor`` 文档）。
+    这里补上「覆盖广度」维度：**口径内**（``l3_ref.v_tradable_scope`` 里的 38 个
+    ``*8888``）品种在最近一个已收盘交易日必须各有 ≥ 30 根。
+
+    为什么不用「全库活跃品种数 / 历史峰值」：峰值 78 里含 25 个早已停更在
+    10-30 / 11-06 的口径外老品种（FB/WR/AD/BC…），它们不该被算进分母——
+    修复后口径内 38/38 全齐，按全库比却只有 53/78=68%，会永远假红。
+    只选「已收盘交易日」是为了不把盘中未走完的今天误判成断更。
+    ⚠ 查询窗口化（14 天）+ 按 layer 与本地自然日过滤，禁止对
+    ``l0_raw.minute_bar`` 全表 GROUP BY（2026-11-07 21:58 曾把生产 PG 打到 OOM）。
+    """
+    tdays = [r[0] for r in c.rows(
+        "SELECT DISTINCT trade_date FROM futures_rule "
+        "WHERE trade_date <= CURRENT_DATE ORDER BY trade_date DESC LIMIT 20")]
+    now_sh = c.scalar("SELECT now() AT TIME ZONE 'Asia/Shanghai'")
+    today = now_sh.date() if hasattr(now_sh, "date") else date.today()
+    intraday = (now_sh.hour, now_sh.minute) < (15, 30)
+    if tdays and tdays[0] == today and intraday and len(tdays) > 1:
+        target = tdays[1]
+    elif tdays:
+        target = tdays[0]
+    else:
+        return False, "官方交易日历可用", "futures_rule 无交易日", "无法选定基准交易日"
+
+    row = c.rows("""
+        WITH sc AS (
+          SELECT symbol FROM l3_ref.v_tradable_scope WHERE symbol LIKE '%8888'
+        ), per AS (
+          SELECT b.symbol, count(*) AS n
+          FROM l0_raw.minute_bar b JOIN sc USING (symbol)
+          WHERE b.layer = 'index'
+            AND b.ts >= now() - interval '14 days'
+            AND (b.ts AT TIME ZONE 'Asia/Shanghai')::date = CAST(:target AS date)
+          GROUP BY 1
+        )
+        SELECT (SELECT count(*) FROM sc),
+               (SELECT count(*) FROM per WHERE n >= 30),
+               (SELECT coalesce(array_agg(symbol ORDER BY symbol), ARRAY[]::text[])
+                FROM sc WHERE symbol NOT IN (SELECT symbol FROM per WHERE n >= 30))
+    """, target=target)
+    scope_n, active_n, missing = (row[0] if row else (0, 0, []))
+    missing = list(missing or [])
+    ratio = active_n / scope_n if scope_n else 0.0
+    ok = scope_n >= 20 and ratio >= 0.90
+    obs = (f"基准日 {target}: 口径内 8888 活跃 {active_n}/{scope_n}（{ratio:.0%}）"
+           + (f"；缺席 {', '.join(missing[:12])}" if missing else ""))
+    return ok, "口径内 8888 在最近完整交易日覆盖率 ≥ 90%", obs, (
+        "" if ok else f"覆盖塌陷：{obs}；8888 是换月 ratio 门唯一输入，"
+                      "断更会让换月检测静默停摆")
+
+
 def _c_equity_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     """权益流必须够新、且**够长**——否则组合熔断是「开着但空转」。
 
@@ -4417,6 +4473,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-SCOPE-WIRED", "口径被 L1/L2/视图真实引用", "block", _c_scope_wired),
     ("VAR-SCOPE-VIEW-OK", "口径视图存在、非空、覆盖白名单", "block", _c_scope_view_healthy),
     ("DATA-L0-LAYERS-FRESH", "L0 各 layer 未断层", "block", _c_l0_layers_fresh),
+    # CL-20261110-01：上面那条只看 max(ts)，45 个 8888 品种全天 1 根也会被 8 个
+    # 跑到 23:00 的品种「代表」成 PASS。补上覆盖广度维度，专治「只看有数据的 symbol」。
+    ("DATA-L0-INDEX-COVERAGE", "index 层覆盖广度未塌陷", "block", _c_l0_index_coverage),
     ("DATA-CALENDAR-FRESH", "官方交易日历覆盖到最新数据日", "block", _c_calendar_fresh),
     # CL-20261109-04：休市期 akshare 会给「时间戳=当前时刻」的合成 bar，
     # 采集作业无时段门 → 周一凌晨写入 11 根幽灵 bar，一路进 V5X 信号源且不报错。

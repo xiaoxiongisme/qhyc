@@ -33,6 +33,20 @@
      此时**拒绝写入**而不是写一条错的指数连。
   5. 只写 ``ts > 已有最大 ts`` 的行（幂等，可反复跑）。
 
+接缝锚点死锁（CL-20261110-01）
+------------------------------
+2026-11-09 11-09 之后连续 24 轮扩展全部 ``exit 2``，45 个 8888 品种全天只有
+1~2 根：盘中 09:07 那轮 contract 层只有 09:00/09:01 两分钟，脚本写出 1 根后，
+``seam_day`` 就落在这个残缺日 —— 该日 ``stored`` 只有 1~2 行，接缝重叠恒 <10，
+``seam_overlap_too_small`` 让该品种**永久冻结**。更糟的是旧 ``main()`` 把任一
+seam 类状态都算成全局失败，日志还谎称「未写入任何数据」，实际 COPY 在循环内
+逐品种 autocommit，成功品种早就落库了。
+
+修法见 ``_seam_anchor``：接缝日取「最后一个当日行数 ≥ 30 的完整日」，窗口从
+该日前一天开始；增量上界仍用真实最后一根。这样某轮只写 1 根也不会死锁，下一轮
+自动从完整日重算接缝补齐。同时：休眠品种（>7 天无新分钟）跳过接缝校验，
+只有 ``seam_mismatch``（真价格不一致）才返回 exit 2 并点名品种。
+
 为什么必须这么小心
 ------------------
 8888 唯一的消费方是换月检测的 ratio 门。写错一条指数连，等于让换月 offset 全部错位，
@@ -75,6 +89,18 @@ SEAM_EPS = 1e-6
 CONTRACT_RATIO_MIN = 0.6
 #: 持仓量门：当日 front 日末 OI 低于窗口内最大值的这个比例 → 视为主力缺失
 FRONT_OI_RATIO_MIN = 0.10
+#: 接缝锚点所需的最少「当日行数」（CL-20261110-01）。
+#: 盘中 09:07 那轮常只写出 1~2 根；若拿这个残缺日当 seam_day，重叠恒 <10
+#: ⇒ 每轮 ``seam_overlap_too_small`` ⇒ 该品种永久冻结（实测 11-09 有 45 个
+#: 8888 品种全天只有 1~2 根，此后 24 轮扩展全部失败）。锚点必须回溯到完整日。
+MIN_SEAM_DAY_ROWS = 30
+#: 锚点最多回溯的自然日数（Timescale chunk 剪枝，避免扫全表）
+SEAM_LOOKBACK_DAYS = 30
+#: 超过这个天数没有新 index 分钟的品种视为「休眠」（FB/WR 停在 2026-10-30）。
+#: 它们的历史曲线与当前重算结果本就不同源，接缝必然 mismatch；若让它们
+#: 参与全局判据，脚本每 30 分钟返回 exit 2，把「其余 80 个品种已正常写入」
+#: 的事实淹没在 ERROR 里（CL-20261110-01）。
+DORMANT_DAYS = 7
 
 
 def _connect():
@@ -102,6 +128,43 @@ def _last_index(cur, variety: str):
         ORDER BY ts DESC LIMIT 1
     """, (variety + "8888",))
     return cur.fetchone()
+
+
+def _seam_anchor(cur, variety: str):
+    """接缝锚点 = 最后一个「完整日」，与增量上界（真实最后一根）分离。
+
+    CL-20261110-01 死锁修复
+    ------------------------
+    旧实现把 ``seam_day = last_ts.date()``、窗口 ``t0 = last_ts - 1 天``。
+    若某轮盘中只写入 1~2 根（09:07 采集刚开，contract 层当日仅有 09:00/09:01），
+    下一轮 seam_day 就落在这个残缺日：``stored`` 只有 1~2 行、
+    ``out`` 窗口又只从 t0=前一天起（不含更早的完整日），
+    于是 ``common < 10`` ⇒ ``seam_overlap_too_small`` ⇒ 该品种**永远**写不进新数据。
+    实测 2026-11-09 有 45 个 8888 品种卡在这个状态，全天只有 1~2 根，
+    而 11-10 的 dry-run 里 82 个品种有 54 个报 ``seam_overlap_too_small(1/2)``。
+
+    修法：接缝日改取「当日行数 ≥ MIN_SEAM_DAY_ROWS」的最后一个自然日，
+    窗口从该日的前一天开始（保证接缝日能被完整重建）；增量上界仍用真实最后一根，
+    所以已写入的残段不会被重写、不会撞主键。这样即使某轮只写 1 根，
+    下一轮也能自动从完整日重算接缝并补齐，不会死锁。
+
+    返回 ``(seam_day, last_ts, exchange, amt_caliber)``；无完整日返回 None。
+    """
+    cur.execute("""
+        SELECT ts::date AS d, max(ts) AS mx
+        FROM l0_raw.minute_bar
+        WHERE layer = 'index' AND symbol = %s
+          AND ts >= now() - make_interval(days => %s)
+        GROUP BY 1 HAVING count(*) >= %s
+        ORDER BY 1 DESC LIMIT 1
+    """, (variety + "8888", SEAM_LOOKBACK_DAYS, MIN_SEAM_DAY_ROWS))
+    row = cur.fetchone()
+    if row is None:
+        return None
+    last = _last_index(cur, variety)
+    if last is None:
+        return None
+    return row[0], last[0], last[2], last[3]
 
 
 def _daily_quality(cur, syms: Sequence[str], t0: datetime, t1: datetime) -> pd.DataFrame:
@@ -175,13 +238,22 @@ def _missing_trading_days(cur, d0, d1, have: set) -> list[str]:
 
 def extend_one(cur, variety: str, dry_run: bool) -> dict:
     """返回 {'status': ..., 'rows': n, 'skipped_days': [...]}。"""
-    last = _last_index(cur, variety)
-    if last is None:
+    # 休眠品种直接跳过：历史曲线（local_csv_synth_8888）与当前重算不同源，
+    # 接缝残差必然非 0，但它们既不服务口径内换月检测，也不该让整批作业报 exit 2。
+    probe = _last_index(cur, variety)
+    if probe is None:
         return {"variety": variety, "status": "no_index_series", "rows": 0}
-    last_ts, last_close, exchange, amt_caliber = last
+    if probe[0] < datetime.now(probe[0].tzinfo) - timedelta(days=DORMANT_DAYS):
+        return {"variety": variety, "status": "dormant", "rows": 0}
 
-    # 窗口：从「最后一个已覆盖交易日的前 1 天」开始，保证接缝日能被完整重建
-    t0 = datetime.combine((last_ts - timedelta(days=1)).date(), datetime.min.time()).replace(
+    anchor = _seam_anchor(cur, variety)
+    if anchor is None:
+        return {"variety": variety, "status": "no_seam_anchor", "rows": 0}
+    seam_day, last_ts, exchange, amt_caliber = anchor
+
+    # 窗口：从「最后一个完整日的前 1 天」开始，保证接缝日能被完整重建。
+    # 注意不能用 last_ts（可能只写了 1 根的盘中残段日）——见 _seam_anchor 文档。
+    t0 = datetime.combine(seam_day - timedelta(days=1), datetime.min.time()).replace(
         tzinfo=last_ts.tzinfo)
     cur.execute("SELECT max(ts) FROM l0_raw.minute_bar WHERE layer='contract' AND ts >= %s",
                 (t0,))
@@ -213,7 +285,10 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
     bad_objs: set = set()
     for r in q.itertuples():
         d = r.d
-        if d <= last_ts.date():
+        # 锚点日及之前属于「已对齐的历史」，只判锚点之后的新日（CL-20261110-01）。
+        # 旧写法以 last_ts.date() 为界，盘中残段日会把 11-07 这类残缺交易日
+        # 一并跳过 → 残缺合约数据进 stage → 选错主力、污染 carry 累计。
+        if d <= seam_day:
             continue
         why = None
         if med_ctr and r.ncontract < med_ctr * CONTRACT_RATIO_MIN:
@@ -231,7 +306,7 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
     # 缺日必须同时进 bad_objs：只写进 bad_days 是「点名但不拦」——stage_dedup
     # 仍会把这些日子的 continuous 行喂给 fetch_front 选主力，与上面注释承诺的
     # 「像坏日一样拦下」不符（CL-20261107-18 一并修）。
-    for ms in _missing_trading_days(cur, last_ts.date(), t_max.date(), have_days):
+    for ms in _missing_trading_days(cur, seam_day, t_max.date(), have_days):
         bad_days.append(f"{ms}(no_contract_rows)")
         bad_objs.add(date.fromisoformat(ms))
 
@@ -294,8 +369,9 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
         return {"variety": variety, "status": "no_front_rows_in_window", "rows": 0,
                 "skipped_days": bad_days}
 
-    # ---- 2) 接缝对齐：用「最后一个已覆盖交易日」求常数 delta ----
-    seam_day = last_ts.date()
+    # ---- 2) 接缝对齐：用「最后一个完整交易日」求常数 delta（CL-20261110-01）----
+    # seam_day 由 _seam_anchor 给出，绝不能退化成 last_ts.date()：
+    # 那天可能只有 1~2 根，重叠不足 10 会让整个 8888 层永久冻结。
     cur.execute("SELECT ts, close FROM l0_raw.minute_bar "
                 "WHERE layer='index' AND symbol=%s AND ts::date=%s",
                 (variety + "8888", seam_day))
@@ -378,6 +454,8 @@ def main() -> int:
     stat: dict[str, int] = {}
     written = 0
     problems = []
+    mismatches: list[tuple[str, str]] = []   # 真·数据不一致，必须报 exit 2
+    soft_fail: list[tuple[str, str]] = []    # 锚点/重叠类，逐品种记录但不阻断全局
     for v in target:
         try:
             r = extend_one(cur, v, a.dry_run)
@@ -392,17 +470,28 @@ def main() -> int:
             written += r["rows"]
         if r.get("skipped_days"):
             problems.append((v, "skip:" + ",".join(r["skipped_days"])))
+        # CL-20261110-01：按品种归因，且区分「真不一致」与「锚点异常」。
+        # 旧实现把任一 seam_* 状态都算成全局失败，还谎称「未写入任何数据」——
+        # 实际 COPY 在循环内逐品种 autocommit，成功品种早就落库了。
+        if st.startswith("seam_mismatch"):
+            mismatches.append((v, st))
+        elif st.startswith(("seam_overlap_too_small", "seam_day_empty",
+                            "no_seam_anchor", "no_index_series")):
+            soft_fail.append((v, st))
         if st != "up_to_date":
             logger.info(f"[8888] {v}: {r}")
 
     logger.info(f"[8888] 汇总 {stat}；新增 {written} 行")
     for v, msg in problems:
         logger.warning(f"[8888] ⚠ {v} {msg}")
-    bad = [s for s in stat if s.startswith(("seam_mismatch", "seam_day_empty",
-                                           "seam_overlap_too_small"))]
-    if bad:
-        logger.error(f"[8888] 接缝校验失败 {bad} —— 这些品种的合约层在 {stat} 对应的日子"
-                     f"可能不含主力，未写入任何数据")
+    for v, st in soft_fail:
+        logger.warning(f"[8888] ⚠ {v} 接缝锚点异常 {st}（本品种未写入，其余品种不受影响）")
+    if mismatches:
+        logger.error(
+            f"[8888] 接缝真不一致 {len(mismatches)} 个品种："
+            + ", ".join(f"{v}({st})" for v, st in mismatches[:20])
+            + " —— 这些品种本轮未写入，其余品种照常写入；"
+              "通常是当日合约层主力选错，需人工核对")
         return 2
     return 0
 
