@@ -40,13 +40,17 @@
     python scripts/ops/backfill_bars_from_5m.py \\
         --symbols BR888,PF888 --days 2026-10-30,2026-11-02,2026-11-03 --apply
 
-    # 自动探测缺口日（对比 l1 与「当日应有根数」众数）
+    # 自动探测缺口日（按「前夜盘有无」分组，真源 public.futures_rule）
     python scripts/ops/backfill_bars_from_5m.py --symbols BR888 --auto-days 30 --apply
 
 写完 L1 后仍需重建 BA 层（后复权因子/换月段依赖 bar 序列）：
 
     python scripts/ops/rebuild_roll_all_freqs.py --symbols BR888,PF888 \\
         --freqs min5,min15,min30,min60 --force-ba
+
+⚠ 自动探测的交易日形态判据见 ``scripts/ops/trading_day_caliber.py``
+（CL-20261110-07）：节后首日与周一都**没有**前夜盘凌晨段，根数天然比
+周二~周五少约 13 根，不能拿同星期几众数当基准，否则会把正常日误判成缺口。
 """
 from __future__ import annotations
 
@@ -59,6 +63,11 @@ import pandas as pd
 from sqlalchemy import text
 
 from app.core.db import session_scope
+from scripts.ops.trading_day_caliber import (
+    TRADING_DAY_SQL,
+    has_prev_session,
+    mode_of,
+)
 from scripts.validate.rebuild_bars_session import (
     END_LABELED_SRCS,
     _build_sql,
@@ -196,38 +205,77 @@ def write_step(sess, sym: str, step: int, rows: list, s_dt: datetime,
 
 
 def auto_detect_days(sym: str, lookback: int) -> list[str]:
-    """按「当日根数 < 同星期几众数 95%」探测缺口日。
+    """按「是否有前夜盘尾段」分组探测缺口日（CL-20261110-07）。
 
-    ⚠ 必须按**星期几分组**求众数（2026-11-09 踩过）：周一自然日只有
-    21:00~23:55 的夜盘，00:00~01:00 属于**周二凌晨**、不在周一自然日里，
-    所以周一 80 根 vs 周二~周五 93 根是**正常**形态。用全周众数（93）当基准，
-    会把每一个周一都误判成缺口，进而把新浪在周一凌晨吐出的合成脏 bar
-    （实测 AO0 有一个孤零零的 10-26 00:00）当成真实数据补进去，
-    并把夜盘残段截断成 23:55 这种非法桶。
+    ⚠ 分组键是**前夜盘有无**，不是星期几。这里踩过两次坑：
+
+    1. 用全周众数（93）当基准 → 每个周一（80 根，无凌晨段）都被误判成缺口，
+       把新浪周一凌晨吐出的合成脏 bar 当成真实数据补进 L1（AO/SS 事故）；
+    2. 改成按星期几分组后，**节后首日**仍被误判：2026-10-08 是国庆后首个
+       交易日（周四），前一日 10-07 休市、没有夜盘，实际只有 80 根，
+       却拿去和「周四 93 根」比。
+
+    真源 ``public.futures_rule``（``l3_ref.trade_calendar`` 实测停更到 10-08，
+    不可使用）。判据与正反哨兵见 ``scripts/ops/trading_day_caliber.py``，
+    由 ``BACKFILL-GAP-CALENDAR-WIRED`` 锁住真实引用。
+
+    形态歧义保护：若某日根数低于本组众数、但与**另一组**众数吻合（例如
+    「前一自然日是交易日但当天恰无夜盘」），按正常形态跳过而非报缺口 ——
+    误补一根脏 bar 的代价远高于漏补一天。
     """
     with session_scope() as sess:
-        rows = sess.execute(text("""
-            WITH d AS (
-              SELECT bucket::date dd,
-                     extract(dow FROM bucket::date)::int dow,
-                     count(*) n
-              FROM l1_mkt.bar_5m
-              WHERE symbol = :s AND bucket >= now() - (:lb || ' days')::interval
-              GROUP BY 1, 2
-            ), m AS (
-              SELECT dow, mode() WITHIN GROUP (ORDER BY n) mn FROM d GROUP BY dow
-            )
-            SELECT d.dd, d.n, m.mn FROM d JOIN m USING (dow)
-            WHERE d.n < m.mn * 0.95 ORDER BY d.dd
+        daily = sess.execute(text("""
+            SELECT bucket::date AS dd, count(*) AS n
+            FROM l1_mkt.bar_5m
+            WHERE symbol = :s AND bucket >= now() - (:lb || ' days')::interval
+            GROUP BY 1 ORDER BY 1
         """), {"s": sym, "lb": lookback}).fetchall()
+        if not daily:
+            return []
+        lo = min(r[0] for r in daily) - timedelta(days=2)
+        hi = max(r[0] for r in daily)
+        tdays = {r[0] for r in sess.execute(
+            text(TRADING_DAY_SQL), {"lo": lo, "hi": hi}).fetchall()}
+
+    if not tdays:
+        raise RuntimeError(
+            "public.futures_rule 在探测窗口内无交易日 —— 拒绝退回按星期几猜缺口"
+            "（会重演 AO/SS 脏 bar 事故）。先跑 seed_futures_rule 补齐日历。")
+
+    groups: dict[bool, list[tuple]] = {True: [], False: []}
+    for dd, n in daily:
+        groups[has_prev_session(dd, tdays)].append((dd, int(n)))
+
+    baseline: dict[bool, int] = {}
+    for g, items in groups.items():
+        if len(items) < 3:
+            print(f"    [跳过] 「{'有' if g else '无'}前夜盘」组仅 "
+                  f"{len(items)} 天样本，不足以定基准")
+            continue
+        baseline[g] = mode_of([n for _, n in items])
+    if not baseline:
+        raise RuntimeError("两组样本均不足 3 天，无法求基准 —— 拒绝探测缺口")
+    print(f"    基准：有前夜盘={baseline.get(True)} 根 / "
+          f"无前夜盘={baseline.get(False)} 根"
+          f"（真源 public.futures_rule，窗口内 {len(tdays)} 个交易日）")
+
     out = []
-    for dd, n, mn in rows:
+    for dd, n in sorted(groups[True] + groups[False]):
         # 周六凌晨的夜盘尾段（01:00/02:30 收盘的品种）只有零星几根，属正常
         if dd.weekday() == 5:
             continue
+        g = has_prev_session(dd, tdays)
+        mn = baseline.get(g)
+        if mn is None or n >= mn * 0.95:
+            continue
+        other = baseline.get(not g)
+        if other and n >= other * 0.95:
+            print(f"    [形态] {sym} {dd} n={n} 与另一组合法形态 {other} 吻合"
+                  f" → 不判缺口")
+            continue
         out.append(str(dd))
         print(f"    [缺口] {sym} {dd}（周{'一二三四五六日'[dd.weekday()]}）"
-              f" n={n} 同星期几众数={mn}")
+              f" n={n} {'有' if g else '无'}前夜盘组众数={mn}")
     return out
 
 

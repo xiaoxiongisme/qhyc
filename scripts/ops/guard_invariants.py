@@ -4567,6 +4567,114 @@ def _c_push_log_retired(c: Ctx) -> tuple[bool, str, str, str]:
     return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
 
 
+def _c_mpr_exchange_coverage(c: Ctx) -> tuple[bool, str, str, str]:
+    """会员持仓排名：每所品种覆盖不得相对**自身**近期中位数腰斩（CL-20261110-05）。
+
+    2026-11-10 体检发现 11-09 总行数 -26%，逐所拆开才看清：CZCE/SHFE/GFEX
+    全部正常，只有 DCE 从 11-06 的 1710 行/87 品种塌到 240 行/12 品种
+    （只剩 V/Y）。``OPS-FRESH-TRADE-DAY`` 只看「最新交易日有没有数」，
+    四个所里只要有一个写进了行整条就 PASS —— 典型的分母掩盖。
+
+    按交易所各与自身近 30 天品种数中位数比（不能用全局中位数：GFEX 天生
+    只有 9 个品种，拿全局比会永远报它）。定 warn 而非 block：DCE 官网受
+    瑞数防护、只能经 Scrapling 真浏览器采集，是**已知可能失败的外部依赖**，
+    不该阻断发布，但必须每轮可见。
+    """
+    label = "各交易所会员持仓排名覆盖未塌陷（≥ 自身中位数 60%）"
+    try:
+        latest = c.scalar(
+            "SELECT max(trade_date) FROM public.member_position_rank "
+            "WHERE trade_date >= now() - interval '30 days'")
+        rows = c.rows("""
+            WITH d AS (
+              SELECT trade_date, exchange, count(DISTINCT symbol) AS syms
+              FROM public.member_position_rank
+              WHERE trade_date >= now() - interval '30 days'
+              GROUP BY 1, 2
+            ), base AS (
+              SELECT exchange,
+                     percentile_cont(0.5) WITHIN GROUP (ORDER BY syms) AS med
+              FROM d WHERE trade_date < CAST(:latest AS date)
+              GROUP BY 1
+            )
+            SELECT b.exchange, coalesce(x.syms, 0), b.med
+            FROM base b
+            LEFT JOIN (SELECT exchange, syms FROM d
+                       WHERE trade_date = CAST(:latest AS date)) x USING (exchange)
+            ORDER BY 1
+        """, latest=latest)
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"查询失败 {type(e).__name__}", str(e)[:200]
+    bad, obs = [], []
+    for exch, syms, med in rows:
+        med = float(med or 0)
+        ratio = (syms / med) if med else 0
+        obs.append(f"{exch}={syms}/{med:.0f}({ratio:.0%})")
+        if med and ratio < 0.60:
+            bad.append(f"{exch} {syms} 品种仅为中位数 {med:.0f} 的 {ratio:.0%}")
+    return (not bad), label, f"基准日 {latest}: " + " ".join(obs), (
+        "" if not bad else "；".join(bad)
+        + " → 见 CL-20261110-05（DCE 抓取通道受限，需人工在可达网络侧补采）")
+
+
+def _c_backfill_gap_calendar_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-07：5m 缺口探测必须接交易日历、按「前夜盘有无」分组。
+
+    旧判据按星期几求众数，把节后首日（2026-10-08）80 根误判成缺口，
+    导致 AO/SS 被补进新浪凌晨合成脏 bar。断言做三件事：
+      1) 动态加载判据模块，用真实历史交易日跑**正反哨兵**；
+      2) 检查探测脚本真实 import 了该模块、且已不再用 ``extract(dow``；
+      3) 检查真源 ``public.futures_rule`` 近 30 天确实有交易日
+         （``l3_ref.trade_calendar`` 实测停更到 10-08，不可用）。
+    """
+    label = "5m 缺口探测接 futures_rule 日历（防节后首日假阳性）"
+    bad, obs = [], []
+    root = Path(__file__).resolve().parents[2]
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "trading_day_caliber", root / "scripts/ops/trading_day_caliber.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"判据模块加载失败 {type(e).__name__}", str(e)[:200]
+
+    td = {date(2026, 9, 28), date(2026, 9, 29), date(2026, 9, 30),
+          date(2026, 10, 8), date(2026, 10, 9), date(2026, 11, 9),
+          date(2026, 11, 10)}
+    for d, exp, tag in ((date(2026, 10, 8), False, "节后首日"),
+                        (date(2026, 10, 9), True, "节后次日"),
+                        (date(2026, 10, 12), False, "周一"),
+                        (date(2026, 11, 10), True, "周二")):
+        got = bool(mod.has_prev_session(d, td))
+        obs.append(f"{tag}={got}")
+        if got != exp:
+            bad.append(f"{tag} {d} 期望 {exp} 实得 {got}")
+    obs.append(f"src={mod.TRADING_DAY_TABLE}")
+    if mod.TRADING_DAY_TABLE != "public.futures_rule":
+        bad.append("交易日真源不是 public.futures_rule（停更的 trade_calendar 不可用）")
+    try:
+        src = (root / "scripts/ops/backfill_bars_from_5m.py").read_text(
+            encoding="utf-8", errors="ignore")
+    except OSError as e:
+        return False, label, "读探测脚本失败", str(e)[:200]
+    wired = "trading_day_caliber" in src and "has_prev_session(" in src
+    legacy = "extract(dow" in src or "GROUP BY dow" in src
+    obs.append(f"wired={wired} legacy_dow={legacy}")
+    if not wired:
+        bad.append("探测脚本未真实引用交易日历判据模块")
+    if legacy:
+        bad.append("探测脚本仍按星期几分组（节后首日会复发假阳性）")
+    n = c.scalar("SELECT count(DISTINCT trade_date) FROM public.futures_rule "
+                 "WHERE trade_date >= CURRENT_DATE - interval '30 days'") or 0
+    obs.append(f"calendar_30d={n}")
+    if n < 5:
+        bad.append(f"futures_rule 近 30 天仅 {n} 个交易日 → 日历真源可能停更")
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-07")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -4785,6 +4893,13 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 配置态：空值不阻断发布，但要让「单通道」在每轮报告里持续可见。
     ("V5X-PUSH-SINGLE-CHANNEL", "推送有降级通道（fallback_webhook 非空）",
      "warn", _c_v5x_push_single_channel),
+    # CL-20261110-05：11-09 总行数 -26% 只有 DCE 一个所塌陷，旧新鲜度断言
+    # 被「其它三所有数据」掩盖。按交易所各自中位数比，才看得见单所静默断档。
+    ("OPS-MPR-EXCHANGE-COVERAGE", "各交易所持仓排名覆盖未塌陷",
+     "warn", _c_mpr_exchange_coverage),
+    # CL-20261110-07：节后首日（10-08）被星期几众数误判成缺口 → 补进合成脏 bar。
+    ("BACKFILL-GAP-CALENDAR-WIRED", "5m 缺口探测接交易日历（防节后首日假阳性）",
+     "block", _c_backfill_gap_calendar_wired),
 ]
 
 
