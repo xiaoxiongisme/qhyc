@@ -4793,6 +4793,19 @@ def _c_dce_sina_wired(c: Ctx) -> tuple[bool, str, str, str]:
                 or (isinstance(n.func, ast.Name) and n.func.id == name))
             for n in ast.walk(tree))
 
+    def has_sina_cot_src(src: str) -> bool:
+        """只看真实的 ``SRC = "sina_cot"`` 赋值；注释里说明旧标记不算违规。"""
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            return True
+        return any(
+            isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "SRC" for t in n.targets)
+            and isinstance(n.value, ast.Constant)
+            and n.value.value == "sina_cot"
+            for n in ast.walk(tree))
+
     checks = [
         ("futures_hold_pos_sina" in mod, "调用 futures_hold_pos_sina"),
         ('SRC_TAG = "sina:futures_hold_pos_sina"' in mod, "src 为新标记（非 sina_cot）"),
@@ -4812,7 +4825,7 @@ def _c_dce_sina_wired(c: Ctx) -> tuple[bool, str, str, str]:
         ("_run_dce(date)" in rp, "DCE 分支调用 _run_dce"),
         ("merged[member]" not in rp, "已删除按会员合并逻辑"),
         (not has_call(rp, "match_main_contract"), "已删除批量合约清单调用"),
-        ('SRC = "sina_cot"' not in rp, "不再写旧污染 src"),
+        (not has_sina_cot_src(rp), "不再写旧污染 src"),
     ]
     for ok, tag in rp_checks:
         obs.append(f"{tag}={'yes' if ok else 'NO'}")
