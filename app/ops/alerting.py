@@ -433,6 +433,72 @@ def _check_freshness(session, cfg: AlertConfig, now: datetime | None = None) -> 
     return out
 
 
+# ---------------------------------------------------------------- 作业心跳判据
+# ★ 2026-11-10（CL-20261110-10 A）：周/月频心跳改为 cron 感知。
+# 旧判据只看「距上次成功 > 固定 expected_gap_days」。CL-20261107-03 把周频 cron
+# 从错位的周日改回周六后，11-01（周日）最后一次成功，下一次正常触发是 11-14，
+# 形成 13 天**合法**过渡空档，却被 9 天阈值写成「采集/调度链路可能停摆」；
+# 当时日频链路全部 fresh，属于定性错误（CL-20261110-09 已实证）。
+#
+# 为何不读 ops.scheduled_task.updated_at 当「改期生效时刻」：实测三条周频字典的
+# updated_at 仍停在 2026-10-14 22:23，改 schedule 时并未刷新 → 不可作真相源。
+# 故用不依赖任何时间戳的等价判据：按**现行** cron 从上次成功起算，连续错过
+# 两次应触发才判逾期。改期只跳过一次 → 合法空档不告警；真连续漏跑第二次后即报。
+# 日频（<=4 天）周末/长假形态复杂且久经考验，保留原固定阈值，避免扩大改动面。
+_JOBHB_CRON_MIN_GAP_DAYS = 7       # 仅周频/月频启用 cron 感知
+_JOBHB_MISSED_FIRE_GRACE_H = 2.0   # 第二次应触发后的执行宽限
+_JOBHB_HARD_CAP_MULT = 2.0         # cron 路径下超过 2× 登记间隔一律告警（防静默）
+
+
+def _next_cron_fire(schedule: str, since: datetime) -> datetime | None:
+    """按 5 段 crontab（apscheduler 语义）推算 **严格晚于** since 的下一次触发。
+
+    实测 apscheduler 3.11 的 ``get_next_fire_time(None, now)`` 返回 >= now 的触发，
+    正好落在触发点上时会把同一次触发再返回一遍（due1 == due2），连续漏跑判据会
+    退化成「错过一次就报」，改期空档仍被误报。故基准统一 +1 微秒。
+    """
+    from apscheduler.triggers.cron import CronTrigger  # noqa: PLC0415
+
+    trig = CronTrigger.from_crontab(schedule, timezone=CST)
+    return trig.get_next_fire_time(None, since + timedelta(microseconds=1))
+
+
+def job_heartbeat_verdict(last: datetime, now: datetime, *,
+                          schedule: str | None = None,
+                          expected_gap_days: float = 9.0,
+                          use_cron: bool | None = None) -> tuple[bool, str]:
+    """返回 (是否逾期, 判据说明)。纯函数，不查库，供守卫做行为级对拍。
+
+    use_cron=None 时按 expected_gap_days 自动决定：>=7 天且有 schedule 走 cron 感知，
+    否则沿用固定阈值。任何异常（cron 解析失败、字典不可读）都回退固定阈值，
+    保证「不会静默」，但也不会把合法空档误判成链路停摆。
+    """
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=CST)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CST)
+    lag = (now - last).total_seconds() / 86400.0
+    gap = float(expected_gap_days)
+    cron_on = (use_cron if use_cron is not None
+               else gap >= _JOBHB_CRON_MIN_GAP_DAYS) and bool(schedule)
+    if not cron_on:
+        return lag > gap, f"固定阈值 {gap:g} 天（lag={lag:.1f} 天）"
+    hard_cap = _JOBHB_HARD_CAP_MULT * max(gap, 1.0)
+    if lag > hard_cap:
+        return True, f"距上次成功 {lag:.1f} 天 > 硬上限 {hard_cap:.1f} 天"
+    try:
+        due1 = _next_cron_fire(schedule, last)
+        due2 = _next_cron_fire(schedule, due1) if due1 is not None else None
+        if due1 is None or due2 is None:
+            return lag > gap, "cron 无法推算应触发时刻，回退固定阈值"
+        overdue = now > due2 + timedelta(hours=_JOBHB_MISSED_FIRE_GRACE_H)
+        return overdue, (
+            f"cron={schedule} 上次成功={last:%F %T} 应触发={due1:%F %T}/{due2:%F %T} "
+            f"宽限={_JOBHB_MISSED_FIRE_GRACE_H:g}h lag={lag:.1f} 天")
+    except Exception as exc:  # noqa: BLE001 —— 解析失败必须回退而非静默
+        return lag > gap, f"cron 解析失败({type(exc).__name__})，回退固定阈值"
+
+
 def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
     """作业心跳巡检（2026-10-09 新增，2026-10-13 重构为清单驱动）。
 
@@ -447,6 +513,11 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
     新实现直接读 `app.scheduler_jobs.monitored_jobs()`——即调度器 `app/scheduler.py` 真正
     注册的**周期作业清单**，每个作业带显式 `expected_gap_days`。清单里没有的作业（退役的、
     一次性手动的）天然不监控；频率不再靠猜。新增/退役作业只改清单，心跳自动同步。
+
+    ★ 2026-11-10（CL-20261110-10 A）：周/月频不再用固定天数，改由 `ops.scheduled_task`
+    的现行 cron 推算「连续两次应触发」判定（见 `job_heartbeat_verdict`）。日频沿用固定
+    阈值。告警文案同时去掉「采集/调度链路可能停摆」这一定性——改期造成的合法空档
+    与链路停摆是两回事，误报会让人忽略真正的值得查的告警。
     """
     days = getattr(cfg, "job_heartbeat_days", 4)
     if days <= 0:
@@ -461,6 +532,18 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
                  "msg": "作业心跳清单加载失败: {0}".format(str(e)[:120])}]
     if not jobs:
         return []
+    # ★ 2026-11-10：频率单一真相是 ops.scheduled_task.schedule（scheduler_resync 每
+    # 30 分钟用它覆盖代码 CronTrigger）。字典不可读/被移除/迁移中时全部回退固定阈值，
+    # 既不静默，也不让巡检本身崩掉。
+    schedule_map: dict[str, str] = {}
+    try:
+        sched_rows = session.execute(text(
+            "SELECT task_id, schedule FROM ops.scheduled_task "
+            "WHERE enabled AND executor = 'apscheduler' AND schedule IS NOT NULL"
+        )).fetchall()
+        schedule_map = {str(t): str(s) for t, s in sched_rows}
+    except Exception:  # noqa: BLE001 —— 含测试用 FakeSession、字典缺失等
+        schedule_map = {}
     # 只查"确实注册且写 task_run"的作业类型，避免扫到退役/一次性 label 产生误报。
     types = sorted({j.task_type for j in jobs})
     try:
@@ -474,12 +557,12 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
                  "msg": "作业心跳检查失败: {0}".format(str(e)[:120])}]
 
     # 注册清单按 (task_type, label) 建索引；label 允许空串（单实例作业）。
-    reg: dict[tuple[str, str], int] = {(j.task_type, j.label): j.expected_gap_days for j in jobs}
     last_map: dict[tuple[str, str], object] = {}
     for task, label, last in rows:
         last_map[(str(task), str(label) if label is not None else "")] = last
 
-    for (tt, lb), thr in reg.items():
+    for j in jobs:
+        tt, lb = j.task_type, j.label
         last = last_map.get((tt, lb))
         if last is None:
             # 注册在跑但 task_run 从未成功过：可能是刚部署的新作业，或长期失败。
@@ -489,12 +572,16 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
         lag = (now - last).total_seconds() / 86400.0
-        if lag > thr:
+        overdue, detail = job_heartbeat_verdict(
+            last, now, schedule=schedule_map.get(j.job_id),
+            expected_gap_days=j.expected_gap_days)
+        if overdue:
             out.append({
                 "key": "jobhb_" + tt,
                 "level": "WARN",
-                "msg": "作业 {0}（label={1}）已 {2:.1f} 天无成功运行（最近成功 {3}，阈值 {4} 天）—— 采集/调度链路可能停摆".format(
-                    tt, lb, lag, last.date(), thr),
+                "msg": ("作业 {0}（label={1}）已 {2:.1f} 天无成功运行（最近成功 {3}）；"
+                        "判据：{4} —— 请核查该作业的 cron 注册与执行流水").format(
+                            tt, lb, lag, last.date(), detail),
             })
     return out
 

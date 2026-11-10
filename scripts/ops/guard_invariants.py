@@ -1005,6 +1005,66 @@ def _c_weekly_dow(c: Ctx) -> tuple[bool, str, str, str]:
         "星期语义错位：" + "; ".join(bad) if bad else "")
 
 
+def _c_jobhb_cron_aware(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-10 A：周/月频心跳判据必须真的按现行 cron 判定，且被接线。
+
+    只查源码字符串会重演「定义了没人用」（skill 坑 #7），所以这里做行为级对拍：
+    让生产真实判据跑改期过渡空档 / 连续漏跑 / 无字典回退 / 硬上限 / 日频固定阈值
+    六个场景，再叠加一次源码接线检查与字典 cron 可解析性检查。
+    """
+    label = "周/月频作业心跳按现行 cron 推算应触发，且判据被真实接线"
+    try:
+        import inspect  # noqa: PLC0415
+        from datetime import timezone  # noqa: PLC0415
+        from app.ops import alerting  # noqa: PLC0415
+        fn = alerting.job_heartbeat_verdict
+        src = inspect.getsource(alerting._check_job_heartbeat)
+        wired = "job_heartbeat_verdict" in src and "ops.scheduled_task" in src
+    except Exception as exc:  # noqa: BLE001
+        return False, label, f"判据导入失败 {type(exc).__name__}", str(exc)[:200]
+
+    tz = timezone(timedelta(hours=8))
+
+    def d(s: str) -> datetime:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+
+    cases = [
+        ("改期过渡空档不误报", "2026-11-01 06:06", "2026-11-10 18:00", "0 6 * * 5", 9, False),
+        ("连续错过两次应触发告警", "2026-11-01 06:06", "2026-11-15 12:00", "0 6 * * 5", 9, True),
+        ("字典无 cron 回退固定阈值", "2026-11-01 06:06", "2026-11-11 12:00", None, 9, True),
+        ("硬上限防长期静默", "2026-11-01 06:06", "2026-11-25 12:00", "0 6 * * 5", 9, True),
+        ("日频沿用固定阈值", "2026-11-08 16:20", "2026-11-12 16:20", "0 16 * * *", 3, True),
+        ("月频正常周期内不误报", "2026-11-01 06:30", "2026-11-10 18:00", "30 6 1 * *", 40, False),
+    ]
+    bad: list[str] = []
+    for name, last_s, now_s, sch, gap, want in cases:
+        try:
+            got, detail = fn(d(last_s), d(now_s), schedule=sch, expected_gap_days=gap)
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"{name}: 抛异常 {type(exc).__name__}: {exc}")
+            continue
+        if got != want:
+            bad.append(f"{name}: got={got} want={want} ({detail})")
+    if not wired:
+        bad.append("_check_job_heartbeat 未引用新判据或调度字典（定义了没人用）")
+
+    # 字典侧：周/月频作业的 cron 必须能解析，否则判据会全量回退成旧行为。
+    try:
+        from apscheduler.triggers.cron import CronTrigger  # noqa: PLC0415
+        rows = c.rows(
+            "SELECT task_id, schedule FROM ops.scheduled_task "
+            "WHERE enabled AND executor='apscheduler' AND expected_gap_days >= 7")
+        for tid, sch in rows:
+            if not sch or CronTrigger.from_crontab(sch, timezone=tz) is None:
+                bad.append(f"{tid} cron 不可解析: {sch}")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"字典 cron 校验失败 {type(exc).__name__}: {exc}")
+
+    return not bad, label, (
+        f"行为对拍 {len(cases)} 例 / 违规 {len(bad)} / wired={wired}"), (
+        "；".join(bad) if bad else "")
+
+
 def _c_daily_refresh_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """日频刷新链必须真的接通，且失败必须冒泡（CL-20261109-21）。
 
@@ -4759,6 +4819,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 作业真实触发星期比对；`1-5` 这类范围错位此前完全没被覆盖，直接让 inventory
     # 每个周一停跑。升级 block：这类错误必然静默断供，不能只当告警。
     ("OPS-WEEKLY-DOW", "DB cron 真实触发星期与代码意图一致", "block", _c_weekly_dow),
+    # CL-20261110-10 A：周频改期造成 13 天合法空档被固定 9 天阈值误报成「链路停摆」。
+    # 判据换成 cron 感知后，必须用行为对拍锁住「改期不误报 + 连续漏跑仍告警 + 真实接线」。
+    ("OPS-JOBHB-CRON-AWARE", "周/月频心跳按 cron 推算应触发且判据真实接线", "block",
+     _c_jobhb_cron_aware),
     ("OPS-DAILY-REFRESH-WIRED", "日频刷新链接通且失败冒泡", "block",
      _c_daily_refresh_wired),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
