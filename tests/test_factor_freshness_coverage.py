@@ -111,6 +111,27 @@ def test_require_rows_wired_in_scheduler(roll):
     assert "--require-rows" in src and "written == 0" in src and "fails += 1" in src
 
 
+def test_main_exit_code_on_zero_rows(roll, monkeypatch, capsys):
+    """行为级：同一份全 0 结果，带 --require-rows 退出 1，不带退出 0。"""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(roll, "trading_days", lambda s, e: [date(2026, 11, 9)])
+    monkeypatch.setattr(roll, "get_settings",
+                        lambda: SimpleNamespace(main_contracts=[SimpleNamespace(product="RB")]))
+    monkeypatch.setattr(roll.ry, "run", lambda d, p: {"RB": 0})
+    monkeypatch.setattr(roll.time, "sleep", lambda _s: None)
+
+    monkeypatch.setattr(sys, "argv", ["collect_roll_yield.py", "--start", "2026-11-09",
+                                      "--end", "2026-11-09"])
+    assert roll.main() == 0  # 手工历史回溯：不传开关，兼容旧行为
+
+    monkeypatch.setattr(sys, "argv", ["collect_roll_yield.py", "--start", "2026-11-09",
+                                      "--end", "2026-11-09", "--require-rows"])
+    assert roll.main() == 1  # 每日调度：0 行必须非零退出
+    out = capsys.readouterr().out
+    assert "EMPTY_DAY" in out and "EMPTY_DAYS=" in out
+
+
 # ------------------------------------------------------------------ E2/E3
 @pytest.mark.parametrize("vals,mn,want", [
     ([80, 81, 80, 80, 79], 1, 0),
