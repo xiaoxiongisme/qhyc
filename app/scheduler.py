@@ -1115,6 +1115,15 @@ def _v5x_close_scan_job() -> dict | None:
             f"（via={scan.get('via')}）——数据在 v5x_signal_log(notify_ok=false)，"
             f"2h 内下一轮会自动补发"
         )
+
+    # ★ CL-20261110-21：无信号的收盘根补一条「状态确认」简报。
+    #   没有它，用户整晚看不到任何推送，无法区分「策略正常」与「链路挂了」。
+    #   去重按收盘标签持久化、非交易时段静默、有信号时不重复推，
+    #   全部收敛在 brief.py，这里只负责接线。
+    if not scan.get("n_unsent"):
+        from app.strategies.v5x.brief import push_close_brief
+        with session_scope() as s2:
+            res["brief"] = push_close_brief(s2, label, res)
     return res
 
 

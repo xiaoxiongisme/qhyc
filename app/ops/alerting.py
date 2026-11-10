@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import time
@@ -31,6 +32,10 @@ _LAST_SENT: dict[str, float] = {}
 
 # 日配额计数（进程内；重启清零可接受——单次重启不会额外放大推送量）
 _DAILY_BUDGET: dict = {"day": None, "used": 0}
+
+#: 2026-11-10（CL-20261110-20）：digest 状态去重的进程内兜底。
+#: 主路径是 ops.notify_dedup（跨重启有效）；表不可用时才用它，避免巡检崩溃。
+_DIGEST_FALLBACK: dict = {"fingerprint": None, "sent_at": 0.0}
 
 
 def _budget_take(cfg: "AlertConfig") -> bool:
@@ -72,6 +77,9 @@ class AlertConfig:
     push_silence_hours: int = 36       # 预测/推送静默告警阈值（小时）
     db_restart_alert_min: int = 10     # DB uptime < 该分钟数 → 疑似崩溃重启
     cooldown_sec: int = 1800
+    #: 2026-11-10（CL-20261110-20）：状态未变化时，CRIT 最长静默多久重推一次。
+    #: 去重不能把「严重告警长期存在」也静默掉；WARN 类完全按状态变化推。
+    digest_crit_repush_hours: int = 6
     # ★ 2026-11-08（CL-20261108-23）：单日推送上限。
     #   pushplus 免费额度约 200 条/日，一旦击穿返回 code=900「用户账号使用受限」，
     #   **与告警共用同一 token 的交易信号会一并静默**（11-06 实测 60 小时）。
@@ -183,6 +191,7 @@ def alert_config_from_env() -> AlertConfig:
         push_silence_hours=_i("ALERT_PUSH_SILENCE_HOURS", 36),
         db_restart_alert_min=_i("ALERT_DB_RESTART_MIN", 10),
         cooldown_sec=_i("ALERT_COOLDOWN_SEC", 1800),
+        digest_crit_repush_hours=_i("ALERT_DIGEST_CRIT_REPUSH_HOURS", 6),
         max_per_day=_i("ALERT_MAX_PER_DAY", 80),
         notify=_b("ALERT_NOTIFY", True),
     )
@@ -532,18 +541,30 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
                  "msg": "作业心跳清单加载失败: {0}".format(str(e)[:120])}]
     if not jobs:
         return []
-    # ★ 2026-11-10：频率单一真相是 ops.scheduled_task.schedule（scheduler_resync 每
-    # 30 分钟用它覆盖代码 CronTrigger）。字典不可读/被移除/迁移中时全部回退固定阈值，
-    # 既不静默，也不让巡检本身崩掉。
-    schedule_map: dict[str, str] = {}
+    # ★ 2026-11-10（CL-20261110-20）：频率与状态源的**单一真相**是
+    #   ops.scheduled_task（scheduler_resync 每 30 分钟用它覆盖代码 CronTrigger）。
+    #   迁移 073 已把 backtest_weekly.expected_gap_days 从 9 改成 14，而
+    #   scheduler_jobs._GAP_WEEKLY 仍是 9：若继续用代码硬编码值，两套阈值并存，
+    #   合法周频空档会被固定 9 天阈值误判成停摆（11-10 15:00 实测两条 jobhb 误报）。
+    #   **跳过判据用 expected_gap_days IS NULL**（CL-20261110-13 的 no_heartbeat
+    #   口径），不是 meta.status_source：迁移 073 给 backtest_weekly 同时写了
+    #   status_source 与 gap=14，它按设计「保留心跳」，不能被跳过。
+    #   字典不可读/迁移中时全部回退代码值，既不静默也不让巡检本身崩掉。
+    task_meta: dict[str, tuple[str | None, float | None, str]] = {}
     try:
         sched_rows = session.execute(text(
-            "SELECT task_id, schedule FROM ops.scheduled_task "
-            "WHERE enabled AND executor = 'apscheduler' AND schedule IS NOT NULL"
+            "SELECT task_id, schedule, expected_gap_days, "
+            "coalesce(meta->>'status_source',''), executor "
+            "FROM ops.scheduled_task WHERE enabled"
         )).fetchall()
-        schedule_map = {str(t): str(s) for t, s in sched_rows}
+        for t, sch, gap, src, exe in sched_rows:
+            task_meta[str(t)] = (
+                str(sch) if (sch and str(exe) == "apscheduler") else None,
+                float(gap) if gap is not None else None,
+                str(src or ""),
+            )
     except Exception:  # noqa: BLE001 —— 含测试用 FakeSession、字典缺失等
-        schedule_map = {}
+        task_meta = {}
     # 只查"确实注册且写 task_run"的作业类型，避免扫到退役/一次性 label 产生误报。
     types = sorted({j.task_type for j in jobs})
     try:
@@ -563,6 +584,12 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
 
     for j in jobs:
         tt, lb = j.task_type, j.label
+        meta = task_meta.get(j.job_id)
+        if meta is not None and meta[1] is None:
+            # 字典显式置 expected_gap_days=NULL（TSDB job_stats / sync-only 实例 /
+            # python 合成等，真实状态源不在 task_run）→ 不用流水心跳判，
+            # 避免「健康作业被判停摆」。backtest_weekly gap=14 不在此列。
+            continue
         last = last_map.get((tt, lb))
         if last is None:
             # 注册在跑但 task_run 从未成功过：可能是刚部署的新作业，或长期失败。
@@ -572,9 +599,10 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
         lag = (now - last).total_seconds() / 86400.0
+        schedule, gap_db, _ = meta if meta else (None, None, "")
+        gap = gap_db if gap_db is not None else float(j.expected_gap_days)
         overdue, detail = job_heartbeat_verdict(
-            last, now, schedule=schedule_map.get(j.job_id),
-            expected_gap_days=j.expected_gap_days)
+            last, now, schedule=schedule, expected_gap_days=gap)
         if overdue:
             out.append({
                 "key": "jobhb_" + tt,
@@ -654,6 +682,91 @@ def send_alert(title: str, content: str, cfg: AlertConfig | None = None,
         return False, "推送通道异常: {0}".format(str(e)[:160])
 
 
+# ---------------------------------------------------------------------------
+# 2026-11-10（CL-20261110-20）：告警汇总「状态变化才推」
+# ---------------------------------------------------------------------------
+
+def _digest_fingerprint(findings: list[dict]) -> str:
+    """状态指纹 = 排序后的 ``(key, level)`` 集合。
+
+    **刻意不含 msg 里的 lag/时刻数值**：周频作业从「9.4 天」变「9.5 天」不是
+    状态变化；把 msg 纳入指纹会让每轮都算出新值，去重彻底失效（这正是旧版
+    ``send_alert(key="digest")`` + 1800s 冷却每 30 分钟重推一条的根因）。
+    """
+    pairs = sorted((str(f.get("key", "?")), str(f.get("level", "WARN")))
+                   for f in findings)
+    raw = "|".join(f"{k}:{lv}" for k, lv in pairs) or "OK"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _dedup_conn():
+    """独立连接读写去重表：不依赖调用方 session 的事务状态（check_all 也会被
+    ops_monitor 用 FakeSession 调用），也不把网络 IO 夹在业务事务里。"""
+    from app.core.db import get_engine
+    return get_engine()
+
+
+def _digest_last_state() -> tuple[str | None, datetime | None]:
+    """最近一次实际推送的状态；表不可用/未建时回退进程内，不阻断告警。"""
+    try:
+        with _dedup_conn().connect() as conn:
+            row = conn.execute(text(
+                "SELECT fingerprint, sent_at FROM ops.notify_dedup "
+                "WHERE kind = 'alert_digest' ORDER BY sent_at DESC LIMIT 1"
+            )).first()
+        if row is not None:
+            return (str(row[0]) if row[0] else None), row[1]
+    except Exception:  # noqa: BLE001
+        pass
+    fp = _DIGEST_FALLBACK.get("fingerprint")
+    ts = float(_DIGEST_FALLBACK.get("sent_at") or 0.0)
+    return fp, (datetime.fromtimestamp(ts, CST) if ts else None)
+
+
+def _dedup_write(kind: str, dedup_key: str, fingerprint: str | None) -> bool:
+    """写一条留痕；返回是否真的插入（去重命中时为 False）。
+
+    **只在送达成功后调用**：绝不「先占位再发送」把失败固化成已送达
+    （``_PUSH_GATE`` 与 ``V5X`` 信号都踩过这个坑）。
+    """
+    try:
+        with _dedup_conn().begin() as conn:
+            r = conn.execute(text(
+                "INSERT INTO ops.notify_dedup(kind, dedup_key, fingerprint, sent_at) "
+                "VALUES (:kind, :k, :fp, now()) "
+                "ON CONFLICT (kind, dedup_key) DO NOTHING"
+            ), {"kind": kind, "k": dedup_key, "fp": fingerprint})
+        # 表不可用时靠它兜底：否则 _digest_last_state 永远返回 None，
+        # 状态未变化也会每轮重推（刷屏原样复发）。
+        _DIGEST_FALLBACK.update(fingerprint=fingerprint, sent_at=time.time())
+        return bool(r.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[alert] 去重留痕写入失败（不阻断告警）: {0}: {1}".format(
+            type(exc).__name__, str(exc)[:100]))
+        return False
+
+
+def _should_send_digest(findings: list[dict], cfg: AlertConfig) -> tuple[bool, str, str]:
+    """返回 (是否推送, 指纹, 判据说明)。
+
+    状态变化才推；但 CRIT 长期存在时按 ``digest_crit_repush_hours`` 兜底重推，
+    否则「去重」会把严重告警一并静默，比刷屏更危险。
+    """
+    fp = _digest_fingerprint(findings)
+    last_fp, last_at = _digest_last_state()
+    if last_fp == fp and last_at is not None:
+        if last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=CST)
+        hours = (datetime.now(CST) - last_at.astimezone(CST)).total_seconds() / 3600.0
+        has_crit = any(f.get("level") == "CRIT" for f in findings)
+        if has_crit and hours >= max(1, int(cfg.digest_crit_repush_hours)):
+            return True, fp, f"CRIT 已静默 {hours:.1f}h → 超时重推"
+        return False, fp, f"状态未变化（{fp}），距上次 {hours:.1f}h → 跳过"
+    if last_fp is None:
+        return bool(findings), fp, "首次巡检"
+    return True, fp, f"状态变化 {last_fp} → {fp}"
+
+
 def _render_digest(findings: list[dict]) -> tuple[str, str]:
     """把一轮巡检的全部发现合并成一条消息（标题, 正文）。"""
     crit = any(f.get("level") == "CRIT" for f in findings)
@@ -697,15 +810,36 @@ def check_all(session=None, cfg: AlertConfig | None = None) -> dict:
     alerts = []
     if findings:
         # ★ 2026-11-08（CL-20261108-23）：一轮巡检合并为**单条 digest**。
-        #   原先每个 finding 单独发送：6 个数据源同时滞后 = 6 条/轮 × 48 轮/日 ≈ 288 条/日，
-        #   2026-11-06 实测当天推送 206 条 [alert]，击穿 pushplus 额度后返回
-        #   code=900「用户账号使用受限」，把共用同一 token 的**交易信号**一起打成静默
-        #   （fusion_push_log 11-06 11:01 起 7 条全部未送达，直到 11-08 才恢复）。
-        #   合并后单轮上限 1 条，信息不丢（逐项列出，key 仍在正文里可检索）。
-        title, content = _render_digest(findings)
-        ok, note = send_alert(title, content, cfg, key="digest")
-        alerts = [{"key": f["key"], "level": f["level"], "sent": ok, "note": note}
-                  for f in findings]
+        #   原先每个 finding 单独发送：6 个数据源同时滞后 = 6 条/轮 × 48 轮/日 ≈ 288 条/日。
+        # ★ 2026-11-10（CL-20261110-20）：合并还不够——旧版 send_alert(key="digest")
+        #   的 1800s 冷却恰好等于 ALERT_INTERVAL_MIN=30，**状态没变化也每 30 分钟
+        #   重推一条**；11-10 实测 20 条重复告警，11-06 曾刷爆 pushplus 额度
+        #   导致交易信号静默 2.5 天。改为「状态指纹变化才推」+ CRIT 超时兜底。
+        should, fp, reason = _should_send_digest(findings, cfg)
+        logger.info(f"[alert] digest 判据：{reason}")
+        if should:
+            title, content = _render_digest(findings)
+            # 不再传 key="digest"：冷却交给状态指纹，避免状态真变化时被 1800s
+            # 冷却误挡（两套限流叠加会漏掉新出现的异常）。
+            ok, note = send_alert(title, content, cfg)
+            if ok:
+                _dedup_write("alert_digest",
+                             datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S.%f"), fp)
+            alerts = [{"key": f["key"], "level": f["level"], "sent": ok, "note": note}
+                      for f in findings]
+        else:
+            alerts = [{"key": f["key"], "level": f["level"], "sent": False,
+                       "note": f"状态未变化，跳过：{reason}"} for f in findings]
+    else:
+        # 异常 → 正常只写一条 OK 留痕，**不推恢复通知**（本轮目标就是降噪，
+        # 且 OPS-PUSH-QUOTA 锁死 check_all 内 send_alert 恰好 1 处）。
+        # 不留痕的话，下次异常出现时会误以为状态从没变过。
+        # 当前已正常且上次也正常时，一行都不写、一条都不推。
+        last_fp, _ = _digest_last_state()
+        ok_fp = _digest_fingerprint([])
+        if last_fp not in (None, ok_fp):
+            _dedup_write("alert_digest",
+                         datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S.%f"), ok_fp)
     crit = sum(1 for f in findings if f["level"] == "CRIT")
     return {
         "enabled": True, "findings": findings, "alerts": alerts,

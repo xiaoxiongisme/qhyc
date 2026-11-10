@@ -5477,6 +5477,279 @@ def _c_reaped_abort_only(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad) + " → 见 CL-20261110-13")
 
 
+def _c_alert_digest_dedup(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-20：告警汇总必须「状态变化才推」，且持久化去重真接线。
+
+    旧版 ``send_alert(key="digest")`` 冷却 1800s == ALERT_INTERVAL_MIN=30，
+    状态没变化也每 30 分钟重推一条（11-10 实测 20 条），曾刷爆 pushplus
+    额度让交易信号静默 2.5 天。只改注释/只加冷却都挡不住，必须 AST 判真实门控。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "告警汇总按状态指纹去重（不是每 30 分钟重推）"
+    p = Path(__file__).resolve().parents[2] / "app" / "ops" / "alerting.py"
+    bad, obs = [], []
+    try:
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+    if not any(isinstance(n, ast.FunctionDef) and n.name == "_digest_fingerprint"
+               for n in tree.body):
+        bad.append("缺 _digest_fingerprint 状态指纹")
+    else:
+        obs.append("状态指纹存在")
+
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+               and n.name == "check_all"), None)
+    if fn is None:
+        bad.append("check_all 不存在")
+    else:
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name)]
+        if not any(n.func.id == "_should_send_digest" for n in calls):
+            bad.append("check_all 未真实调用 _should_send_digest")
+        else:
+            obs.append("状态门真接线")
+        legacy = [n for n in calls if n.func.id == "send_alert" and any(
+            kw.arg == "key" and isinstance(kw.value, ast.Constant)
+            and kw.value.value == "digest" for kw in n.keywords)]
+        if legacy:
+            bad.append("仍使用 send_alert(key='digest') 旧 1800s 冷却")
+        else:
+            obs.append("旧冷却已摘除")
+        guarded = any(
+            isinstance(x, ast.If) and any(
+                isinstance(y, ast.Call) and isinstance(y.func, ast.Name)
+                and y.func.id == "send_alert" for z in x.body for y in ast.walk(z))
+            for x in ast.walk(fn))
+        if not guarded:
+            bad.append("send_alert 未受条件门控制")
+        else:
+            obs.append("推送受条件门控制")
+
+    # 持久化去重：表存在 + 近 24h 实际推送留痕 ≤ 8（旧行为约 48 条/日）
+    try:
+        tbl = c.rows("SELECT to_regclass('ops.notify_dedup')")[0][0]
+        if not tbl:
+            bad.append("ops.notify_dedup 未建")
+        else:
+            n = int(c.rows("""
+                SELECT count(*) FROM ops.notify_dedup
+                WHERE kind='alert_digest' AND sent_at >= now() - interval '24 hours'
+            """)[0][0])
+            if n > 8:
+                bad.append(f"近 24h digest 推送 {n} 条（去重失效/刷屏复发）")
+            else:
+                obs.append(f"近24h digest 留痕 {n} 行")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-20")
+
+
+def _c_jobhb_status_source(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-20：心跳频率/阈值以 ops.scheduled_task 为单一真相。
+
+    迁移 073 把 backtest_weekly 的 expected_gap_days 改成 14，代码
+    scheduler_jobs._GAP_WEEKLY 仍是 9；若巡检继续用代码值，合法周频空档
+    会被固定 9 天阈值误判成停摆（11-10 15:00 两条 jobhb 误报）。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "作业心跳以 DB 字典 cron/阈值为准且尊重 status_source"
+    p = Path(__file__).resolve().parents[2] / "app" / "ops" / "alerting.py"
+    bad, obs = [], []
+    try:
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+               and n.name == "_check_job_heartbeat"), None)
+    if fn is None:
+        bad.append("_check_job_heartbeat 不存在")
+    else:
+        consts = [n.value for n in ast.walk(fn) if isinstance(n, ast.Constant)
+                  and isinstance(n.value, str)]
+        if not any("expected_gap_days" in s and "scheduled_task" in s for s in consts):
+            bad.append("SQL 未从 ops.scheduled_task 读取 expected_gap_days")
+        else:
+            obs.append("阈值取自 DB 字典")
+        vc = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Name)
+              and n.func.id == "job_heartbeat_verdict"]
+        if not vc or not any(any(
+                kw.arg == "expected_gap_days" and isinstance(kw.value, ast.Name)
+                and kw.value.id == "gap" for kw in n.keywords) for n in vc):
+            bad.append("verdict 仍用代码硬编码阈值")
+        else:
+            obs.append("verdict 用 DB gap")
+        if not any(isinstance(n, ast.Continue) for n in ast.walk(fn)):
+            bad.append("缺 no_heartbeat（gap IS NULL）跳过分支")
+        else:
+            obs.append("非流水作业跳过心跳")
+    try:
+        rows = c.rows("""
+            SELECT (SELECT expected_gap_days FROM ops.scheduled_task
+                     WHERE task_id='backtest_weekly'),
+                   (SELECT count(*) FROM ops.scheduled_task
+                     WHERE task_id IN ('lstm_weekly_retrain',
+                                       'transmission_weekly_recalc','backtest_weekly')
+                       AND schedule IS NOT NULL),
+                   (SELECT count(*) FROM ops.scheduled_task
+                     WHERE meta->>'status_source' IS NOT NULL
+                       AND expected_gap_days IS NULL)
+        """)
+        gap, n_cron, n_no_hb = (int(x or 0) for x in rows[0])
+        if gap != 14:
+            bad.append(f"backtest_weekly 字典阈值 {gap} ≠ 14（DB 非单一真相）")
+        else:
+            obs.append("DB 阈值=14")
+        if n_cron < 3:
+            bad.append(f"仅 {n_cron}/3 条周频作业有 cron")
+        # backtest_weekly 按迁移 073 设计「保留心跳」，不能要求 status_source 与
+        # gap 互斥；这里只确认 -13 的 no_heartbeat 声明作业仍然存在。
+        if n_no_hb < 1:
+            bad.append("CL-20261110-13 的 no_heartbeat 声明作业已消失")
+        else:
+            obs.append(f"no_heartbeat 声明 {n_no_hb} 条")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-20")
+
+
+def _c_git_sync_env_guard(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-20：一致性检查必须先判宿主环境。
+
+    qhyc-api 容器内无 git/docker，误跑会抛 Errno 2 并推「一致性检查失败」
+    假告警；宿主 09:00 crontab 本身 success。环境不适用 ≠ 仓库漂移。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "一致性检查有宿主环境自检，容器内误跑不推假告警"
+    p = Path(__file__).resolve().parents[2] / "scripts" / "check_git_prod_sync.py"
+    bad, obs = [], []
+    try:
+        tree = ast.parse(p.read_text(encoding="utf-8", errors="ignore"))
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+    main = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                 and n.name == "main"), None)
+    envfn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "_host_env_precheck"), None)
+    if envfn is None or not any(
+            isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and "/.dockerenv" in n.value for n in ast.walk(envfn)):
+        bad.append("环境自检未判断 /.dockerenv")
+    else:
+        obs.append("容器判据存在")
+    if main is None:
+        bad.append("main 不存在")
+    else:
+        if not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == "_host_env_precheck" for n in ast.walk(main)):
+            bad.append("main 未调用环境自检")
+        else:
+            obs.append("main 真接线")
+        skip_ok = False
+        for n in ast.walk(main):
+            if not isinstance(n, ast.If):
+                continue
+            body_calls = [y.func.id for x in n.body for y in ast.walk(x)
+                          if isinstance(y, ast.Call) and isinstance(y.func, ast.Name)]
+            has_ret0 = any(isinstance(y, ast.Return)
+                           and isinstance(y.value, ast.Constant)
+                           and y.value.value == 0
+                           for x in n.body for y in ast.walk(x))
+            if has_ret0 and "_alert" not in body_calls:
+                skip_ok = True
+                break
+        if not skip_ok:
+            bad.append("容器 SKIP 分支仍会推告警或不存在")
+        else:
+            obs.append("SKIP 分支不推告警")
+    try:
+        n = int(c.rows("""
+            SELECT count(*) FROM ops.scheduled_task_run
+            WHERE task_id='cron_git_sync_check'
+              AND started_at >= now() - interval '24 hours'
+              AND status <> 'success'
+              AND (message ILIKE '%无法 fetch%' OR message ILIKE '%Errno 2%')
+        """)[0][0])
+        if n:
+            bad.append(f"近 24h 仍有 {n} 条 Errno 2 假告警流水")
+        else:
+            obs.append("近24h 无 Errno2 失败")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-20/22")
+
+
+def _c_v5x_brief_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261110-21：收盘链必须真接线状态简报，且去重/静默/持仓复用都真实。
+
+    防「简报写了但从没被调用」与「去重失效每根 K 线刷屏」两种复发形态。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "收盘链后真接线 V5X 状态简报（去重/静默/持仓复用）"
+    root = Path(__file__).resolve().parents[2]
+    bad, obs = [], []
+    try:
+        sch = ast.parse((root / "app" / "scheduler.py").read_text(
+            encoding="utf-8", errors="ignore"))
+        job = next((n for n in ast.walk(sch) if isinstance(n, ast.FunctionDef)
+                    and n.name == "_v5x_close_scan_job"), None)
+        if job is None or not any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "push_close_brief" for n in ast.walk(job)):
+            bad.append("_v5x_close_scan_job 未真实调用 push_close_brief")
+        else:
+            obs.append("收盘链真接线")
+        bp = root / "app" / "strategies" / "v5x" / "brief.py"
+        br = ast.parse(bp.read_text(encoding="utf-8", errors="ignore"))
+        br_calls = {n.func.id for n in ast.walk(br)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        for need in ("send_notify", "theoretical_positions",
+                     "is_hourly_collection_allowed"):
+            if need not in br_calls:
+                bad.append(f"brief.py 缺真实调用 {need}")
+        if all(x in br_calls for x in ("send_notify", "theoretical_positions",
+                                       "is_hourly_collection_allowed")):
+            obs.append("推送/重放/时段门齐全")
+        consts = [n.value for n in ast.walk(br) if isinstance(n, ast.Constant)
+                  and isinstance(n.value, str)]
+        if not any("ops.notify_dedup" in s for s in consts) or not any(
+                "ON CONFLICT" in s for s in consts):
+            bad.append("brief.py 缺持久化去重 SQL")
+        else:
+            obs.append("去重 SQL 存在")
+        if not any(isinstance(n, ast.Raise) for n in ast.walk(br)):
+            bad.append("推送失败未外抛（会被记成 success）")
+        else:
+            obs.append("失败外抛")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+    try:
+        tbl = c.rows("SELECT to_regclass('ops.notify_dedup')")[0][0]
+        if not tbl:
+            bad.append("ops.notify_dedup 未建")
+        else:
+            n = int(c.rows("""
+                SELECT count(*) FROM ops.notify_dedup
+                WHERE kind='v5x_brief' AND sent_at >= now() - interval '24 hours'
+            """)[0][0])
+            if n > 12:
+                bad.append(f"近 24h 简报 {n} 条 > 收盘标签上限（去重失效）")
+            else:
+                obs.append(f"近24h 简报 {n} 条")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261110-21")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -5748,6 +6021,17 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_task_status_source),
     ("OPS-REAPED-ABORT-ONLY", "aborted 仅为重启自愈遗留且无僵尸 running",
      "block", _c_reaped_abort_only),
+    # CL-20261110-20：告警刷屏（20 条/日重复 digest）与 jobhb 周频误报，
+    # 两条都让交易信号被埋；git 一致性检查在容器内误跑还会推假告警。
+    ("OPS-ALERT-DIGEST-DEDUP", "告警汇总按状态指纹去重，不是每 30 分钟重推",
+     "block", _c_alert_digest_dedup),
+    ("OPS-JOBHB-STATUS-SOURCE", "心跳阈值/状态源以 ops.scheduled_task 为单一真相",
+     "block", _c_jobhb_status_source),
+    ("OPS-GIT-SYNC-ENV-GUARD", "一致性检查有宿主环境自检，容器内误跑不推假告警",
+     "block", _c_git_sync_env_guard),
+    # CL-20261110-21：无信号的收盘根原本完全静默，用户看不到任何推送。
+    ("OPS-V5X-BRIEF-WIRED", "收盘链真接线 V5X 状态简报且去重/静默齐全",
+     "block", _c_v5x_brief_wired),
 ]
 
 

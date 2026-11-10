@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -57,6 +58,24 @@ DEPLOY_MARK = ".deployed_sha"
 START_TOLERANCE_SEC = 5.0
 #: C5 抽查的进程内代码文件（相对仓库根 /app 挂载根同路径）
 PROBE_FILE = "app/ingest/synthesizer.py"
+
+
+def _host_env_precheck() -> tuple[bool, str, bool]:
+    """返回 ``(是否可执行, 说明, 是否在容器内)``。
+
+    ★ 2026-11-10（CL-20261110-20）：qhyc-api 容器内既无 ``git`` 也无 ``docker``
+    CLI。在那里跑本脚本，fetch 阶段就抛 ``[Errno 2] No such file or directory:
+    'git'``，被 ``main`` 的 except 包装成「无法 fetch origin/cb/dev」并**主动推
+    一条微信假告警**；而宿主 09:00 crontab 用宿主 venv python 跑，当日
+    ``success / exit=0``，日志与流水全绿。环境不适用 ≠ 仓库漂移，必须先分清。
+    """
+    in_container = Path("/.dockerenv").exists()
+    missing = [n for n, p in (("git", shutil.which("git")),
+                              ("docker", shutil.which("docker"))) if not p]
+    hint = ("本脚本须在生产宿主 / systemd 环境执行（依赖宿主 git + docker CLI）；"
+            f"当前缺失：{','.join(missing) or '无'}"
+            + ("；检测到 /.dockerenv，当前在容器内" if in_container else ""))
+    return (not in_container and not missing), hint, in_container
 
 
 def _sh(cmd: str, timeout: int = 60) -> str:
@@ -170,6 +189,18 @@ def main() -> int:
     args = ap.parse_args()
 
     print(f"[sync] repo={args.repo} expect_branch={args.branch}")
+
+    # -1) 宿主环境自检（CL-20261110-20）：容器内误跑不推假告警，也不算漂移。
+    env_ok, hint, in_container = _host_env_precheck()
+    if not env_ok:
+        if in_container:
+            print(f"[sync] SKIP {hint} —— 环境不适用，不视为仓库漂移、不推告警")
+            return 0
+        msg = f"宿主环境缺依赖：{hint}"
+        print(f"[sync] ERROR {msg}")
+        if not args.no_alert:
+            _alert("[QHYC] 一致性检查环境异常", msg)
+        return 2
 
     # 0) fetch：把远端最新引用拉下来（只更新 refs，不动工作树）
     try:
