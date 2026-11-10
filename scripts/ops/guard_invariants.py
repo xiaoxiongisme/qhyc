@@ -5336,12 +5336,16 @@ def _c_task_status_source(c: Ctx) -> tuple[bool, str, str, str]:
         if not unknown and not empty:
             obs.append(f"声明来源 {len(rows)} 个全部合规")
 
-        # 真正防「置 NULL 掩盖停摆」：近 24h 有 >=20 次 success 流水的作业
-        # 明明由流水监控，就绝不能 expected_gap_days=NULL。低频/月频作业
-        # （既有 no_heartbeat 共 19 个）不受影响，不误伤历史设计。
+        # 真正防「置 NULL 掩盖停摆」：apscheduler/crontab 里近 24h 有 >=20 次
+        # success 流水、又没声明状态源的作业，绝不能 expected_gap_days=NULL。
+        # manual / stored_proc / systemd / timescaledb_job 既有 no_heartbeat 共 19 个
+        # （含高频 v5x_scan，其存活由 V5X-LIVE-WIRED 等断言覆盖）不受影响，
+        # 避免本轮改造误伤历史设计。
         masked = c.rows("""
             SELECT t.task_id FROM ops.scheduled_task t
             WHERE t.enabled AND t.expected_gap_days IS NULL
+              AND t.executor IN ('apscheduler', 'crontab')
+              AND coalesce(t.meta->>'status_source', '') = ''
               AND (SELECT count(*) FROM ops.scheduled_task_run r
                     WHERE r.task_id = t.task_id AND r.status = 'success'
                       AND r.started_at >= now() - interval '24 hours') >= 20
