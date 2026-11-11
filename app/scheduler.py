@@ -2051,6 +2051,21 @@ def _build_scheduler() -> BlockingScheduler:
     logger.info("[scheduler] registered v5x_hourly_brief at 0 * * * * "
                 "(trading-hours gated)")
 
+    # CL-20261111-02：周期 reaper——补充仅启动跑一次的 _reap_stale_running。
+    # 每 30 分钟收尾「启动前遗留」的 running 僵尸（started_at < 本进程启动时刻），
+    # 绝不触碰本进程的活作业（零误伤）。本进程内卡死作业由 OPS-REAPED-ABORT-ONLY 告警。
+    sched.add_job(
+        _reap_stale_running_periodic,
+        trigger=IntervalTrigger(minutes=30),
+        id="reap_stale_running_periodic",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
+    )
+    logger.info("[scheduler] registered reap_stale_running_periodic every 30min "
+                "(boot-time-keyed, prior-process zombies only)")
+
     # V5X 理论持仓快照（CL-20261109-08）：日盘收盘后推一份「按规则现在
     # 应该持有什么」。V5X 是无状态回放，只推事件不推持仓 —— V3.4 停用后
     # 「盘前预播报」承担的持仓告知整体消失，用户漏看一条 CLOSE 就与统计永久错位。
@@ -3574,6 +3589,42 @@ def _reap_stale_running() -> None:
                 f"（进程重启打断正在执行的作业所致，非任务故障）")
     except Exception as e:  # noqa: BLE001 —— 记账清理失败绝不阻断启动
         logger.warning(f"[scheduler] 启动自愈清理 running 记录失败（忽略，不阻断启动）: {e}")
+
+
+# 进程启动时刻，供周期 reaper 区分「上一进程遗留」与「本进程活作业」（CL-20261111-02）。
+_SCHEDULER_BOOT_AT = datetime.now(timezone.utc)
+
+
+def _reap_stale_running_periodic() -> None:
+    """周期自愈（CL-20261111-02）：补充仅启动跑一次的 ``_reap_stale_running``。
+
+    ``_reap_stale_running`` 只在启动时执行一次，依赖「启动瞬间本进程尚无活作业 ⇒ 库里
+    running 全是上一进程遗物」的不变式。若上一进程崩溃残留的 running 记录因极端竞态/异常
+    写回而逃过启动自愈，只能等下次重启才被收尾。周期 reaper 每 30 分钟再扫一遍：只动
+    ``started_at`` 早于本进程启动时刻的 running——这些必然是已被 kill 的上一进程的遗物，
+    绝不会是本进程的活作业，故零误伤。本进程内卡死的作业（finish 永不被调用）由
+    OPS-REAPED-ABORT-ONLY（running>2h 告警）发现，需重启清理；自动重跑需心跳，本期不做。
+    """
+    from sqlalchemy import text as _text
+
+    try:
+        from app.core.db import get_session_factory
+        with get_session_factory()() as s:
+            n = s.execute(_text(
+                "UPDATE ops.scheduled_task_run SET "
+                "  status = 'aborted', "
+                "  finished_at = COALESCE(finished_at, now()), "
+                "  message = COALESCE(message, '') || ' [reaped: 周期自愈-启动前遗留]' "
+                "WHERE status = 'running'"
+                "  AND started_at < :boot"
+            ), {"boot": _SCHEDULER_BOOT_AT}).rowcount
+            s.commit()
+        if n:
+            logger.warning(
+                f"[scheduler] 周期自愈：{n} 条启动前遗留 running 记录已置 aborted"
+                f"（上一进程崩溃残留，非任务故障）")
+    except Exception as e:  # noqa: BLE001 —— 记账清理失败绝不阻断调度
+        logger.warning(f"[scheduler] 周期自愈清理 running 记录失败（忽略）: {e}")
 
 
 def main() -> None:

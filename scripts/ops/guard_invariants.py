@@ -5577,6 +5577,40 @@ def _c_reaped_abort_only(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad) + " → 见 CL-20261110-13")
 
 
+def _c_reaper_periodic_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261111-02：周期 reaper 必须真接线（函数定义 + scheduler 注册齐全）。
+
+    防「_reap_stale_running 仅启动跑一次的设计缺陷」复发：周期 reaper 每 30 分钟收尾
+    启动前遗留的 running 僵尸。若函数写了却没注册作业，僵尸只能等重启才清，缺陷重现。
+    同时要求函数体含 ``started_at <`` 判定——确保它只清「启动前遗留」（零误伤活作业），
+    而非无差别把全部 running 置 aborted（那会污染监控，正是 OPS-REAPED-ABORT-ONLY 防的）。
+    """
+    label = "周期 reaper 真接线（函数 + scheduler 注册 + 启动前判定）"
+    root = Path(__file__).resolve().parents[2]
+    bad, obs = [], []
+    try:
+        src = (root / "app" / "scheduler.py").read_text(
+            encoding="utf-8", errors="ignore")
+        if "_reap_stale_running_periodic" not in src:
+            bad.append("scheduler.py 未定义 _reap_stale_running_periodic")
+        else:
+            obs.append("函数已定义")
+        if 'id="reap_stale_running_periodic"' not in src \
+                and "id='reap_stale_running_periodic'" not in src:
+            bad.append("sched.add_job 未注册 id=reap_stale_running_periodic")
+        else:
+            obs.append("作业已注册")
+        if "started_at <" not in src:
+            bad.append("_reap_stale_running_periodic 未含 started_at 启动前判定"
+                       "（会误伤活作业）")
+        else:
+            obs.append("含 started_at 启动前判定")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+    return (not bad), label, "；".join(obs) or "—", (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261111-02")
+
+
 def _c_alert_digest_dedup(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261110-20：告警汇总必须「状态变化才推」，且持久化去重真接线。
 
@@ -6193,6 +6227,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_task_status_source),
     ("OPS-REAPED-ABORT-ONLY", "aborted 仅为重启自愈遗留且无僵尸 running",
      "block", _c_reaped_abort_only),
+    # CL-20261111-02：_reap_stale_running 原仅启动跑一次，上一进程崩溃残留的 running
+    # 僵尸若逃过启动自愈只能等下次重启才清。周期 reaper 每 30 分钟补扫「启动前遗留」僵尸，
+    # 且必须零误伤活作业（started_at<启动时刻判定）。断言锁住真接线，防缺陷静默复发。
+    ("OPS-REAPER-PERIODIC-WIRED", "周期 reaper 真接线（函数+注册+启动前判定）",
+     "block", _c_reaper_periodic_wired),
     # CL-20261110-20：告警刷屏（20 条/日重复 digest）与 jobhb 周频误报，
     # 两条都让交易信号被埋；git 一致性检查在容器内误跑还会推假告警。
     ("OPS-ALERT-DIGEST-DEDUP", "告警汇总按状态指纹去重，不是每 30 分钟重推",
