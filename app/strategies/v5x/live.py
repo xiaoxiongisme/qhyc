@@ -631,13 +631,28 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False) -> tuple[str, 
         s = str(bt).replace("+08:00", "").replace("+00:00", "").strip()
         return s[:16] if len(s) >= 16 else s
 
+    # 品种中文名（按需查 dim_variety，带缓存；查不到则回退到代码本身）。
+    # 不进循环里反复 import：模块级惰性取一次即可。
+    try:
+        from app.data.barstore import variety_spec
+
+        def _cn(sym: str) -> str:
+            try:
+                return variety_spec(sym).get("variety_name") or sym
+            except Exception:
+                return sym
+    except Exception:  # pragma: no cover - 极端情况下保证推送不崩
+        def _cn(sym: str) -> str:
+            return sym
+
     lines: list[str] = []
     for s in sorted(sigs, key=lambda x: (x.action != "OPEN", x.symbol)):
         label = action_cn.get((s.action, s.side), f"{s.action} {s.side}")
-        lines.append(f"{icon.get(s.action, '•')} {label} {s.symbol}")
+        cn = _cn(s.symbol)
+        # 品种中文名直接跟在代码后，一眼可读；BA 后复权价/偏移属内部记账口径，
+        # 不写入推送正文（已在 v5x_signal_log 的 price_ba/adj_offset 留档）。
+        lines.append(f"{icon.get(s.action, '•')} {label} {s.symbol}（{cn}）")
         lines.append(f"   成交价：{s.price_real:,.2f}（合约价）")
-        # BA 后复权价是内部记账口径，仅对账用；降级为脚注，避免与真实成交价混淆
-        lines.append(f"   后复权参考：{s.price_ba:,.2f}（复权偏移 {s.adj_offset:+,.2f}，仅对账）")
         if s.stop_real is not None:
             lines.append(f"   止损位：{s.stop_real:,.2f}")
         if s.action == "CLOSE":
@@ -656,8 +671,7 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False) -> tuple[str, 
         lines.append("⚠️ 补推：以上 bar 的收盘时刻早于本次推送（前一轮推送失败，已自动补发）。"
                      "价格可能已不可用，请勿直接照此下单。")
     lines.append("")
-    lines.append("口径：V5X.3 · t-1 门控（hvol/簇冲击/体制均只用 ≤T-1 日线），"
-                 "BA 后复权信号 + 真实价反解；同根收盘成交假设，偏乐观。")
+    # 口径（BA 后复权 / 真实价反解等内部记账口径）不写进推送正文，仅在 v5x_signal_log 留档。
     lines.append("⚠️ 本策略只出信号，不下单、不维护持仓；是否交易由你决定。")
     return title, "\n".join(lines)
 
