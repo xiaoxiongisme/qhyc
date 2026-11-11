@@ -337,6 +337,13 @@ def synth_8888(cur, exchange, variety, amt_caliber="true", front=None, carry=Non
         cum_s = pd.Series(0.0, index=front.index)
     else:
         cum_s = front["dd"].map(daily_cum).fillna(0.0).astype("float64")
+    # ⚠ 负值预期（CL-20261111-03 / P0-2）：本函数合成的是**后复权连续合约**，
+    # close = 主力价 − 累计换月偏移(cum_s)。老品种（JD 2013 上市、RU 1990s、J/RB/CJ/LH/FB…）
+    # 多年换月累计偏移达数千点 → 当下后复权价 = 现价 − 偏移 = **负数**，这是后复权序列的
+    # **标准形态**（如 RB/FU/J 偏移小则仍为正）。负值**不是数据损坏**：8888 指数连的唯一
+    # 消费者是换月 ratio 门（sp_build_l2_roll_segment 用价格**变化量** idx_delta，常数偏移
+    # 不影响差值），且 fusion_kline 只读主连 bar_60m、绝不消费 8888 绝对值/收益率。
+    # 切勿为「让价格变正」而把 cum_s 归零重算——那会破坏与历史及换月检测的连续性。
     cont = pd.DataFrame({
         "open": front["open"] - cum_s, "high": front["high"] - cum_s,
         "low": front["low"] - cum_s, "close": front["close"] - cum_s,
