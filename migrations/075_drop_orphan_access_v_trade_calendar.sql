@@ -1,0 +1,18 @@
+-- 075: 删除孤儿视图 access.v_trade_calendar
+--
+-- 背景（CL-20261111-08）
+-- 数据层审计发现：``access.v_trade_calendar`` 是建立在 ``l3_ref.trade_calendar`` 上的
+-- 1:1 镜像视图（定义见 db_layering_migrate.sql:233），但：
+--   1) 全仓代码 0 引用（仅 db_layering_migrate.sql 一处定义）；
+--   2) PG 依赖树显示 0 个下游对象依赖它（access 接入层其它视图如 v_bar_60m_main
+--      均被守卫/应用消费，唯独它无人使用）；
+--   3) 真正的存活交易日历视图是 ``public.trade_calendar``（定义 = SELECT ... FROM
+--      l3_ref.trade_calendar），它才是 v5x/context.py 实际读取的对象。
+-- 因此 ``access.v_trade_calendar`` 是纯冗余孤儿视图，可安全删除。
+--
+-- ⚠ 注意：``l3_ref.trade_calendar`` 本身**不是**孤儿——它是 ``public.trade_calendar``
+-- 视图的存储基表，删除它会导致 v5x 那条视图失效、生产报错，故**绝不删**基表。
+--
+-- 回滚：若外部接入层确有消费方，``CREATE OR REPLACE VIEW access.v_trade_calendar AS
+--        SELECT * FROM l3_ref.trade_calendar;`` 即可恢复（幂等）。
+DROP VIEW IF EXISTS access.v_trade_calendar;
