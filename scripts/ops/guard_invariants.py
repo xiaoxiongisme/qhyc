@@ -5750,6 +5750,60 @@ def _c_v5x_brief_wired(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad) + " → 见 CL-20261110-21")
 
 
+def _c_v5x_hourlybrief_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261111-01：每小时状态简报必须真接线（函数定义 + scheduler 调用 + DB 行）。
+
+    防「函数写了但从没被调度」「scheduler 没注册作业」「DB 字典缺行导致 resync 不认」三类复发。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "每小时状态简报真接线（函数/scheduler/DB 行齐全）"
+    root = Path(__file__).resolve().parents[2]
+    bad, obs = [], []
+    try:
+        sch = ast.parse((root / "app" / "scheduler.py").read_text(
+            encoding="utf-8", errors="ignore"))
+        job = next((n for n in ast.walk(sch) if isinstance(n, ast.FunctionDef)
+                    and n.name == "_v5x_hourly_brief_job"), None)
+        if job is None or not any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "push_periodic_brief" for n in ast.walk(job)):
+            bad.append("_v5x_hourly_brief_job 未真实调用 push_periodic_brief")
+        else:
+            obs.append("scheduler 真接线")
+        if not any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "add_job"
+                and any(isinstance(a, ast.Constant) and a.value == "v5x_hourly_brief"
+                        for a in n.args)
+                for n in ast.walk(sch)):
+            bad.append("sched.add_job 未注册 id=v5x_hourly_brief")
+        else:
+            obs.append("作业已注册")
+        bp = root / "app" / "strategies" / "v5x" / "brief.py"
+        br = ast.parse(bp.read_text(encoding="utf-8", errors="ignore"))
+        br_defs = {n.name for n in ast.walk(br) if isinstance(n, ast.FunctionDef)}
+        if "push_periodic_brief" not in br_defs:
+            bad.append("brief.py 未定义 push_periodic_brief")
+        else:
+            obs.append("brief.py 已定义")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
+    try:
+        row = c.rows("SELECT enabled FROM ops.scheduled_task "
+                     "WHERE task_id='v5x_hourly_brief'")
+        if not row:
+            bad.append("ops.scheduled_task 无 v5x_hourly_brief 行")
+        elif not row[0][0]:
+            bad.append("v5x_hourly_brief 行 enabled=f")
+        else:
+            obs.append("DB 行存在且 enabled")
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"库内核查失败 {type(e).__name__}", str(e)[:200]
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad) + " → 见 CL-20261111-01")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -6032,6 +6086,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-21：无信号的收盘根原本完全静默，用户看不到任何推送。
     ("OPS-V5X-BRIEF-WIRED", "收盘链真接线 V5X 状态简报且去重/静默齐全",
      "block", _c_v5x_brief_wired),
+    # CL-20261111-01：每小时状态简报须真接线（函数/scheduler 注册/DB 字典行齐全）。
+    ("OPS-V5X-HOURLYBRIEF-WIRED", "每小时状态简报真接线（函数/scheduler/DB 行齐全）",
+     "block", _c_v5x_hourlybrief_wired),
 ]
 
 

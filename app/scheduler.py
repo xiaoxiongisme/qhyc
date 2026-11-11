@@ -1127,6 +1127,39 @@ def _v5x_close_scan_job() -> dict | None:
     return res
 
 
+def _v5x_hourly_brief_job() -> dict | None:
+    """V5X 每小时状态简报（CL-20261111-01）：每交易小时 top-of-hour 推一条状态确认。
+
+    独立于信号与收盘简报，保证**每个交易小时**用户都能收到「系统活着」的回执，
+    不再因「白天标签被信号占用」而整段静默（这是 P1 收盘简报与「每小时简报」
+    预期不符的根因）。触发由 apscheduler 每小时 :00 驱动，交易时段门控交给
+    ``is_hourly_collection_allowed``（非交易时段直接跳过）；与收盘简报按小时去重，
+    同小时不双推。全部收敛在 brief.py，这里只负责接线。
+    """
+    if not _switch_on("v5x_live_enabled", "QH_V5X_LIVE", default=False):
+        logger.debug("[scheduler] v5x_live_enabled=off → 跳过每小时简报")
+        return
+    now = datetime.now(_SH_TZ)
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    if not is_hourly_collection_allowed(now):
+        return
+    # top-of-hour 标签（与收盘简报的分钟级标签区分，去重键用整点）
+    label = now.replace(minute=0, second=0, microsecond=0)
+    summary = {
+        "scan": {"n_new": 0, "n_unsent": 0},
+        "coverage": (0, 0),
+        "symbols": 38,
+        "attempts": "周期",
+    }
+    from app.strategies.v5x.brief import push_periodic_brief
+    try:
+        with session_scope() as s:
+            return push_periodic_brief(s, label, summary)
+    except Exception as e:  # noqa: BLE001 —— 必须外抛，否则「简报没送达」会被记成 success
+        logger.exception(f"[scheduler] v5x hourly brief 失败：{e}")
+        raise
+
+
 def _v5x_snapshot_job() -> dict | None:
     """V5X 理论持仓快照（只读 + 推送）— CL-20261109-08。
 
@@ -2002,6 +2035,21 @@ def _build_scheduler() -> BlockingScheduler:
                 + "/".join(f"{hh:02d}:{mm:02d}:{_V5X_SCAN_SECOND:02d}"
                            for hh, mm in _V5X_CLOSE_HM)
                 + " (switch v5x_live_enabled)")
+
+    # ★ V5X 每小时状态简报（CL-20261111-01）：每交易小时 top-of-hour 一条状态确认，
+    #   独立于信号与收盘简报。cron 每小时 :00 触发，由 is_hourly_collection_allowed
+    #   门控交易时段；与收盘简报按小时去重避免同小时双推。
+    sched.add_job(
+        _v5x_hourly_brief_job,
+        trigger=CronTrigger(minute=0, second=0, timezone=settings.env.TZ),
+        id="v5x_hourly_brief",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+    logger.info("[scheduler] registered v5x_hourly_brief at 0 * * * * "
+                "(trading-hours gated)")
 
     # V5X 理论持仓快照（CL-20261109-08）：日盘收盘后推一份「按规则现在
     # 应该持有什么」。V5X 是无状态回放，只推事件不推持仓 —— V3.4 停用后

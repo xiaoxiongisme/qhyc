@@ -174,3 +174,92 @@ def push_close_brief(session, label: datetime, summary: dict,
     _claim_brief(label)
     logger.info(f"[v5x.brief] {label:%m-%d %H:%M} 已推送 via={via}")
     return {"sent": True, "via": via, "key": _key(label), "title": title}
+
+
+#: 每小时简报去重键（与收盘简报 v5x_brief 区分，避免同小时双推）
+_KIND_HOURLY = "v5x_hourly_brief"
+
+
+def _brief_seen_kind(kind: str, key: str) -> bool:
+    """指定 kind 的该去重键是否已推过。**表不可用时返回 True（不推）**。"""
+    try:
+        with _engine().connect() as conn:
+            return conn.execute(text(
+                "SELECT 1 FROM ops.notify_dedup "
+                "WHERE kind = :kind AND dedup_key = :k"
+            ), {"kind": kind, "k": key}).first() is not None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[v5x.brief] 去重表不可读（本轮不推简报）: {0}: {1}".format(
+            type(exc).__name__, str(exc)[:120]))
+        return True
+
+
+def _claim_brief_kind(kind: str, key: str) -> bool:
+    """送达成功后才写留痕。"""
+    try:
+        with _engine().begin() as conn:
+            conn.execute(text(
+                "INSERT INTO ops.notify_dedup(kind, dedup_key, fingerprint, sent_at) "
+                "VALUES (:kind, :k, 'hourly', now()) "
+                "ON CONFLICT (kind, dedup_key) DO NOTHING"
+            ), {"kind": kind, "k": key})
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[v5x.brief] 去重留痕写入失败（不影响本条已送达）: {0}".format(
+            str(exc)[:120]))
+        return False
+
+
+def _close_brief_present_for_hour(session, label: datetime) -> bool:
+    """同一小时是否已有收盘简报（v5x_brief）去重行，避免与收盘简报双推。"""
+    prefix = label.strftime("%Y-%m-%d %H:")
+    try:
+        return session.execute(text(
+            "SELECT 1 FROM ops.notify_dedup WHERE kind = 'v5x_brief' "
+            "AND dedup_key LIKE :p LIMIT 1"
+        ), {"p": prefix + "%"}).first() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def push_periodic_brief(session, label: datetime, summary: dict,
+                        *, do_push: bool = True) -> dict[str, Any]:
+    """每交易小时一条状态确认（CL-20261111-01）。
+
+    与 ``push_close_brief`` 的区别：不因为「本根有待推信号」而静默——它是独立的
+    心跳类状态确认，保证用户**每个交易小时**都能收到一条「系统活着」的回执，
+    不论该小时有没有信号。收盘简报（无信号收盘根）仍按原设计保留。
+
+    与收盘简报协作去重：若同一小时已经有收盘简报（说明该小时已由更精确的收盘
+    标签覆盖），则不再重复推，避免同小时双推。
+    """
+    from app.core.config import get_settings
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    from app.notify import send_notify
+
+    if not is_hourly_collection_allowed(label):
+        return {"sent": False, "skip": "非交易时段静默"}
+    if _close_brief_present_for_hour(session, label):
+        return {"sent": False, "skip": "同小时收盘简报已覆盖"}
+
+    hour_key = label.strftime("%Y-%m-%d %H:00")
+    if _brief_seen_kind(_KIND_HOURLY, hour_key):
+        return {"sent": False, "skip": "该小时简报已推过（或去重表不可用）"}
+
+    title, content = build_brief(session, label, summary)
+    if not do_push:
+        return {"sent": False, "skip": "dry-run", "title": title,
+                "content_preview": content[:200]}
+
+    # 备用通道与交易信号共用同一配置项（CL-20261109-06 的教训：漏传 = 单点）。
+    # CL-20261110-06 仍 deferred：用户明确暂不配 webhook，此处如实传空串。
+    fallback = getattr(get_settings().fusion, "fallback_webhook", "") or ""
+    ok, via = send_notify(title, content, fallback)
+    if not ok:
+        # 不写去重行 → 下一轮可重试；外抛让流水记 failed。
+        raise RuntimeError(
+            f"V5X 每小时简报 {hour_key} 推送失败（pushplus + fallback 均未送达，"
+            f"via={via}）—— CL-20261110-06 单通道问题，未配 webhook")
+    _claim_brief_kind(_KIND_HOURLY, hour_key)
+    logger.info(f"[v5x.brief] {hour_key} 已推送 via={via}")
+    return {"sent": True, "via": via, "key": hour_key, "title": title}
