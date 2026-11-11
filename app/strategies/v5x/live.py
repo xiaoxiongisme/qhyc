@@ -361,12 +361,25 @@ def _to_signals(sym: str, ts, off: float, orders: list[dict],
 
 def scan_once(session, symbols: list[str] | None = None, *,
               now: datetime | None = None,
-              overrides: dict | None = None) -> list[V5XSignal]:
+              overrides: dict | None = None,
+              emit_symbols: set[str] | None = None,
+              finalized: set[str] | None = None) -> list[V5XSignal]:
     """扫描一轮，返回**最后一根已收盘 bar** 产生的信号（未去重）。
 
     Args:
         symbols: 品种池；``None`` 时取 ``l3_ref.tradable_variety`` 的 38 个白名单主连。
         now: 判定「已收盘」的基准时刻，默认当前时间。``bucket <= now`` 才参与。
+        emit_symbols: **只对这些品种产出信号**，但取数仍用**完整品种池**。
+
+            为什么不能用「缩小取数池」来分批（CL-20261111-10）：
+            三道日频门里 ``_cluster_shock`` 是**横截面**的 ——
+            ``pivot_table`` 后按 ``mean(axis=1)`` 求簇内等权收益。
+            若只装 1 个品种，簇均值就退化成它自己 ⇒ 门判结果整体改变 ⇒
+            信号凭空多出/消失。所以：**门照旧在全池上算，只在「出信号」这一步按品种过滤**。
+        finalized: **只对这些品种允许产出信号**；``None`` 表示不做此限制。
+            与 ``emit_symbols`` 的区别：后者是「主动分批」（首批/次批），
+            前者是「安全阀」—— 品种的这根 bar **尚未定稿**时，无论哪条路径
+            （收盘链 or :05/:35 兜底）都**不许**用它出信号。
     """
     now = now or datetime.now()
     md, symbols = _load(session, symbols, (now + timedelta(days=1)).date())
@@ -378,6 +391,7 @@ def scan_once(session, symbols: list[str] | None = None, *,
     sigs: list[V5XSignal] = []
     skipped: list[str] = []
     n_partial = 0
+    n_suppressed = 0
     # 完备性门（CL-20261109-17）：只有分钟数据覆盖到桶尾的 bar 才算「已收盘」。
     # 拿不到某品种的 L0 记录时退化为 now（不额外限制），但会把次数记进 diagnostics ——
     # 静默退化会让整池「看起来都有信号」或「看起来都没信号」，两种情况都查不出原因。
@@ -394,8 +408,14 @@ def scan_once(session, symbols: list[str] | None = None, *,
         cm = complete_max.get(sym)
         if cm is not None and cm < cap:
             cap = cm
-        n_dropped = int((df["bucket"] > cap).sum())
-        if n_dropped:
+        # ★ 这里的「丢弃」是**正常的**：df 是 540 天历史，凡 bucket > cap 的都是
+        #   尚未收盘的 bar，本来就不该参与。真正有意义的是「**最后一根** bar
+        #   是否被 cap 挡住了」—— 那才说明这根 bar 的分钟还没到齐。
+        #   原实现用「有 bar 被丢」当计数 ⇒ 每个品种恒 +1（38 个品种恒报 38），
+        #   于是这条日志**完全无法用于排查**（2026-11-11 定位滞后根因时被它带偏过，
+        #   误以为「26 品种降级」是分钟没到齐，实际那 26 个来自别处）。
+        #   改成只统计「最后一根被挡」的品种，口径才与文案一致。
+        if len(df) and pd.Timestamp(df["bucket"].iloc[-1]) > cap:
             n_partial += 1
         df = df[df["bucket"] <= cap].reset_index(drop=True)
         # ★ 只吃「合法 60m 网格标签」（2026-11-09，CL-20261109-19）。
@@ -432,14 +452,27 @@ def scan_once(session, symbols: list[str] | None = None, *,
         if last is None:
             continue
         ts, off, orders = last
-        if orders:
+        # ★ 安全阀（CL-20261111-10）：这根 bar 尚未定稿 ⇒ **不许**出信号。
+        #   落库即用 dedupe_key 把结果**永久固化**（同一根 bar 的重算再也进不来），
+        #   而残缺 bar 算出的信号可能是**错的** ⇒ 不可逆的污染。
+        #   这条对**所有**扫描路径生效（含 :05/:35 兜底），否则兜底那条路
+        #   会把「用半截数据算出的错信号」固化下来，比漏推更糟。
+        not_final = finalized is not None and sym not in finalized
+        if orders and not (emit_symbols is not None and sym not in emit_symbols) \
+                and not not_final:
             sigs.extend(_to_signals(sym, ts, off, orders))
+        elif orders:
+            # 该品种这根 bar 的信号被刻意压住（bar 尚未定稿 / 本批不在范围内）
+            # ——**不落库**。
+            n_suppressed += 1
 
     logger.info(f"[v5x.live] 扫描完成：{len({s.symbol for s in sigs})} 品种出信号，"
                 f"{len(skipped)} 品种跳过（预热不足/无 bar/数据陈旧）；"
-                f"{n_partial} 品种因分钟数据未覆盖到桶尾而降级到最后已收完的桶")
+                f"{n_partial} 品种的最后一根 bar 尚未收盘（分钟未到桶尾）"
+                f"，已降级到最后已收完的桶"
+                + (f"；{n_suppressed} 品种信号被压住（bar 未定稿/不在本批，不落库）"
+                   if n_suppressed else ""))
     return sigs
-
 
 def scan_range(session, symbols: list[str] | None = None, *,
                start: datetime, end: datetime | None = None,
@@ -597,19 +630,24 @@ def _mark_notify(session, sigs: Iterable[V5XSignal], ok: bool, via: str) -> None
         """), {"ok": ok, "via": via, "k": s.dedupe_key})
 
 
-def format_message(sigs: list[V5XSignal], *, retry: bool = False) -> tuple[str, str]:
+def format_message(sigs: list[V5XSignal], *, retry: bool = False,
+                   batch: str = "") -> tuple[str, str]:
     """生成推送标题与正文（价格一律真实合约价，BA 价附在括号里备查）。
 
     Args:
         retry: 这是「上一轮推送失败后的补发」而非本轮新信号。标题加标记、
             正文加警示 —— 补发的是旧 bar，价格可能已经不可用，
             不能让他当成刚出的信号去下单。
+        batch: 批次标签（CL-20261111-10）。用于区分「准点批」与「补发批」，
+            只进标题/正文，**不进 dedupe_key**（dedupe_key 必须全局唯一，
+            带上批次会让同一根 bar 的同一动作被推两次）。
     """
     n_open = sum(1 for s in sigs if s.action == "OPEN")
     n_close = sum(1 for s in sigs if s.action == "CLOSE")
     n_add = sum(1 for s in sigs if s.action == "ADD")
     tag = " 补推" if retry else ""
-    title = f"[V5X{tag}] {len(sigs)} 条信号（开{n_open}/加{n_add}/平{n_close}）"
+    btag = f"·{batch}" if batch else ""
+    title = f"[V5X{btag}{tag}] {len(sigs)} 条信号（开{n_open}/加{n_add}/平{n_close}）"
 
     # —— 动作 + 方向 → 中文（用户反馈原英文混排看不懂）——
     action_cn = {
@@ -670,6 +708,11 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False) -> tuple[str, 
         lines.append("")
         lines.append("⚠️ 补推：以上 bar 的收盘时刻早于本次推送（前一轮推送失败，已自动补发）。"
                      "价格可能已不可用，请勿直接照此下单。")
+    if batch:
+        lines.append("")
+        lines.append(f"📦 本批 = {batch}。"
+                     + ("首批为收盘即已就绪的品种；补发批为上游数据晚到、数据到齐后才发出的。"
+                        "补发批的信号在发出时 bar 已收盘一段时间，价格可能已变化。"))
     lines.append("")
     # 口径（BA 后复权 / 真实价反解等内部记账口径）不写进推送正文，仅在 v5x_signal_log 留档。
     lines.append("⚠️ 本策略只出信号，不下单、不维护持仓；是否交易由你决定。")
@@ -677,7 +720,11 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False) -> tuple[str, 
 
 
 def run_v5x_scan(session, *, now: datetime | None = None,
-                 do_push: bool = True, overrides: dict | None = None) -> dict[str, Any]:
+                 do_push: bool = True, overrides: dict | None = None,
+                 symbols: list[str] | None = None,
+                 emit_symbols: set[str] | None = None,
+                 finalized: set[str] | None = None,
+                 batch: str = "") -> dict[str, Any]:
     """扫描 + 去重落库 + 推送（含失败补发）。返回摘要（供调度器写 task_run / 日志）。
 
     ★ 顺序刻意是「先落库 → 再推 → 最后标记」，而不是「先推、成功才落库」：
@@ -691,9 +738,22 @@ def run_v5x_scan(session, *, now: datetime | None = None,
       pushed     是否送达（``False`` 且 ``n_unsent > 0`` = 需要告警）
       via        实际通道：pushplus / webhook / none
       retry      本次推送里是否含补发内容
+
+    Args:
+        symbols: **只扫描这些品种**（None = 全池）。
+            CL-20261111-10（分两批发送）：首批只扫「已定稿」的品种。
+            未定稿的品种若此刻被扫描，可能用**残缺 bar** 出信号，而 ``dedupe_key``
+            会把这个错结果**永久固化**（同一根 bar 的重算再也进不来）⇒ 宁可晚发，
+            也不能用半截数据出信号。未定稿品种等数据到齐后走第二批。
+        finalized: **只对这些品种允许出信号**（bar 已定稿）。``None`` = 不限制。
+            见 :func:`scan_once` 的同名参数 —— 这是防止「残缺 bar 的错信号被
+            dedupe_key 永久固化」的安全阀，对所有扫描路径生效。
+        batch: 批次标签（``首批·已就绪`` / ``补发·滞后到齐``），只用于推送文案，
+            让用户一眼看出这条是准点批还是补发批。**不进 dedupe_key**。
     """
     now = now or datetime.now()
-    sigs = scan_once(session, now=now, overrides=overrides)
+    sigs = scan_once(session, symbols=symbols, now=now, overrides=overrides,
+                     emit_symbols=emit_symbols, finalized=finalized)
     new = _persist(session, sigs) if sigs else []
     session.commit()
 
@@ -736,7 +796,7 @@ def run_v5x_scan(session, *, now: datetime | None = None,
             f"如需双通道，在 config 里填企业微信/钉钉/飞书群机器人 URL。")
         _NO_FALLBACK_WARNED = True
 
-    title, content = format_message(unsent, retry=retry)
+    title, content = format_message(unsent, retry=retry, batch=batch)
     ok, via = send_notify(title, content, fallback)
     _mark_notify(session, unsent, ok, via)
     session.commit()

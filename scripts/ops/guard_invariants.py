@@ -4748,6 +4748,171 @@ def _c_roll_freq_parity(c: Ctx) -> tuple[bool, str, str, str]:
                                "跑 scripts/ops/rebuild_roll_all_freqs.py 统一重算")
 
 
+def _c_v5x_two_batch(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261111-10：V5X 收盘链的两批次推送必须真接线，且安全阀真生效。
+
+    这条断言防的是 qhyc 最隐蔽的失效模式：**机制写好了但没接线**，
+    或者接线了但被别的参数悄悄绕过。三面同时验：
+
+    1. **AST 真实引用**（防「表建了没人读」）：
+       ``run_close_chain`` 必须真的调用 ``split_ready`` 与
+       ``expected_minute_counts``，并把 ``emit_symbols`` 传给 ``run_v5x_scan``；
+       ``scan_once`` 必须真的有 ``finalized`` 参数并在判定里用它。
+    2. **行为级对拍**（防「接了线但过滤不生效」）：
+       拿真实生产数据构造一个「已定稿集合」，
+       验证 ``scan_once(finalized=...)`` **确实**把集合外的品种信号压住，
+       而集合内的品种不受影响。
+    3. **就绪判据与合成器同源**（防口径漂移）：
+       ``bucket_window`` 的窗口起点必须与合成器的
+       ``_SESSION_DAY_BOUNDS[60]`` 逐位一致 —— 否则「就绪」判的是另一个窗口，
+       判据会与实际落库的桶对不上号（比不设判据更危险）。
+    """
+    label = "V5X 两批次推送真接线且安全阀真生效"
+    bad: list[str] = []
+    observed: list[str] = []
+    try:
+        import ast
+        from pathlib import Path
+        from app.ingest import close_pipeline as cp
+        from app.strategies.v5x import live as lv
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "两批次模块不可导入 → 断言不可用（CL-20261111-10）")
+
+    # ---- 1) AST 真实引用 ----
+    try:
+        root = Path(__file__).resolve().parents[2]
+        cp_src = (root / "app" / "ingest" / "close_pipeline.py").read_text(
+            encoding="utf-8")
+        lv_src = (root / "app" / "strategies" / "v5x" / "live.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(cp_src)
+        fn = next(nd for nd in ast.walk(tree)
+                  if isinstance(nd, ast.FunctionDef) and nd.name == "run_close_chain")
+        called = {nd.func.id for nd in ast.walk(fn)
+                  if isinstance(nd, ast.Call) and isinstance(nd.func, ast.Name)}
+        kws = {kw.arg for nd in ast.walk(fn) if isinstance(nd, ast.Call)
+               for kw in nd.keywords if kw.arg}
+        observed.append(f"wired={sorted(called & {'split_ready', 'expected_minute_counts'})}"
+                        f"/emit={'emit_symbols' in kws}")
+        for need in ("split_ready", "expected_minute_counts"):
+            if need not in called:
+                bad.append(f"run_close_chain 未真实调用 {need}（机制写了没人用）")
+        if "emit_symbols" not in kws:
+            bad.append("run_close_chain 未把 emit_symbols 传给扫描（分批没接线）")
+
+        ltree = ast.parse(lv_src)
+        sfn = next(nd for nd in ast.walk(ltree)
+                   if isinstance(nd, ast.FunctionDef) and nd.name == "scan_once")
+        argnames = {a.arg for a in sfn.args.args + sfn.args.kwonlyargs}
+        if "finalized" not in argnames:
+            bad.append("scan_once 没有 finalized 参数（安全阀不存在）")
+        else:
+            # finalized 必须真的参与判定，而不只是签名里挂着
+            body = ast.dump(sfn)
+            observed.append(f"valve={'finalized' in body}")
+            if "finalized" not in body:
+                bad.append("finalized 只在签名里，函数体没用到（安全阀是摆设）")
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"AST 检查失败 {type(exc).__name__}: {exc}", (
+            "源码解析失败 → 无法判定（不要当成通过）")
+
+    # ---- 2) 行为级对拍：安全阀真的压得住 ----
+    #
+    # 手法：拿**真实生产数据**跑两遍 scan_once（同一 now、同一个品种池）：
+    #   · A 组 finalized=None（不限）        → 记下出了信号的品种集合 S_all
+    #   · B 组 finalized = 全池 − {X}       → 记下出了信号的品种集合 S_valve
+    # 若 X 确实出了信号（A 组有、B 组无），且其余品种不受影响
+    # （S_valve == S_all − {X}），则安全阀**行为级生效**。
+    #
+    # 为什么必须真跑一遍：只看签名/源码，只能证明「参数存在」，
+    # 证不了「过滤真的生效」—— 而后者正是这类安全阀最常见的假绿。
+    try:
+        import inspect
+        sig = inspect.signature(lv.scan_once)
+        if "finalized" not in sig.parameters:
+            bad.append("scan_once 实际签名里没有 finalized（安全阀不存在）")
+        else:
+            observed.append("valve_sig=ok")
+            from datetime import datetime, timedelta, timezone
+            from app.core.db import session_scope
+            from app.data.tradable_scope import load_tradable_pool
+
+            sh = timezone(timedelta(hours=8))
+            with session_scope() as s:
+                pool = [f"{v}888" for v in sorted(load_tradable_pool(s))]
+                if not pool:
+                    return False, label, "品种池为空，无法做行为级对拍", (
+                        "l3_ref.tradable_variety 无有效品种")
+                # 取最近一根有 bar 的收盘标签作基准
+                row = s.execute(text(
+                    "SELECT max(bucket) FROM l2_adj.bar_60m_ba "
+                    " WHERE symbol = ANY(:syms)"), {"syms": pool}).first()
+                if not row or row[0] is None:
+                    return False, label, "BA 无任何桶，无法做行为级对拍", (
+                        "l2_adj.bar_60m_ba 为空")
+                bucket = row[0]
+                now = bucket + timedelta(seconds=30)
+
+            with session_scope() as s:
+                s_all = lv.scan_once(s, now=now)
+            syms_all = {x.symbol for x in s_all}
+            if not syms_all:
+                observed.append("valve_behavior=skip(该时点无信号)")
+            else:
+                probe = sorted(syms_all)[0]
+                with session_scope() as s:
+                    s_valve = lv.scan_once(s, now=now,
+                                           finalized=set(pool) - {probe})
+                syms_valve = {x.symbol for x in s_valve}
+                observed.append(
+                    f"valve_behavior=all={len(syms_all)}/valve={len(syms_valve)}")
+                if probe in syms_valve:
+                    bad.append(
+                        f"安全阀无效：{probe} 在 finalized 集合外仍出了信号"
+                        f"（残缺 bar 的错信号会被 dedupe_key 永久固化）")
+                if syms_valve != syms_all - {probe}:
+                    bad.append(
+                        f"安全阀误伤：集合外的 {probe} 被压住是对的，"
+                        f"但集合内品种也变了（{sorted(syms_all)} → {sorted(syms_valve)}）")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"行为级对拍失败 {type(exc).__name__}: {exc}")
+
+    # ---- 3) 就绪判据与合成器同源 ----
+    try:
+        from app.ingest.synthesizer import _SESSION_DAY_BOUNDS
+        bounds = _SESSION_DAY_BOUNDS[60]
+        # 合成器：日盘从 09:00 起，桶标签 = 09:00 + bounds 的分钟偏移
+        exp_labels = {(9 + b // 60, b % 60) for b in bounds}
+        got_labels = set(cp._DAY_BUCKET_STARTS)
+        observed.append(f"grid={sorted(exp_labels)}")
+        if got_labels != exp_labels:
+            bad.append(
+                f"就绪窗口的日盘桶标签 {sorted(got_labels)} 与合成器 "
+                f"{sorted(exp_labels)} 不一致（口径漂移）")
+        # 窗口起点也必须一致：桶标签 L 的窗口起点 = 前一根桶的标签
+        ordered = sorted(exp_labels)
+        for i, hm in enumerate(ordered):
+            prev = ordered[i - 1] if i else (9, 0)
+            got = cp._DAY_BUCKET_STARTS.get(hm)
+            if got != prev:
+                bad.append(f"桶 {hm} 的窗口起点 {got} 应为 {prev}")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"同源性检查失败 {type(exc).__name__}: {exc}")
+
+    # ---- 4) 批次标签与稳定期常量存在 ----
+    for name in ("BATCH_FIRST", "BATCH_LATE", "BATCH_FALLBACK"):
+        if not getattr(cp, name, ""):
+            bad.append(f"批次标签 {name} 未定义")
+    if not getattr(cp, "STABLE_ROUNDS_TO_RELEASE", 0):
+        bad.append("稳定期放行常量缺失（永久缺根的品种会丢信号）")
+
+    if bad:
+        return False, label, "；".join(bad[:4]), "；".join(observed[:6])
+    return True, label, "；".join(observed[:6]), (
+        "两批次接线 + 安全阀 + 同源窗口口径均在位")
+
+
 def _c_ba_price_identity(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261109-12：后复权行必须满足 ``ba.close - adj_offset == raw.close``。
 
@@ -6258,6 +6423,12 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 2026-10-21~10-28 违约、60m 最大 215 点。这条断言把"静默错位"变成红灯。
     ("BA-PRICE-IDENTITY", "后复权行与原始价自洽（ba.close - adj_offset == raw.close）",
      "block", _c_ba_price_identity),
+    # CL-20261111-10：V5X 两批次推送。防「机制写了没人读」——
+    #   收盘链必须真按「已定稿/未定稿」拆两批，未定稿品种的信号不许被
+    #   dedupe_key 永久固化（残缺 bar 算出的错信号不可逆）。
+    #   三面验：AST 真实引用 + 行为级对拍（安全阀真的压得住）+ 窗口口径与合成器同源。
+    ("OPS-V5X-TWO-BATCH", "V5X 两批次推送真接线且安全阀真生效",
+     "block", _c_v5x_two_batch),
     # CL-20261109-13：2026-11-09 一天之内两次「拿旧迁移作基线 CREATE OR REPLACE」——
     # 063 覆盖 056、065 覆盖 053。每次只丢一个 token，而既有断言各自只盯自己那一个，
     # 正好漏掉被覆盖的那一方。这条按「迁移来源」逐 token 追责，缺了直接报哪个迁移被回退。

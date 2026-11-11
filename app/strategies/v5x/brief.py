@@ -106,6 +106,30 @@ def build_brief(session, label: datetime, summary: dict) -> tuple[str, str]:
         f"采集 {summary.get('attempts', '?')} 轮",
         f"- 新信号：**{scan.get('n_new', 0)}**（无开/加/平仓事件）",
     ]
+
+    # ★ 两批次口径（CL-20261111-10）：让用户看得见「这根收盘分了几批发」，
+    #   以及「哪些品种还在等数据」。否则无信号时用户无法区分
+    #   「策略本来就没信号」与「信号被压在次批还没发」。
+    ready_n = summary.get("ready_n")
+    if ready_n is not None:
+        pending_n = summary.get("pending_n", 0)
+        idle_n = summary.get("idle_n", 0)
+        lines.append(
+            f"- 分批：首批（已就绪）**{ready_n}** 个已出信号"
+            + (f"；次批（等数据）**{pending_n}** 个" if pending_n else "；次批 无")
+            + (f"；本时段不交易 {idle_n} 个" if idle_n else "")
+        )
+        det = summary.get("pending_detail") or {}
+        if det:
+            items = "、".join(f"{k}({v})" for k, v in list(det.items())[:6])
+            more = f"…另 {len(det) - 6} 个" if len(det) > 6 else ""
+            lines.append(f"  · 待补发：{items}{more}")
+        late = summary.get("late_batches") or []
+        if late:
+            lines.append(
+                f"  · 次批已补发 {len(late)} 批："
+                + "、".join("+".join(b.get("symbols", [])) for b in late[:4])
+            )
     try:
         snap = theoretical_positions(session)
         rows = snap.get("rows") or []

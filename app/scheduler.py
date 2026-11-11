@@ -1033,14 +1033,34 @@ def _v5x_scan_job() -> dict | None:
 
     # 扫描节奏常量与扫描器同源（不在这里另抄一份，否则两处会漂）
     from app.strategies.v5x.live import RETRY_WINDOW_HOURS, SCAN_MINUTES, run_v5x_scan
+    from app.ingest.close_pipeline import BATCH_FALLBACK, RETRY_FINALIZE_LOOKBACK_S
 
     if now.minute not in SCAN_MINUTES:
         logger.debug(f"[scheduler] v5x scan {now:%H:%M} 非扫描时刻，跳过")
         return
 
+    # ★ 定稿安全阀（CL-20261111-10）：兜底扫描**也**不许用未定稿的 bar 出信号。
+    #   兜底这条路是「收盘链没赶上时的补救」，但它同样会落库并被 dedupe_key
+    #   **永久固化** ⇒ 若 bar 的分钟窗口还没收全，用它算出的信号可能是错的，
+    #   一旦固化就再也改不回来（比漏推更糟）。
+    #   实测 11-11 10:00：M888 的信号直到 10:35 才出，且落库价与最终 BA
+    #   逐位一致 —— 说明当时若用残缺 bar 算，结果会是**错价**且被钉死。
+    finalized: set[str] | None = None
+    try:
+        from app.ingest.close_pipeline import current_close_label, finalized_symbols
+        label = current_close_label(now, max_lag_s=RETRY_FINALIZE_LOOKBACK_S)
+        if label is not None:
+            with session_scope() as s2:
+                finalized = finalized_symbols(s2, label)
+    except Exception as exc:  # noqa: BLE001
+        # 判定本身失败**不能**挡住扫描（宁可漏推也不要把整条链卡死），
+        # 但必须留痕 —— 否则「安全阀失效」是静默的。
+        logger.warning(f"[scheduler] v5x scan 定稿判定失败（跳过安全阀）：{exc}")
+        finalized = None
+
     try:
         with session_scope() as s:
-            res = run_v5x_scan(s, now=now)
+            res = run_v5x_scan(s, now=now, finalized=finalized, batch=BATCH_FALLBACK)
     except Exception as e:  # noqa: BLE001
         # ★ 必须**外抛**，不能吞（CL-20261109-06）。
         #   ops.scheduled_task_run 的 success 判据是 apscheduler 有没有收到异常
