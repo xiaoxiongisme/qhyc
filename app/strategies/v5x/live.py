@@ -611,19 +611,46 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False) -> tuple[str, 
     tag = " 补推" if retry else ""
     title = f"[V5X{tag}] {len(sigs)} 条信号（开{n_open}/加{n_add}/平{n_close}）"
 
-    lines: list[str] = []
+    # —— 动作 + 方向 → 中文（用户反馈原英文混排看不懂）——
+    action_cn = {
+        ("OPEN", "LONG"): "开多单",
+        ("OPEN", "SHORT"): "开空单",
+        ("ADD", "LONG"): "加多单",
+        ("ADD", "SHORT"): "加空单",
+        ("CLOSE", "LONG"): "平多单",
+        ("CLOSE", "SHORT"): "平空单",
+    }
+    reason_cn = {"stop": "止损", "tp": "止盈"}
+    etype_cn = {"pb": "回踩", "bk": "突破"}
     icon = {"OPEN": "🚨", "ADD": "➕", "CLOSE": "✅"}
+
+    def _bt_str(bt) -> str:
+        # 去掉时区后缀，只留本地时间（bar 2026-11-11 10:00:00+08:00 → 2026-11-11 10:00）
+        if hasattr(bt, "strftime"):
+            return bt.strftime("%Y-%m-%d %H:%M")
+        s = str(bt).replace("+08:00", "").replace("+00:00", "").strip()
+        return s[:16] if len(s) >= 16 else s
+
+    lines: list[str] = []
     for s in sorted(sigs, key=lambda x: (x.action != "OPEN", x.symbol)):
-        tag_line = f"{icon.get(s.action, '•')} {s.action} {s.side}"
-        lines.append(f"{tag_line}  {s.symbol} @ {s.price_real:,.2f}"
-                     f"（BA {s.price_ba:,.2f}，偏移 {s.adj_offset:+,.2f}）")
+        label = action_cn.get((s.action, s.side), f"{s.action} {s.side}")
+        lines.append(f"{icon.get(s.action, '•')} {label} {s.symbol}")
+        lines.append(f"   成交价：{s.price_real:,.2f}（合约价）")
+        # BA 后复权价是内部记账口径，仅对账用；降级为脚注，避免与真实成交价混淆
+        lines.append(f"   后复权参考：{s.price_ba:,.2f}（复权偏移 {s.adj_offset:+,.2f}，仅对账）")
         if s.stop_real is not None:
-            lines.append(f"   ⛔止损 {s.stop_real:,.2f}")
+            lines.append(f"   止损位：{s.stop_real:,.2f}")
         if s.action == "CLOSE":
-            lines.append(f"   原因 {s.reason or '-'}，净 {s.net_yuan:+,.0f} 元")
+            r = reason_cn.get((s.reason or "").lower(), s.reason or "未注明")
+            lines.append(f"   离场原因：{r}")
+            if s.net_yuan is not None:
+                lines.append(f"   本笔盈亏：{s.net_yuan:+,.0f} 元")
         elif s.action == "OPEN":
-            lines.append(f"   路径 {'回踩' if s.etype == 'pb' else '突破'}，手数 {s.lots:g}")
-        lines.append(f"   bar {s.bar_ts}")
+            lines.append(f"   入场路径：{etype_cn.get(s.etype, s.etype or '未注明')}")
+            lines.append(f"   手数：{s.lots:g}")
+        elif s.action == "ADD":
+            lines.append(f"   手数：{s.lots:g}")
+        lines.append(f"   信号时间：{_bt_str(s.bar_ts)}")
     if retry:
         lines.append("")
         lines.append("⚠️ 补推：以上 bar 的收盘时刻早于本次推送（前一轮推送失败，已自动补发）。"
