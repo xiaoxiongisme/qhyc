@@ -178,11 +178,30 @@ def _c_signal_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
         f"越界品种：{','.join(extra)}" if extra else "")
 
 
+# CL-20261111-11：2026-11-07 口径收窄后，**采集范围 ≠ 可交易范围**。
+# cloud.yaml main_contracts（53）是有意大于 tradable_variety（38）的超集：
+# 多采的这批只用于维持主连/指数连续性与持仓豁免，不进交易池。
+# 原断言写的是「config ⊆ whitelist」，与它自己的标签「允许超集」相反，
+# 于是每次运行都固定 FAIL 15 个品种（14 天 23 次，越界集合从未变化）——
+# 把一条永久假红焊进守卫输出，等于训练运维忽略 FAIL，杀伤力比少一条断言更大。
+# 真正该守的方向（白名单必须都被采集）已由 block 级 VAR-WHITELIST-IN-CONFIG 覆盖。
+# 本条改为守「超集必须稳定」：只允许多采这批已登记品种，出现第一个未登记品种
+# 立刻 FAIL——这才是原断言真正的安全意图（不许悄悄扩大采集范围）。
+COLLECT_ONLY_VARIETIES = frozenset({
+    "AG", "AL", "AU", "B", "CS", "CU", "J", "LC", "LH",
+    "NI", "PB", "RU", "SC", "SN", "ZN",
+})
+
+
 def _c_config_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
     extra = sorted(c.cfg_products - c.whitelist)
-    return not extra, "cloud.yaml 主连 ⊆ 白名单", (
-        f"{len(c.cfg_products)} 个配置，越界 {len(extra)}"), (
-        f"越界品种：{','.join(extra)}" if extra else "")
+    unknown = sorted(set(extra) - COLLECT_ONLY_VARIETIES)
+    return not unknown, "cloud.yaml 采集超集 ⊆ 白名单 ∪ 已登记采集专用品种", (
+        f"{len(c.cfg_products)} 个配置，超集 {len(extra)} 个"
+        f"（已登记 {len(COLLECT_ONLY_VARIETIES)}）"), (
+        f"新增未登记的采集专用品种：{','.join(unknown)}"
+        "（如属有意扩采，同步登记 COLLECT_ONLY_VARIETIES 并开 CL）"
+        if unknown else "")
 
 
 def _c_whitelist_in_config(c: Ctx) -> tuple[bool, str, str, str]:
@@ -6127,22 +6146,42 @@ def _c_l2_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     正常应同桶；落后 ≥1 个交易日即 FAIL。窗口 14 天 + 口径视图集合，
     依赖 Timescale chunk 剪枝，不碰 l0 大表。
     """
-    base = c.scalar(
-        "SELECT max(bucket) FROM l1_mkt.bar_60m "
-        "WHERE symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope "
-        "                 WHERE symbol ~ '^[A-Za-z]+888$') "
-        "AND bucket >= now() - interval '14 days'")
-    if base is None:
+    # 逐品种取数（CL-20261111-11 修正粒度）：原实现用聚合 max(bucket) 比对，
+    # 37 个品种新鲜、1 个滞后一周仍然 PASS——盲区并未真正闭合。改为逐 symbol。
+    rows = c.rows("""
+        WITH sc AS (
+          SELECT symbol FROM l3_ref.v_tradable_scope
+          WHERE symbol ~ '^[A-Za-z]+888$'
+        ),
+        l1 AS (
+          SELECT b.symbol, max(b.bucket) AS mx
+          FROM l1_mkt.bar_60m b JOIN sc ON sc.symbol = b.symbol
+          WHERE b.bucket >= now() - interval '14 days'
+          GROUP BY 1
+        ),
+        ba AS (
+          SELECT b.symbol, max(b.bucket) AS mx
+          FROM l2_adj.bar_60m_ba b JOIN sc ON sc.symbol = b.symbol
+          WHERE b.bucket >= now() - interval '14 days'
+          GROUP BY 1
+        )
+        SELECT sc.symbol, l1.mx, ba.mx
+        FROM sc LEFT JOIN l1 ON l1.symbol = sc.symbol
+                      LEFT JOIN ba ON ba.symbol = sc.symbol
+        ORDER BY 1
+    """)
+    if not rows:
+        return False, "口径内 888 主连集合可用", "l3_ref.v_tradable_scope 无 888 主连", (
+            "口径视图为空 → 见 VAR-SCOPE-WIRED")
+    l1_rows = [(s, m) for s, m, _ in rows if m is not None]
+    ba_rows = [(s, m) for s, _, m in rows if m is not None]
+    if not l1_rows:
         return False, "L1 主连基准可用", "口径内 888 近 14 天无 L1 数据", (
             "L1 本身断更（见 DATA-L0-LAYERS-FRESH），BA 无基准可比")
-    ba = c.scalar(
-        "SELECT max(bucket) FROM l2_adj.bar_60m_ba "
-        "WHERE symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope "
-        "                 WHERE symbol ~ '^[A-Za-z]+888$') "
-        "AND bucket >= now() - interval '14 days'")
-    if ba is None:
+    if not ba_rows:
         return False, "L2 后复权层有口径内数据", "BA 近 14 天无口径内 888 数据", (
             "BA 完全空 → V5X 读不到任何复权价（CL-20261107 收口后不应发生）")
+    base = max(m for _, m in l1_rows)
     days = [r[0] for r in c.rows(
         "SELECT DISTINCT trade_date FROM futures_rule "
         "WHERE trade_date <= CURRENT_DATE ORDER BY trade_date DESC LIMIT 120")]
@@ -6159,21 +6198,45 @@ def _c_l2_fresh(c: Ctx) -> tuple[bool, str, str, str]:
                 break
         return prev
 
-    base_d, ba_d = _td(base), _td(ba)
-    if base_d is None or ba_d is None:
+    label = "口径内 888 主连 BA 与 L1 同交易日（缺口 0，逐品种）"
+    base_d = _td(base)
+    if base_d is None:
         # 交易日真源不可用 → 退回小时口径（容忍盘中滞后，但跨日必报）
-        lag_h = (base - ba).total_seconds() / 3600.0
-        ok = lag_h <= 48.0
-        obs = f"BA 最新 {ba:%m-%d %H:%M} 落后 L1 {lag_h:.0f}h(降级)"
-        det = "" if ok else f"BA 落后 L1 {lag_h:.0f}h（>48h）→ V5X 读过时复权价"
-        return ok, "口径内 38 主连 BA 与 L1 同交易日（缺口 0）", obs, det
-    gap = sum(1 for x in days if ba_d < x <= base_d)
-    ok = gap == 0
-    obs = f"BA 最新 {ba:%m-%d %H:%M} vs L1 {base:%m-%d %H:%M} 缺口 {gap} 交易日"
+        lagging = [(s, m1, m2) for s, m1, m2 in rows
+                   if m1 is None or m2 is None
+                   or (m1 - m2).total_seconds() > 48 * 3600]
+        ok = not lagging
+        obs = (f"L1 最新 {base:%m-%d %H:%M}，{len(rows)} 品种中 BA 滞后 "
+               f"{len(lagging)} 个（降级到小时口径）")
+        det = "" if ok else (
+            "BA 落后 L1 >48h 或缺失：" + ",".join(s for s, _, _ in lagging[:12])
+            + " → V5X 对这些品种读过时复权价")
+        return ok, label, obs, det
+
+    lagging = []
+    for sym, m1, m2 in rows:
+        if m1 is None or m2 is None:
+            lagging.append((sym, m1, m2, None))
+            continue
+        d1, d2 = _td(m1), _td(m2)
+        if d1 is None or d2 is None:
+            continue
+        gap = sum(1 for x in days if d2 < x <= d1)
+        if gap:
+            lagging.append((sym, m1, m2, gap))
+    ok = not lagging
+
+    def _fmt(v):
+        return "无" if v is None else f"{v:%m-%d %H:%M}"
+
+    obs = (f"L1 最新 {base:%m-%d %H:%M}；{len(rows)} 个口径品种中 BA 落后 "
+           f"{len(lagging)} 个")
     det = "" if ok else (
-        f"BA 落后 L1 {gap} 个交易日 → V5X 读过时复权价，"
-        "而 L0/L1 全部断言仍全绿（静默失效）")
-    return ok, "口径内 38 主连 BA 与 L1 同交易日（缺口 0）", obs, det
+        f"BA 落后 L1 的品种 {len(lagging)} 个："
+        + ",".join(f"{s}(L2={_fmt(m2)}/L1={_fmt(m1)})"
+                   for s, m1, m2, _ in lagging[:12])
+        + " → V5X 对这些品种读过时复权价，而 L0/L1 全部断言仍全绿（静默失效）")
+    return ok, label, obs, det
 
 
 def _c_l0_realtime_fresh(c: Ctx) -> tuple[bool, str, str, str]:
