@@ -765,18 +765,26 @@ def _c_index_8888_seam(c: Ctx) -> tuple[bool, str, str, str]:
     ratio 门（用价格变化量 idx_delta，不受绝对值符号影响）。真正的故障模式是
     extend_index_8888 的 seam delta 算错 → 增量段相对历史整体平移数千点 → 接缝处出现
     远超常态的单步跳变。本断言捕捉该跳变（阈值 2000 点，远高于这类品种的正常单步波动
-    <500，不会误报）。实测 9 个负价品种接缝价位逐位连续（JD −823→−861、RU −4620→−4770、
-    LH −8420→−8460），当前 PASS。
+    <500，不会误报）。
+
+    ★ 2026-11-11 修正（CL-20261111-03）：原实现把「历史段末端 vs 增量段首端」的
+      任意两点价差都当接缝跳变，会误伤「跨多日采集缺口后的真实行情变动」。实测 BC8888
+      历史止于 2026-10-30、增量起于 2026-11-04（4.9 日缺口），价差 2630 点恰是 BC 主连
+      同期真实跌幅（BC888 自 96690→94640，约 −2.1%；8888 含 carry 基线差约 580，远小于
+      2000 阈值）。故改为**仅当两端时间相邻（缺口 ≤ 2 日）时**才判接缝跳变；多日缺口下
+      的价差是真实行情，不是 seam delta 算错。BC8888 本身的真实缺陷是「增量段冻结于
+      11-06 11:30（_extend_index_8888 因 contract 层缺 BC 主连参照而每 30 分钟 abort）」，
+      属数据鲜度/断层类缺陷，由 CL-20261111-03 另立条目跟踪修复，不在本接缝断言口径内。
     """
     rows = c.rows("""
         WITH h AS (
-          SELECT DISTINCT ON (symbol) symbol, close AS hc
+          SELECT DISTINCT ON (symbol) symbol, close AS hc, ts AS hts
           FROM l0_raw.minute_bar
           WHERE layer='index' AND src='local_csv_synth_8888'
             AND ts >= now() - interval '400 days'
           ORDER BY symbol, ts DESC
         ), i AS (
-          SELECT DISTINCT ON (symbol) symbol, close AS ic
+          SELECT DISTINCT ON (symbol) symbol, close AS ic, ts AS its
           FROM l0_raw.minute_bar
           WHERE layer='index' AND src='incr_synth_8888'
             AND ts >= now() - interval '60 days'
@@ -784,13 +792,17 @@ def _c_index_8888_seam(c: Ctx) -> tuple[bool, str, str, str]:
         )
         SELECT count(*) FROM h JOIN i USING (symbol)
         WHERE abs(h.hc - i.ic) > 2000
+          -- 仅当历史段末端与增量段首端时间相邻时才判接缝跳变：
+          -- 多日采集缺口下的价差是真实行情变动（如 BC8888 4.9 日缺口内跌 2630，
+          -- 与主连 BC888 跌幅一致），不是 seam delta 算错。
+          AND extract(epoch from (i.its - h.hts)) <= 2 * 86400
     """)
     n = int(rows[0][0]) if rows else 0
     ok = n == 0
-    return (ok, "8888 指数层历史/增量接缝跳变 ≤ 2000 点",
+    return (ok, "8888 指数层相邻接缝跳变 ≤ 2000 点",
             f"异常品种数 {n}",
             "" if ok else
-            f"{n} 个 8888 品种接缝跳变 >2000 点 → seam delta 疑似失效（P0-2）")
+            f"{n} 个 8888 品种相邻接缝跳变 >2000 点 → seam delta 疑似失效（P0-2）")
 
 
 def _c_l0_no_offhours_bar(c: Ctx) -> tuple[bool, str, str, str]:
@@ -5967,7 +5979,7 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("VAR-L2-NO-INDEX", "L2 后复权层不含任何 8888 指数符号", "block", _c_l2_no_index),
     # CL-20261111-03 / P0-2：8888 指数负价是后复权设计产物（接缝连续、仅 delta 消费），
     # 不可重算为正。真正故障模式是 seam delta 算错导致接缝跳变数千点。钉死接缝连续性。
-    ("DATA-INDEX-8888-SEAM", "8888 指数层历史/增量接缝连续（跳变≤2000点）",
+    ("DATA-INDEX-8888-SEAM", "8888 指数层相邻接缝连续（缺口≤2日且跳变≤2000点）",
      "block", _c_index_8888_seam),
     # CL-20261109-04：休市期 akshare 会给「时间戳=当前时刻」的合成 bar，
     # 采集作业无时段门 → 周一凌晨写入 11 根幽灵 bar，一路进 V5X 信号源且不报错。
