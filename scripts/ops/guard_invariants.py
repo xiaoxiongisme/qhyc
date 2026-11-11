@@ -5945,6 +5945,128 @@ def _c_v5x_hourlybrief_wired(c: Ctx) -> tuple[bool, str, str, str]:
         "" if not bad else "；".join(bad) + " → 见 CL-20261111-01")
 
 
+# ---------------------------------------------------------------- 守卫盲区闭合 (CL-20261111-09)
+def _c_l2_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """L2 后复权层对口径内 38 主连必须保持新鲜（CL-20261111-09）。
+
+    V5X 直接读 l2_adj.bar_*m_ba。此前守卫只锁 BA 的「形状」——
+    BAR-GRID-VALID（网格标签 + BA⊆L1）、VAR-L2-NO-INDEX（不含 8888）、
+    BA-NONPOSITIVE-GUARDED（负价可反解）——**从不查 BA 的新鲜度**。
+    一旦 sp_build_l2_back_adjusted / back_adjusted_rebuild 的 BA 段卡住，
+    L2 会**静默滞后**：V5X 拿到过时复权价，而 L0/L1 全部断言仍 PASS。
+    这正是用户点名的「L2 新鲜度盲区」。
+
+    判据：口径内主连(*888) 在 l2_adj.bar_60m_ba 的最新桶，与同一组在
+    l1_mkt.bar_60m 的最新桶，交易日口径缺口必须 = 0。BA 由 L1 同轮重建
+    （back_adjusted_rebuild 每日 02:55/11:55/15:55 调 sp_build_l2_back_adjusted），
+    正常应同桶；落后 ≥1 个交易日即 FAIL。窗口 14 天 + 口径视图集合，
+    依赖 Timescale chunk 剪枝，不碰 l0 大表。
+    """
+    base = c.scalar(
+        "SELECT max(bucket) FROM l1_mkt.bar_60m "
+        "WHERE symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope "
+        "                 WHERE symbol ~ '^[A-Za-z]+888$') "
+        "AND bucket >= now() - interval '14 days'")
+    if base is None:
+        return False, "L1 主连基准可用", "口径内 888 近 14 天无 L1 数据", (
+            "L1 本身断更（见 DATA-L0-LAYERS-FRESH），BA 无基准可比")
+    ba = c.scalar(
+        "SELECT max(bucket) FROM l2_adj.bar_60m_ba "
+        "WHERE symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope "
+        "                 WHERE symbol ~ '^[A-Za-z]+888$') "
+        "AND bucket >= now() - interval '14 days'")
+    if ba is None:
+        return False, "L2 后复权层有口径内数据", "BA 近 14 天无口径内 888 数据", (
+            "BA 完全空 → V5X 读不到任何复权价（CL-20261107 收口后不应发生）")
+    days = [r[0] for r in c.rows(
+        "SELECT DISTINCT trade_date FROM futures_rule "
+        "WHERE trade_date <= CURRENT_DATE ORDER BY trade_date DESC LIMIT 120")]
+
+    def _td(ts):
+        d = ts.date()
+        if ts.hour < 3:                      # 夜盘跨零点归前一自然日
+            d = d - timedelta(days=1)
+        prev = None
+        for x in sorted(days):
+            if x <= d:
+                prev = x
+            else:
+                break
+        return prev
+
+    base_d, ba_d = _td(base), _td(ba)
+    if base_d is None or ba_d is None:
+        # 交易日真源不可用 → 退回小时口径（容忍盘中滞后，但跨日必报）
+        lag_h = (base - ba).total_seconds() / 3600.0
+        ok = lag_h <= 48.0
+        obs = f"BA 最新 {ba:%m-%d %H:%M} 落后 L1 {lag_h:.0f}h(降级)"
+        det = "" if ok else f"BA 落后 L1 {lag_h:.0f}h（>48h）→ V5X 读过时复权价"
+        return ok, "口径内 38 主连 BA 与 L1 同交易日（缺口 0）", obs, det
+    gap = sum(1 for x in days if ba_d < x <= base_d)
+    ok = gap == 0
+    obs = f"BA 最新 {ba:%m-%d %H:%M} vs L1 {base:%m-%d %H:%M} 缺口 {gap} 交易日"
+    det = "" if ok else (
+        f"BA 落后 L1 {gap} 个交易日 → V5X 读过时复权价，"
+        "而 L0/L1 全部断言仍全绿（静默失效）")
+    return ok, "口径内 38 主连 BA 与 L1 同交易日（缺口 0）", obs, det
+
+
+def _c_l0_realtime_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """实时 akshare_1min 主连采集须覆盖最近完整交易日全部 53 主连（CL-20261111-09）。
+
+    调度器成功判据是「作业函数没抛异常」（apscheduler EVENT_JOB_EXECUTED），
+    而采集/合成脚本会把子进程非 0 退出只记 logger.warning（与
+    CL-20261110-14 / OPS-ROLL-YIELD-ZERO-LOUD 同源缺陷）。于是作业「成功」
+    却没产出新数据 → 假绿。本断言**不从 job 状态判健康**，而是直接验证
+    「数据真落地」：
+
+      最近一个**已收盘**交易日的 continuous 层 src='akshare_1min'
+      须覆盖 cloud.yaml 全部 53 主连，且每品种当日桶数 ≥ 100
+      （实测 2026-11-10 分布 p0=219/中位345/最大555，留足容差；
+      低于 100 即视为该主连采集静默失效）。任一主连零写入 = 该品种
+      主连/指数/BA 全链路断更，而采集作业仍记 success（假绿）。
+
+    窗口化（仅查 target 当日）+ 53 主连集合（string_to_array 传参），
+    不碰 l0 全表。
+    """
+    days = [r[0] for r in c.rows(
+        "SELECT DISTINCT trade_date FROM futures_rule "
+        "WHERE trade_date < CURRENT_DATE ORDER BY trade_date DESC LIMIT 3")]
+    if not days:
+        return False, "官方交易日历可用", "futures_rule 无已收盘交易日", (
+            "先跑 scripts/seed_futures_rule.py")
+    target = days[0]
+    mains = [v + "888" for v in c.cfg_products]
+    if not mains:
+        return False, "cloud.yaml 主连可读", "无主连配置", "main_contracts 为空"
+    csv = ",".join(mains)
+    row = c.rows("""
+        WITH mv AS (SELECT unnest(string_to_array(:csv, ',')::text[]) AS symbol),
+        per AS (
+          SELECT b.symbol, count(*) AS n
+          FROM l0_raw.minute_bar b JOIN mv ON b.symbol = mv.symbol
+          WHERE b.layer = 'continuous' AND b.src = 'akshare_1min'
+            AND (b.ts AT TIME ZONE 'Asia/Shanghai')::date = CAST(:target AS date)
+          GROUP BY 1
+        )
+        SELECT (SELECT count(*) FROM mv),
+               (SELECT count(*) FROM per WHERE n >= 100),
+               (SELECT coalesce(array_agg(mv.symbol ORDER BY mv.symbol),
+                                ARRAY[]::text[])
+                  FROM mv WHERE mv.symbol NOT IN
+                        (SELECT symbol FROM per WHERE n >= 100))
+    """, csv=csv, target=target)
+    scope_n, active_n, missing = (row[0] if row else (0, 0, []))
+    missing = list(missing or [])
+    ok = scope_n >= 1 and not missing
+    obs = (f"基准日 {target}: 实时主连覆盖 {active_n}/{scope_n}"
+           + (f"；缺席 {', '.join(missing[:12])}" if missing else ""))
+    det = "" if ok else (
+        f"实时 akshare_1min 在 {target} 漏采 {len(missing)} 个主连 → 这些品种"
+        "主连/指数/BA 全链路断更，而采集作业仍记 success（假绿）")
+    return ok, "实时主连采集覆盖最近完整交易日全部 53 主连", obs, det
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -6011,6 +6133,16 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261111-03 / P1：L2 后复权只处理主连 888，8888 指数连本就不进 BA（设计）。
     # 钉死「L2 不得含 8888」，防未来有人把指数误塞进后复权层。
     ("VAR-L2-NO-INDEX", "L2 后复权层不含任何 8888 指数符号", "block", _c_l2_no_index),
+    # CL-20261111-09：V5X 直接读 l2_adj.bar_*m_ba，但守卫只锁 BA 形状（网格/
+    # 子集/负价反解），从不查 BA 新鲜度。BA 重建环节卡住会静默滞后、V5X 读数过时，
+    # 而 L0/L1 全绿。锁「口径内主连 BA 与 L1 同交易日（缺口 0）」。
+    ("DATA-L2-FRESH", "口径内 38 主连 BA 与 L1 同交易日（缺口 0）",
+     "block", _c_l2_fresh),
+    # CL-20261111-09：调度器成功=作业没抛异常、采集脚本吞子进程非0退出 → 假绿。
+    # 不从 job 状态判健康，直接验证「数据真落地」：最近完整交易日实时
+    # akshare_1min 须覆盖全部 53 主连（每品种≥100桶）。漏采=该品种全链路断更却记 success。
+    ("DATA-L0-REALTIME-FRESH", "实时主连采集覆盖最近完整交易日全部 53 主连",
+     "block", _c_l0_realtime_fresh),
     # CL-20261111-03 / P0-2：8888 指数负价是后复权设计产物（接缝连续、仅 delta 消费），
     # 不可重算为正。真正故障模式是 seam delta 算错导致接缝跳变数千点。钉死接缝连续性。
     ("DATA-INDEX-8888-SEAM", "8888 指数层相邻接缝连续（缺口≤2日且跳变≤2000点）",
