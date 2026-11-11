@@ -1101,8 +1101,7 @@ def _v5x_close_scan_job() -> dict | None:
         return
 
     try:
-        with session_scope() as s:
-            res = run_close_chain(s, label)
+        res = run_close_chain(label)
     except Exception as e:  # noqa: BLE001
         # 与 _v5x_scan_job 同一条纪律：必须外抛，否则「链跑挂了」会被记成 success。
         logger.exception(f"[scheduler] v5x close scan 失败：{e}")

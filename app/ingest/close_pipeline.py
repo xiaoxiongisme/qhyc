@@ -61,6 +61,15 @@ FETCH_WORKERS = 6
 #: 让兜底的 :05/:35 扫描与下一根收盘正常接管。
 MAX_LAG_S = 180
 
+#: 主链按池级覆盖率(90%)退出后，个别滞后品种(如 M888)仍可能因上游 akshare
+#: 延迟未就绪，被完备性门丢弃 → 信号拖到固定 :35 兜底(实测 10:35)。
+#: 扩展重试（CL-20261111-07）：对这类「个别滞后品种」每 RETRY_LAGGING_GAP_S 秒
+#: 只重采它们 + 增量合成 + 刷 BA + 重扫推送，数据一到(akshare 上游补齐)即推；
+#: 上限 RETRY_LAGGING_BUDGET_S(≈25min, 至 ~10:26)。极端坏日(>25min 才发布)仍由
+#: :35 兜底扫接住，不比现状(10:35)差。完备性门本身不动（宁晚勿错）。
+RETRY_LAGGING_GAP_S = 90
+RETRY_LAGGING_BUDGET_S = 1500
+
 
 def current_close_label(now: datetime, *, max_lag_s: int = MAX_LAG_S):
     """``now`` 是否正处在某根 60m 的「刚收盘」窗口内；是则返回该收盘标签。
@@ -119,6 +128,38 @@ def _coverage(session: Session, symbols: list[str], label: datetime) -> tuple[in
     return ready, len(symbols) - idle
 
 
+def lagging_symbols(session: Session, symbols: list[str], label: datetime) -> list[str]:
+    """主链按池级覆盖率退出后，仍「分钟数据未覆盖到桶尾」的滞后品种（个别）。
+
+    判据与 :func:`_coverage` 同源：``max(ts)`` 落在 ``[label-45min, label)`` 内才算
+    真·滞后；``max(ts) < label-45min``（本时段不交易/休市→idle）或
+    ``max(ts) >= label``（已就绪）都不算。无 L0 记录的品种视为 idle，不重试。
+    """
+    if not symbols:
+        return []
+    rows = session.execute(
+        text(
+            "SELECT symbol, max(ts) FROM public.minute_bar "
+            "WHERE symbol = ANY(:syms) AND ts >= :a GROUP BY symbol"
+        ),
+        {"syms": list(symbols), "a": label - timedelta(days=3)},
+    ).all()
+    by_sym = {str(sym): ts for sym, ts in rows}
+    stale_floor = label - timedelta(minutes=45)
+    lag: list[str] = []
+    for sym in symbols:
+        ts = by_sym.get(sym)
+        if ts is None:
+            continue
+        if label.tzinfo is None and ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        elif label.tzinfo is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=label.tzinfo)
+        if ts < label and ts >= stale_floor:
+            lag.append(sym)
+    return lag
+
+
 def collect_minutes(session: Session, symbols: list[str], workers: int = FETCH_WORKERS) -> dict:
     """补 L0：只采池内品种（收盘链不需要 82 个符号）。"""
     from app.ingest.minute_collector import MinuteCollector
@@ -167,28 +208,38 @@ def refresh_ba_min60(session: Session) -> float:
 
 
 def run_close_chain(
-    session: Session,
     label: datetime,
     *,
     do_push: bool = True,
     attempts: int = MAX_ATTEMPTS,
     wait_s: int = RETRY_WAIT_S,
     workers: int = FETCH_WORKERS,
+    retry_lagging: bool = True,
 ) -> dict[str, Any]:
     """跑完一根 60m 的收盘链，返回摘要（供调度器记日志/判定失败）。
 
     返回字段：
       label       收盘标签（本地时间）
-      attempts    实际采集轮数
+      attempts    实际采集轮数（主链）
       coverage    最后一轮的 (已覆盖品种数, 池内品种数)
       collect/l1/ba 各步耗时与行数
-      scan        ``run_v5x_scan`` 的摘要（n_signals/n_new/n_unsent/pushed/via）
+      scan        首轮 ``run_v5x_scan`` 的摘要
+      lagging_initial / lagging_final   扩展重试前后的滞后品种数
+      lagging_scan   末轮扩展重试扫描摘要
+
+    扩展重试（CL-20261111-07）：主链按池级覆盖率(90%)退出，但个别品种(如 M888)
+    可能因 akshare 上游延迟仍未就绪 → 信号拖到固定 :35 兜底。这里对滞后品种持续
+    轮询刚收盘根，数据一到即推；上限 RETRY_LAGGING_BUDGET_S。每次重试独立开会话，
+    间隔期间不持有任何 DB 会话（避免长事务）。
     """
+    from app.core.db import session_scope
     from app.data.tradable_scope import load_tradable_pool
     from app.ingest.synthesizer import minute_pipeline_lock
     from app.strategies.v5x.live import run_v5x_scan
 
-    symbols = [f"{v}888" for v in sorted(load_tradable_pool(session))]
+    # 品种池（独立短会话）
+    with session_scope() as s:
+        symbols = [f"{v}888" for v in sorted(load_tradable_pool(s))]
     if not symbols:
         raise RuntimeError("品种池为空（l3_ref.v_tradable_scope 无行）→ 收盘链不执行")
 
@@ -196,14 +247,16 @@ def run_close_chain(
     cov: tuple[int, int] = (0, len(symbols))
     used = 0
 
+    # ---- 主链：池级重试（覆盖率达标或达 attempt 上限即停）----
     for i in range(1, max(1, attempts) + 1):
         used = i
         # 采集 + 合成必须在分钟管线锁内完成：两者交错会让「DELETE 已删最近桶、
         # INSERT 读到未提交快照」重演（2026-09-30 静默漏桶的根因）。
-        with minute_pipeline_lock():
-            summary["collect"] = collect_minutes(session, symbols, workers=workers)
-            summary["l1"] = synth_l1(session, purge=(i == 1))
-        cov = _coverage(session, symbols, label)
+        with session_scope() as s:
+            with minute_pipeline_lock():
+                summary["collect"] = collect_minutes(s, symbols, workers=workers)
+                summary["l1"] = synth_l1(s, purge=(i == 1))
+            cov = _coverage(s, symbols, label)
         summary["coverage"] = cov
         logger.info(
             f"[close_pipeline] {label:%m-%d %H:%M} 第 {i} 轮："
@@ -218,11 +271,51 @@ def run_close_chain(
     summary["attempts"] = used
 
     # BA 必须在最后一轮 L1 之后刷，否则补进来的那根不进 BA，扫描仍看不到。
-    summary["ba60_s"] = refresh_ba_min60(session)
-
-    # 扫描的 now 用**当前时刻**而不是 label：scan_once 内部还会用 now 做
-    # 陈旧度判定（MAX_BAR_AGE_MIN=90），传 label 会让刚收盘的 bar 天然带滞后。
-    res = run_v5x_scan(session, now=datetime.now(label.tzinfo), do_push=do_push)
+    # 扫描的 now 用**当前时刻**而不是 label（scan_once 内部用 now 做陈旧度判定，
+    # MAX_BAR_AGE_MIN=90，传 label 会让刚收盘的 bar 天然带滞后）。
+    with session_scope() as s:
+        summary["ba60_s"] = refresh_ba_min60(s)
+        res = run_v5x_scan(s, now=datetime.now(label.tzinfo), do_push=do_push)
     summary["scan"] = res
-    logger.info(f"[close_pipeline] {label:%m-%d %H:%M} 完成：{summary}")
+    logger.info(f"[close_pipeline] {label:%m-%d %H:%M} 首轮完成：{summary}")
+
+    # ---- 扩展重试：个别滞后品种持续轮询刚收盘根（CL-20261111-07）----
+    if retry_lagging:
+        with session_scope() as s:
+            lag = lagging_symbols(s, symbols, label)
+        summary["lagging_initial"] = len(lag)
+        if lag:
+            logger.info(
+                f"[close_pipeline] {label:%m-%d %H:%M} 进入扩展重试："
+                f"{len(lag)} 个滞后品种 {lag}"
+            )
+            deadline = time.time() + RETRY_LAGGING_BUDGET_S
+            while lag and time.time() < deadline:
+                time.sleep(RETRY_LAGGING_GAP_S)
+                with session_scope() as s:
+                    with minute_pipeline_lock():
+                        summary.setdefault("lagging_collect", []).append(
+                            collect_minutes(
+                                s, lag, workers=min(workers, max(1, len(lag)))
+                            )
+                        )
+                        synth_l1(s, purge=False)
+                    lag = lagging_symbols(s, symbols, label)
+                    summary["ba60_s"] = refresh_ba_min60(s)
+                    res2 = run_v5x_scan(
+                        s, now=datetime.now(label.tzinfo), do_push=do_push
+                    )
+                summary["lagging_scan"] = res2
+                logger.info(
+                    f"[close_pipeline] {label:%m-%d %H:%M} 重试轮："
+                    f"剩余滞后 {len(lag)} {lag}，扫描 {res2}"
+                )
+                if not lag:
+                    break
+            summary["lagging_final"] = len(lag)
+            if lag:
+                logger.warning(
+                    f"[close_pipeline] {label:%m-%d %H:%M} 扩展重试超预算仍有滞后 "
+                    f"{len(lag)} {lag} → 交 :35 兜底扫描"
+                )
     return summary
