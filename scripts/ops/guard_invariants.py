@@ -705,6 +705,94 @@ def _c_calendar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
         f"官方日历落后 {lag} 天 → 指数扩展的坏日门会静默失效（CL-20261107-18）")
 
 
+# ---------------------------------------------------------------- 数据层缺陷修复 (CL-20261111-03)
+def _c_futures_rule_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """官方交易日历真源 futures_rule 必须新鲜（CL-20261111-03 / P0-1）。
+
+    诊断实证：遗留的 l3_ref.trade_calendar(INF) 止于 2026-10-08，但生产逻辑
+    （data_selfcheck / extend_index_8888 / trading_window）早已改读 futures_rule 的
+    distinct trade_date（akshare 每日 08:00 由 seed_futures_rule.py 播种，并回写
+    cfg_calendar_seed_meta.seeded_through）。真源若停止播种，extend_index_8888 的坏日门
+    会静默失能、换月检测停摆。本断言锁住「真源新鲜度」——这比修那张孤儿表更有价值。
+    """
+    cal_max = c.scalar("SELECT max(trade_date) FROM futures_rule")
+    if cal_max is None:
+        return (False, "futures_rule 已播种且覆盖到近 3 个自然日",
+                "futures_rule 无数据", "先跑 scripts/seed_futures_rule.py")
+    try:
+        cal_max_d = date.fromisoformat(str(cal_max)[:10])
+    except ValueError:
+        return (False, "futures_rule 最新交易日可解析", str(cal_max), "日期格式异常")
+    today = c.scalar("SELECT (now() AT TIME ZONE 'Asia/Shanghai')::date")
+    if today is None:
+        today = date.today()
+    lag = (today - cal_max_d).days
+    ok = lag <= 3
+    return (ok, "futures_rule 覆盖到近 3 个自然日（容差含周末）",
+            f"max(trade_date)={cal_max_d} lag={lag}d",
+            "" if ok else
+            f"官方日历真源落后 {lag} 天 → 指数扩展坏日门静默失能（CL-20261111-03）")
+
+
+def _c_l2_no_index(c: Ctx) -> tuple[bool, str, str, str]:
+    """L2 后复权层不得含任何指数(8888)符号（CL-20261111-03 / P1）。
+
+    sp_build_l2_back_adjusted 的正则是 ^[A-Za-z]+888$（只处理主连 888），8888 指数连
+    本就不进 BA（fusion_kline.py:17 注释明确）。L2 由「888 主连 + roll_segment」构成，
+    roll_segment 才以 8888 当换月 ratio 门的输入。故「L2 含 8888」是设计违反：任何读 BA
+    的策略会把指数当主连复权，污染实盘/回测。本断言把这条设计契约钉死。
+    """
+    n = c.scalar("""
+        SELECT count(*) FROM (
+          SELECT symbol FROM l2_adj.bar_5m_ba  WHERE symbol LIKE '%8888' UNION ALL
+          SELECT symbol FROM l2_adj.bar_15m_ba WHERE symbol LIKE '%8888' UNION ALL
+          SELECT symbol FROM l2_adj.bar_30m_ba WHERE symbol LIKE '%8888' UNION ALL
+          SELECT symbol FROM l2_adj.bar_60m_ba WHERE symbol LIKE '%8888'
+        ) x
+    """)
+    n = int(n or 0)
+    ok = n == 0
+    return (ok, "l2_adj.bar_*m_ba 不含任何 *8888 指数符号",
+            f"命中 {n} 行",
+            "" if ok else f"L2 后复权层出现 {n} 个 8888 指数符号 → 设计违反（P1）")
+
+
+def _c_index_8888_seam(c: Ctx) -> tuple[bool, str, str, str]:
+    """8888 指数层(后复权)历史(local_csv)与增量(incr)接缝必须连续（CL-20261111-03 / P0-2）。
+
+    8888 指数连是后复权连续合约：close = 主力价 − 累计换月偏移，老品种（JD 2013 上市、
+    RU 1990s 等）累计偏移达数千点 → 当下价可为负（设计产物，非损坏）。唯一消费者是换月
+    ratio 门（用价格变化量 idx_delta，不受绝对值符号影响）。真正的故障模式是
+    extend_index_8888 的 seam delta 算错 → 增量段相对历史整体平移数千点 → 接缝处出现
+    远超常态的单步跳变。本断言捕捉该跳变（阈值 2000 点，远高于这类品种的正常单步波动
+    <500，不会误报）。实测 9 个负价品种接缝价位逐位连续（JD −823→−861、RU −4620→−4770、
+    LH −8420→−8460），当前 PASS。
+    """
+    rows = c.rows("""
+        WITH h AS (
+          SELECT DISTINCT ON (symbol) symbol, close AS hc
+          FROM l0_raw.minute_bar
+          WHERE layer='index' AND src='local_csv_synth_8888'
+            AND ts >= now() - interval '400 days'
+          ORDER BY symbol, ts DESC
+        ), i AS (
+          SELECT DISTINCT ON (symbol) symbol, close AS ic
+          FROM l0_raw.minute_bar
+          WHERE layer='index' AND src='incr_synth_8888'
+            AND ts >= now() - interval '60 days'
+          ORDER BY symbol, ts ASC
+        )
+        SELECT count(*) FROM h JOIN i USING (symbol)
+        WHERE abs(h.hc - i.ic) > 2000
+    """)
+    n = int(rows[0][0]) if rows else 0
+    ok = n == 0
+    return (ok, "8888 指数层历史/增量接缝跳变 ≤ 2000 点",
+            f"异常品种数 {n}",
+            "" if ok else
+            f"{n} 个 8888 品种接缝跳变 >2000 点 → seam delta 疑似失效（P0-2）")
+
+
 def _c_l0_no_offhours_bar(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261109-04：l0 不得出现时间戳落在**非交易时段**的 bar。
 
@@ -5771,12 +5859,19 @@ def _c_v5x_hourlybrief_wired(c: Ctx) -> tuple[bool, str, str, str]:
             bad.append("_v5x_hourly_brief_job 未真实调用 push_periodic_brief")
         else:
             obs.append("scheduler 真接线")
-        if not any(
-                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                and n.func.attr == "add_job"
-                and any(isinstance(a, ast.Constant) and a.value == "v5x_hourly_brief"
-                        for a in n.args)
-                for n in ast.walk(sch)):
+        def _addjob_has_id(node):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_job"):
+                return False
+            for a in node.args:
+                if isinstance(a, ast.Constant) and a.value == "v5x_hourly_brief":
+                    return True
+            for kw in node.keywords:
+                if kw.arg == "id" and isinstance(kw.value, ast.Constant) \
+                        and kw.value.value == "v5x_hourly_brief":
+                    return True
+            return False
+        if not any(_addjob_has_id(n) for n in ast.walk(sch)):
             bad.append("sched.add_job 未注册 id=v5x_hourly_brief")
         else:
             obs.append("作业已注册")
@@ -5863,6 +5958,17 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("BA-NONPOSITIVE-GUARDED", "非正价仅在复权层且 V5X 已反解", "block",
      _c_ba_nonpositive_guarded),
     ("DATA-CALENDAR-FRESH", "官方交易日历覆盖到最新数据日", "block", _c_calendar_fresh),
+    # CL-20261111-03 / P0-1：遗留 l3_ref.trade_calendar(INF) 止于 2026-10-08，但生产逻辑
+    # 早已改读 futures_rule 真源。锁住真源新鲜度（若 seed_futures_rule 停跑会静默失能）。
+    ("CAL-FUTURES-RULE-FRESH", "官方日历真源 futures_rule 覆盖到近 3 日",
+     "block", _c_futures_rule_fresh),
+    # CL-20261111-03 / P1：L2 后复权只处理主连 888，8888 指数连本就不进 BA（设计）。
+    # 钉死「L2 不得含 8888」，防未来有人把指数误塞进后复权层。
+    ("VAR-L2-NO-INDEX", "L2 后复权层不含任何 8888 指数符号", "block", _c_l2_no_index),
+    # CL-20261111-03 / P0-2：8888 指数负价是后复权设计产物（接缝连续、仅 delta 消费），
+    # 不可重算为正。真正故障模式是 seam delta 算错导致接缝跳变数千点。钉死接缝连续性。
+    ("DATA-INDEX-8888-SEAM", "8888 指数层历史/增量接缝连续（跳变≤2000点）",
+     "block", _c_index_8888_seam),
     # CL-20261109-04：休市期 akshare 会给「时间戳=当前时刻」的合成 bar，
     # 采集作业无时段门 → 周一凌晨写入 11 根幽灵 bar，一路进 V5X 信号源且不报错。
     ("L0-NO-OFFHOURS-BAR", "l0 无时间戳落在非交易时段的 bar", "block",
