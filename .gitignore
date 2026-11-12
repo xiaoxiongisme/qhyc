@@ -150,3 +150,11 @@ docs/archive/
 # sync_cost_from_exchange.py 运行时写入；本地没有、生产有，属生成物不入库）
 db/seed/ak_futures_fees_variety.csv
 db/seed/czce_official_fees.csv
+
+# =====================================================
+# 部署标记 / 本地输出（CL-20261112-03 台账卫生，2026-11-12）
+# .deployed_sha 由发布流程写入，是运行时状态不是源码；output/ 是本地诊断产物。
+# 两者常驻会污染 git status，而 publish.py 要求生产 git status 为空。
+# =====================================================
+.deployed_sha
+output/
