@@ -789,10 +789,18 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
     for s in sorted(sigs, key=lambda x: (x.action != "OPEN", x.symbol)):
         label = action_cn.get((s.action, s.side), f"{s.action} {s.side}")
         cn = _cn(s.symbol)
-        # 品种中文名直接跟在代码后，一眼可读；BA 后复权价/偏移属内部记账口径，
-        # 不写入推送正文（已在 v5x_signal_log 的 price_ba/adj_offset 留档）。
+        # 品种中文名直接跟在代码后，一眼可读。
+        # ★ CL-20261112-12：本函数 docstring 一直承诺「BA 价附在括号里备查」，
+        #   但 CL-20261111-05 按用户反馈把 BA 参考价整行删掉后，实现与自身
+        #   文档 / test_v5x_t1_gate 契约脱节。这里恢复成**成交价行内括号备注**：
+        #   真实合约价始终是主价格，BA 价只作对账备查，不能被读成成交价；
+        #   不恢复「后复权参考 + 复权偏移」整行脚注，避免内部口径重新堆满正文。
         lines.append(f"{icon.get(s.action, '•')} {label} {s.symbol}（{cn}）")
-        lines.append(f"   成交价：{s.price_real:,.2f}（合约价）")
+        try:
+            ba_ref = f"；后复权备查 {s.price_ba:,.2f}"
+        except (TypeError, ValueError):  # pragma: no cover - 备注异常不能拖垮推送
+            ba_ref = ""
+        lines.append(f"   成交价：{s.price_real:,.2f}（合约价{ba_ref}）")
         if s.stop_real is not None:
             lines.append(f"   止损位：{s.stop_real:,.2f}")
         if s.action == "CLOSE":
@@ -818,8 +826,10 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
                      + ("首批为收盘即已就绪的品种；补发批为上游数据晚到、数据到齐后才发出的。"
                         "补发批的信号在发出时 bar 已收盘一段时间，价格可能已变化。"))
     lines.append("")
-    # 口径（BA 后复权 / 真实价反解等内部记账口径）不写进推送正文，仅在 v5x_signal_log 留档。
-    lines.append("⚠️ 本策略只出信号，不下单、不维护持仓；是否交易由你决定。")
+    # 口径详情（t-1 门控 / 真实价反解等内部记账口径）仍不写进正文，仅在
+    # v5x_signal_log 留档；但策略标识本身要让用户一眼可见（CL-20261112-12，
+    # test_v5x_t1_gate 的契约），不恢复冗长的「口径：」脚注。
+    lines.append("⚠️ V5X.3 只出信号，不下单、不维护持仓；是否交易由你决定。")
     return title, "\n".join(lines)
 
 

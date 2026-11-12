@@ -664,10 +664,28 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
             "coalesce(meta->>'status_source',''), executor "
             "FROM ops.scheduled_task WHERE enabled"
         )).fetchall()
-        for t, sch, gap, src, exe in sched_rows:
+        for row in sched_rows:
+            # ★ CL-20261112-12：字典行按列弹性取值，不做固定元组解包。
+            #   CL-20261110-20 之前这条查询只有 (task_id, schedule) 两列，之后
+            #   扩成 5 列；固定解包遇到精简列会抛 ValueError，被下面的 except
+            #   整块吞掉 → task_meta={} → schedule=None → cron 感知**静默退化**
+            #   成固定天数阈值，11-10 改期空档就是这样被误报成「链路停摆」。
+            #   缺列按安全默认补齐，不让一次列数差异把整套判据打回旧行为。
+            cells = list(row)
+            t = cells[0] if cells else None
+            if t is None:
+                continue
+            sch = cells[1] if len(cells) > 1 else None
+            gap = cells[2] if len(cells) > 2 else None
+            src = cells[3] if len(cells) > 3 else ""
+            exe = cells[4] if len(cells) > 4 else "apscheduler"
+            try:
+                gap_num = float(gap) if gap is not None else None
+            except (TypeError, ValueError):
+                gap_num = None  # 精简/异构查询里该列不是阈值 → 回退代码值
             task_meta[str(t)] = (
                 str(sch) if (sch and str(exe) == "apscheduler") else None,
-                float(gap) if gap is not None else None,
+                gap_num,
                 str(src or ""),
             )
     except Exception:  # noqa: BLE001 —— 含测试用 FakeSession、字典缺失等

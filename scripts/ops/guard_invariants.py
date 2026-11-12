@@ -1251,6 +1251,54 @@ def _c_jobhb_cron_aware(c: Ctx) -> tuple[bool, str, str, str]:
     if not wired:
         bad.append("_check_job_heartbeat 未引用新判据或调度字典（定义了没人用）")
 
+    # ★ CL-20261112-12：纯函数对拍只能证明判据本身没退化，挡不住「巡检读字典
+    #   时静默退化成固定阈值」。补两组端到端行为对拍：现行 5 列字典行与旧版
+    #   2 列精简行，在 11-10 合法改期空档下都必须零告警。
+    try:
+        from datetime import datetime as _DateTime  # noqa: PLC0415
+        import app.scheduler_jobs as _sj  # noqa: PLC0415
+        from app.ops.alerting import AlertConfig  # noqa: PLC0415
+        from app.scheduler_jobs import JobSpec  # noqa: PLC0415
+
+        class _R:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def fetchall(self):
+                return self._rows
+
+        class _S:
+            def __init__(self, dict_rows):
+                self._dict_rows = dict_rows
+
+            def execute(self, query, params=None):
+                if "ops.scheduled_task" in str(query):
+                    return _R(self._dict_rows)
+                return _R([("lstm_train", "weekly", d("2026-11-01 06:06"))])
+
+        class _Frozen(_DateTime):
+            @classmethod
+            def now(cls, tz=None):
+                n = d("2026-11-10 18:00")
+                return n if tz is None else n.astimezone(tz)
+
+        _orig_jobs, _orig_dt = _sj.monitored_jobs, alerting.datetime
+        try:
+            _sj.monitored_jobs = lambda: [JobSpec(
+                "lstm_weekly_retrain", "lstm_train", "weekly", 9, True, True)]
+            alerting.datetime = _Frozen
+            for shape, dict_rows in (
+                ("5列现行", [("lstm_weekly_retrain", "0 6 * * 5", 9, "", "apscheduler")]),
+                ("2列精简", [("lstm_weekly_retrain", "0 6 * * 5")]),
+            ):
+                got = alerting._check_job_heartbeat(_S(dict_rows), AlertConfig())
+                if got:
+                    bad.append(f"{shape}字典行在改期空档仍误报: {got}")
+        finally:
+            _sj.monitored_jobs, alerting.datetime = _orig_jobs, _orig_dt
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"端到端对拍失败 {type(exc).__name__}: {exc}")
+
     # 字典侧：周/月频作业的 cron 必须能解析，否则判据会全量回退成旧行为。
     try:
         from apscheduler.triggers.cron import CronTrigger  # noqa: PLC0415
