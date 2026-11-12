@@ -148,6 +148,28 @@ def main() -> int:
         stats["gated"] = False
         stats["force"] = bool(args.force)
         print("[fetch_1min] " + json.dumps(stats, ensure_ascii=False, default=str), flush=True)
+        # CL-20261112-09：写一条采集审计，供守卫验证「跨源占位过滤真在跑」。
+        # 独立事务，失败只记日志，绝不影响行情落库。
+        from app.ingest.l0_write_guard import record_ingest_audit
+
+        record_ingest_audit(
+            "contract",
+            {
+                "n_symbols": stats.get("contracts", 0),
+                "n_candidates": stats.get("rows_fetched", 0),
+                "n_written": stats.get("submitted", 0),
+                "n_skipped_cross_src": stats.get("n_skipped_cross_src", 0),
+                # contract 链路靠水位线增量（收盘后提交 0 行），不做根数裁切
+                "max_lookback_bars": 0,
+                "min_ts": None,
+                "max_ts": None,
+            },
+            {
+                "guard_failed": bool(stats.get("guard_failed")),
+                "incremental": bool(stats.get("incremental")),
+                "dry_run": bool(args.dry_run),
+            },
+        )
         # 单合约失败属常态（退市/无成交/接口空），只有「全部失败」才判非零
         return 0 if stats["ok"] > 0 else 1
 

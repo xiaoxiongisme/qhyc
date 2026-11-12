@@ -7203,7 +7203,184 @@ def _c_main_contract_follow(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+def _c_l0_cross_src_quiet(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261112-09：改造后不得再新增跨源冲突留痕。
+
+    078 触发器 22:00 上线后捕获 337 行历史留痕，migration 079 把当时的
+    ``max(last_seen)`` / ``sum(n_attempts)`` 钉成基线。本断言衡量「此刻」：
+    只要冲突表比基线更新/累加，就说明实时链路又去重写了已被其它 src 占据的键。
+
+    同时要求近 24h 有 continuous 采集审计且 guard_failed=false —— 否则
+    「采集停了」也会让冲突表安静，那是最典型的假绿。
+    """
+    label = "实时采集不再反复重写跨源占位键（CL-20261112-09）"
+    bad: list[str] = []
+    obs: list[str] = []
+    try:
+        b = c.rows(
+            "SELECT value_ts, value_num FROM ops.l0_guard_baseline "
+            "WHERE key='conflict_last_seen'"
+        )
+        if not b:
+            bad.append("缺 ops.l0_guard_baseline 基线（migration 079 未执行）")
+            base_ts, base_num = None, None
+        else:
+            base_ts, base_num = b[0][0], b[0][1]
+        cur_ts = c.scalar("SELECT max(last_seen) FROM ops.l0_src_conflict")
+        cur_num = c.scalar(
+            "SELECT coalesce(sum(n_attempts), 0) FROM ops.l0_src_conflict"
+        )
+        obs.append(f"基线 last_seen={base_ts} attempts={base_num}")
+        obs.append(f"当前 last_seen={cur_ts} attempts={cur_num}")
+        if base_ts is not None:
+            if cur_ts is not None and cur_ts > base_ts + timedelta(minutes=5):
+                bad.append(
+                    f"改造后新增跨源冲突留痕（{cur_ts} 晚于基线 {base_ts}）"
+                )
+            if base_num is not None and int(cur_num or 0) > int(base_num) + 2:
+                bad.append(f"n_attempts 仍在累加：{cur_num} > 基线 {base_num}")
+        n_audit = c.scalar(
+            "SELECT count(*) FROM ops.l0_ingest_audit "
+            "WHERE chain='continuous' AND run_at > now() - interval '24 hours'"
+        )
+        n_failed = c.scalar(
+            "SELECT count(*) FROM ops.l0_ingest_audit "
+            "WHERE chain='continuous' AND run_at > now() - interval '24 hours' "
+            "  AND extra->>'guard_failed' = 'true'"
+        )
+        obs.append(f"近24h continuous 审计={n_audit} guard_failed={n_failed}")
+        if int(n_audit or 0) == 0:
+            bad.append("近 24h 无 continuous 采集审计：无法排除「采集停了所以没冲突」")
+        if int(n_failed or 0) > 0:
+            bad.append(f"{n_failed} 轮跨源占位查询降级（guard_failed=true）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询失败 {type(exc).__name__}: {str(exc)[:160]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_l0_replay_bounded(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261112-09：实时窗口必须真的被裁切，且两条采集链都真接了护栏。
+
+    不只看配置里有没有参数 —— 查 ``ops.l0_ingest_audit`` 的实测
+    ``max_lookback_bars``，并核对源码里 ``tail_bars`` /
+    ``filter_cross_src_occupied`` 是否仍被真实调用（防「表建了没人读」）。
+    """
+    import os
+
+    label = "实时重放窗口受控且两条采集链真接护栏（CL-20261112-09）"
+    bad: list[str] = []
+    obs: list[str] = []
+    try:
+        try:
+            limit = int(os.getenv("QHYC_L0_REALTIME_BARS", "120") or 120)
+        except ValueError:
+            limit = 120
+        r = c.rows(
+            "SELECT coalesce(max(max_lookback_bars), 0), "
+            "       coalesce(sum(n_candidates), 0), count(*) "
+            "FROM ops.l0_ingest_audit "
+            "WHERE chain='continuous' AND run_at > now() - interval '24 hours'"
+        )
+        mx, n_cand, n_runs = (tuple(r[0]) if r else (0, 0, 0))
+        obs.append(f"近24h 最大单品种候选={mx} 候选总数={n_cand} 轮次={n_runs}")
+        obs.append(f"配置上限={limit}")
+        if int(n_runs or 0) == 0:
+            bad.append("近 24h 无 continuous 采集审计（护栏可能从未运行）")
+        if int(n_cand or 0) == 0:
+            bad.append("审计里候选行数恒为 0（采集空转）")
+        if int(mx or 0) > limit + 5:
+            bad.append(f"实时窗口未被裁切：实测 {mx} 根 > 上限 {limit}+5")
+
+        root = Path(__file__).resolve().parents[2]
+        mc = (root / "app" / "ingest" / "minute_collector.py").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        cc = (root / "app" / "ingest" / "contract_minute_collector.py").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        if "tail_bars(" not in mc or "filter_cross_src_occupied(" not in mc:
+            bad.append("continuous 链路不再真实调用裁切/跨源跳过")
+        if "filter_cross_src_occupied(" not in cc:
+            bad.append("contract 链路不再真实调用跨源跳过")
+        obs.append("两条链路源码真实引用护栏")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询/读源码失败 {type(exc).__name__}: {str(exc)[:160]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_l0_eod_reconcile(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261112-09：15:20 日终作业必须真跑过、缺口为零、无校验异常。
+
+    判据来自结果表 ``ops.l0_eod_check``（主表聚合），**不依赖作业流水 success**
+    —— 本项目已多次出现「脚本挂了仍记 success」。目标交易日按上海时间计算：
+    工作日 15:20 之后取当天，否则回退到上一个工作日。
+    """
+    from datetime import time as _time
+    from zoneinfo import ZoneInfo
+
+    label = "日终全天校验按期产出且缺口为零（CL-20261112-09）"
+    bad: list[str] = []
+    obs: list[str] = []
+    try:
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        d = now.date()
+        if d.weekday() >= 5 or now.time() < _time(15, 20):
+            d -= timedelta(days=1)
+            while d.weekday() >= 5:
+                d -= timedelta(days=1)
+        obs.append(f"目标交易日={d}")
+        r = c.rows(
+            "SELECT count(*), coalesce(sum(n_missing), 0), "
+            "       coalesce(sum(n_inserted), 0), "
+            "       count(*) FILTER (WHERE status='error'), "
+            "       count(*) FILTER (WHERE status='no_source') "
+            "FROM ops.l0_eod_check WHERE trade_date=:d",
+            d=d,
+        )
+        n_rows, n_missing, n_inserted, n_error, n_no_source = (
+            tuple(r[0]) if r else (0, 0, 0, 0, 0)
+        )
+        obs.append(
+            f"结果行={n_rows} 缺失={n_missing} 已补={n_inserted} "
+            f"error={n_error} no_source={n_no_source}"
+        )
+        if int(n_rows or 0) == 0:
+            bad.append(f"{d} 无日终校验结果：作业从未跑过或整体失败")
+        if int(n_error or 0) > 0:
+            bad.append(f"{n_error} 个品种校验抛异常（status=error）")
+        # n_missing 是 reconcile 复查后的**残留**缺口，不是补前缺口。
+        if int(n_missing or 0) > 0:
+            bad.append(f"补缺后仍有 {int(n_missing)} 个缺失键未落地")
+        job = c.scalar(
+            "SELECT enabled FROM ops.scheduled_task "
+            "WHERE task_id='l0_eod_reconcile'"
+        )
+        if job is not True:
+            bad.append("ops.scheduled_task 缺 l0_eod_reconcile 或未启用")
+        else:
+            obs.append("作业字典已登记启用")
+        root = Path(__file__).resolve().parents[2]
+        sched = (root / "app" / "scheduler.py").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        if 'id="l0_eod_reconcile"' not in sched or "_l0_eod_reconcile_job" not in sched:
+            bad.append("scheduler.py 不再注册日终作业（字典有、代码没了）")
+        else:
+            obs.append("调度器真实注册")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询/读源码失败 {type(exc).__name__}: {str(exc)[:160]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
+    # CL-20261112-09：实时重放 1024 根历史窗口造成 337 行跨源冲突留痕。
+    # 三条分别锁「不再新增冲突」「窗口真被裁切」「日终补缺真跑」，全部 block。
+    ("OPS-L0-CROSS-SRC-QUIET", "实时采集不再反复重写跨源占位键",
+     "block", _c_l0_cross_src_quiet),
+    ("OPS-L0-REPLAY-BOUNDED", "实时重放窗口受控且两条采集链真接护栏",
+     "block", _c_l0_replay_bounded),
+    ("DATA-L0-EOD-RECONCILE", "日终全天校验按期产出且缺口为零",
+     "block", _c_l0_eod_reconcile),
     # CL-20261112-11：dim_main_contract_inferred 是执行层反解真实合约的首选真源，
     # 写入方从未进仓库/未挂调度 → 停在 2026-09-30，26/50 品种静默反解到陈旧合约。
     # 两条分别锁「写入链路 + 新鲜度」与「888 实际跟随行为」，均为 block。

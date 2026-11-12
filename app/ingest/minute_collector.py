@@ -18,6 +18,12 @@
 - 不强行对齐交易时段整点（那会丢分钟），仅剔除 NaN 价 / 1970 脏戳 / 未来戳，
   以及**时间戳落在非交易时段的合成 bar**（CL-20261109-04，见 _fetch_akshare 内注释）。
 - 写入幂等：ON CONFLICT (symbol, ts) DO NOTHING，重复跑安全。
+- ★ CL-20261112-09（2026-11-12）：上面「刷新最近 ~3 个交易日」正是 309 行
+  跨源冲突的根因——实时任务每轮重放整段历史窗口，撞上先到的历史源占住的键。
+  现由 ``app/ingest/l0_write_guard.py`` 做两件事：入库前把窗口裁成最近 N 根
+  （默认 120，``QHYC_L0_REALTIME_BARS`` 可调），并显式剔除已被其它 src 占据的键。
+  长缺口不再靠实时重放补，改由 15:20 的日终作业用完整窗口补缺。
+  ``full_window=True`` 保留完整窗口，仅供日终校验/手工排查使用。
 """
 from __future__ import annotations
 
@@ -31,6 +37,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import MainContractSpec, get_settings
 from app.core.logging import logger
+from app.ingest.l0_write_guard import (
+    bars_span,
+    filter_cross_src_occupied,
+    realtime_bars_limit,
+    record_ingest_audit,
+    tail_bars,
+)
 from app.ingest.trading_window import is_collection_window
 
 _SH_TZ = ZoneInfo("Asia/Shanghai")
@@ -97,6 +110,13 @@ class MinuteCollector:
 
     def __init__(self, session: Session):
         self.session = session
+        # CL-20261112-09：本轮护栏统计，collect_all 结束时写 ops.l0_ingest_audit。
+        # 守卫据此验证「裁切与跨源跳过真在跑」，而不是只看配置文件里有没有参数。
+        self._guard: dict = {
+            "n_symbols": 0, "n_candidates": 0, "n_written": 0,
+            "n_skipped_cross_src": 0, "max_lookback_bars": 0,
+            "min_ts": None, "max_ts": None, "guard_failed": False,
+        }
 
     def close(self) -> None:
         """释放资源（C9 后无外部连接需关闭，保留接口以兼容调用方）。"""
@@ -104,17 +124,19 @@ class MinuteCollector:
 
     # ---------- 公开 API ----------
     def collect_symbol(
-        self, spec: MainContractSpec, data_length: int = 5000, dry_run: bool = False
+        self, spec: MainContractSpec, data_length: int = 5000,
+        dry_run: bool = False, full_window: bool = False,
     ) -> int:
-        rows = self._fetch_akshare(spec)
+        # full_window=True 仅供日终校验 / 手工排查：保留接口返回的完整窗口。
+        rows = self._fetch_akshare(spec, bars=0 if full_window else None)
         if not rows:
             logger.warning(f"[minute] {spec.symbol} akshare 无数据")
             return 0
         if dry_run:
             logger.info(f"[minute] {spec.symbol} DRY-RUN 拉取 {len(rows)} 行（未写库）")
             return len(rows)
-        self._upsert(rows)
-        logger.info(f"[minute] {spec.symbol} upserted {len(rows)}")
+        written = self._upsert(rows)
+        logger.info(f"[minute] {spec.symbol} upserted {written}/{len(rows)}")
         return len(rows)
 
     def collect_all(
@@ -156,6 +178,18 @@ class MinuteCollector:
             self.close()
         ok = sum(1 for r in results if "error" not in r)
         logger.info(f"[minute] collect_all done: {ok}/{len(results)} symbols")
+        # 独立事务写审计：即使本轮全部失败也要留痕，守卫才不会把「采集停了」
+        # 误判成「跨源冲突已消失」。
+        record_ingest_audit(
+            "continuous",
+            self._guard,
+            {
+                "ok": ok,
+                "total": len(results),
+                "bars_limit": realtime_bars_limit(),
+                "guard_failed": bool(self._guard.get("guard_failed")),
+            },
+        )
         return results
 
     def _collect_parallel(
@@ -196,8 +230,13 @@ class MinuteCollector:
 
 
     # ---------- akshare 唯一源 ----------
-    def _fetch_akshare(self, spec: MainContractSpec) -> list[dict]:
+    def _fetch_akshare(
+        self, spec: MainContractSpec, bars: int | None = None
+    ) -> list[dict]:
         """akshare 新浪主连 1 分钟（period=1）唯一源。
+
+        ``bars``：``None`` = 按 ``realtime_bars_limit()`` 裁切（实时链路默认）；
+        ``0`` 或负数 = 保留完整窗口（日终校验）；正数 = 指定根数（测试/灰度）。
 
         ⚠ 限制（2026-11-09 实测，不是猜的）：``futures_zh_minute_sina`` 全周期
         都是 **1023 根硬上限**，周期越短回溯越浅：
@@ -268,24 +307,60 @@ class MinuteCollector:
             logger.warning(
                 f"[minute] {spec.symbol} 丢弃 {n_offhour} 根非交易时段 bar"
                 f"（休市期合成 bar，CL-20261109-04）")
-        return rows
+        # ★ CL-20261112-09：在逐根过滤**之后**裁切。先裁切再过滤会被尾部的
+        # 非交易时段合成 bar 吃掉窗口，导致有效根数不足。
+        limit = realtime_bars_limit() if bars is None else bars
+        return tail_bars(rows, limit)
 
     # ---------- upsert ----------
     def _upsert(self, rows: list[dict]) -> int:
         if not rows:
             return 0
+        # ★ CL-20261112-09：显式跳过已被其它 src 占据的历史键。
+        # 此前每轮重放都会尝试 INSERT、被 DO NOTHING 吞掉、再被 078 触发器记一笔，
+        # 于是 309 个键的 n_attempts 永久累加。现在源头不提交，冲突表自然安静。
+        src = str(rows[0].get("src") or "akshare_1min")
+        kept, n_skipped, guard_failed = filter_cross_src_occupied(
+            self.session, rows, src
+        )
+        self._tally(rows, len(kept), n_skipped, guard_failed)
+        if not kept:
+            self.session.commit()
+            return 0
         # PostgreSQL 单条 INSERT 参数上限 65535；minute_bar 每行 15 列，
         # 单品种 data_length=5000 行会超限，故按 ~4000 行分块执行。
         n = 0
-        for i in range(0, len(rows), 4000):
-            batch = rows[i:i + 4000]
+        for i in range(0, len(kept), 4000):
+            batch = kept[i:i + 4000]
             stmt = insert(_MINUTE_BAR).values(batch).on_conflict_do_nothing(
                 index_elements=["symbol", "ts"]
             )
             self.session.execute(stmt)
             n += len(batch)
         self.session.commit()
+        if n_skipped:
+            logger.info(
+                f"[minute] 跳过 {n_skipped} 个已被其它 src 占据的历史键（keep-first）"
+            )
         return n
+
+    def _tally(
+        self, rows: list[dict], n_written: int, n_skipped: int, guard_failed: bool
+    ) -> None:
+        """累计本轮护栏指标，供 collect_all 写 ops.l0_ingest_audit。"""
+        g = self._guard
+        g["n_symbols"] += 1
+        g["n_candidates"] += len(rows)
+        g["n_written"] += n_written
+        g["n_skipped_cross_src"] += n_skipped
+        g["max_lookback_bars"] = max(int(g["max_lookback_bars"]), bars_span(rows))
+        ts_all = [r["ts"] for r in rows]
+        lo, hi = min(ts_all), max(ts_all)
+        if g["min_ts"] is None or lo < g["min_ts"]:
+            g["min_ts"] = lo
+        if g["max_ts"] is None or hi > g["max_ts"]:
+            g["max_ts"] = hi
+        g["guard_failed"] = bool(g["guard_failed"] or guard_failed)
 
 
 __all__ = ["MinuteCollector"]

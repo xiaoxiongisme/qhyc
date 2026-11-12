@@ -2174,6 +2174,23 @@ def _build_scheduler() -> BlockingScheduler:
     )
     logger.info("[scheduler] registered minute_and_bars at :07/:37 (staggered, minute-first pipeline)")
 
+    # ★ CL-20261112-09：L0 全天分钟校验补缺（日盘收盘 +20 分钟）。
+    # 实时链路已裁成最近 120 根，超过窗口的长缺口不再靠重放补，由此作业用
+    # 完整 1024 根窗口逐主连校验、只补缺失键（不覆盖任何已有 src）。
+    # 字典 ops.scheduled_task 的 schedule 同为 "20 15 * * *"（频率单一真相）。
+    # 星期位刻意用 `*`：CronTrigger.from_crontab 的星期语义与标准 crontab 差一天
+    # （skill 坑 #1），写 0-4 会变成周二~周六；周末由作业内 weekday 判断跳过。
+    sched.add_job(
+        _l0_eod_reconcile_job,
+        trigger=CronTrigger(hour=15, minute=20, timezone=settings.env.TZ),
+        id="l0_eod_reconcile",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    logger.info("[scheduler] registered l0_eod_reconcile at 15:20 (CL-20261112-09)")
+
     # P1-1：后复权物化 bar_*_ba 定期重建（工单 #8，依赖 l2_adj.roll_segment + l1_mkt.bar_*）。
     # 错峰在分钟管线 :07/:37 之后 18 分钟，确保 bar_* 已落盘再 as-of join，避免读未提交快照。
     # sp_build_l2_back_adjusted 自带触发签名（price_shift / Σcum_offset / Σepoch(seg_start) / 段数），
@@ -3378,6 +3395,31 @@ def _minute_and_bars_job() -> None:
             )
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] minute_and_bars failed: {e}")
+
+
+def _l0_eod_reconcile_job() -> None:
+    """CL-20261112-09：每交易日 15:20 校验全天 L0 分钟，只补缺失键。
+
+    非交易日（周六/周日）由 ``trading_session_bounds`` 返回 None 直接跳过；
+    法定节假日会多跑一轮，接口无当日数据时结果记 ``no_source`` 并告警，
+    无正确性风险（与 trading_window.py 的取舍一致）。
+
+    ⚠ 整体失败时**向上抛出**，让 ``ops.scheduled_task_run`` 记 failed 并触发
+    ``OPS-JOB-FAILURE-LOUD``。单品种异常已在 reconcile 内部隔离，不会走到这里。
+    即便流水被误记 success，``DATA-L0-EOD-RECONCILE`` 也会因结果表缺行而 FAIL，
+    两道防线不依赖同一判据。
+    """
+    logger.info("[scheduler] l0_eod_reconcile start")
+    try:
+        from app.core.db import session_scope
+        from app.ingest.l0_eod_reconcile import reconcile
+
+        with session_scope() as s:
+            res = reconcile(session=s)
+        logger.info(f"[scheduler] l0_eod_reconcile done: {res}")
+    except Exception:
+        logger.exception("[scheduler] l0_eod_reconcile failed")
+        raise
 
 
 def _back_adjusted_job() -> None:

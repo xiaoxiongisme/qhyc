@@ -104,6 +104,12 @@ class IngestConfig(BaseModel):
     contract_session_gate: bool = True
     #: 增量水位线回看天数（akshare 固定返回约 1024 根 ≈ 6 交易日）。
     contract_watermark_lookback_days: int = 8
+    #: 2026-11-12 CL-20261112-09：实时 minute 链路本地裁切窗口（根数）。
+    #: akshare 服务端固定返回约 1024 根、无法少返回，故在入库前裁掉长历史重放。
+    #: 默认 120（≈4 轮 :07/:37 容错），可用 QHYC_L0_REALTIME_BARS 覆盖。
+    #: 字段自带默认值 → **不需要改被 .gitignore 排除的 config/cloud.yaml**。
+    #: 日终校验作业使用完整窗口，不受此值限制。
+    l0_realtime_bars: int = 120
 
 
 class CalibrationConfig(BaseModel):

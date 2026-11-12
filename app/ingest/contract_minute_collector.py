@@ -48,6 +48,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.logging import logger
+from app.ingest.l0_write_guard import filter_cross_src_occupied
 from app.ingest.minute_collector import _parse_ak_minute_dt, _valid_minute_row
 
 SRC = "akshare_1min_contract"
@@ -169,6 +170,17 @@ class ContractMinuteCollector:
                 if self.pause_sec:
                     time.sleep(self.pause_sec)
 
+        # ★ CL-20261112-09：水位线只回看 8 天，查不到更早历史时会把老合约误判成
+        # 「新合约」并保留全部 1024 根，例如 BB2705 撞上 local_csv_20261030 的
+        # 10-08~10-29 历史键（实测 28 行冲突）。这里做一次精确键的跨源占位过滤，
+        # 让 keep-first 显式生效；同源键仍由 ON CONFLICT DO NOTHING 兜底。
+        n_cross_src = 0
+        guard_failed = False
+        if fetched:
+            kept, n_cross_src, guard_failed = filter_cross_src_occupied(
+                self.session, fetched, SRC
+            )
+            fetched = kept
         inserted = 0
         if not dry_run and fetched:
             for i in range(0, len(fetched), batch_size):
@@ -182,7 +194,9 @@ class ContractMinuteCollector:
             "rows": len(fetched),                       # 过滤后待写行数
             "submitted": inserted,
             "rows_fetched": rows_fetched,               # 接口原始返回行数
-            "rows_skipped": rows_fetched - len(fetched),  # 被水位线滤掉的重复行
+            "rows_skipped": rows_fetched - len(fetched),  # 被水位线/跨源占位滤掉
+            "n_skipped_cross_src": n_cross_src,
+            "guard_failed": bool(guard_failed),
             "incremental": bool(incremental and watermarks is not None),
             "watermarks": len(watermarks or {}),
             "seconds": round(time.time() - t0, 1),
