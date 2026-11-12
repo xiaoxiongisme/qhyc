@@ -6668,7 +6668,8 @@ def _c_job_failure_loud(c: Ctx) -> tuple[bool, str, str, str]:
         else:
             seg = ast.get_source_segment(code, fn) or ""
             for token in ("ops.scheduled_task_run", "'failed'", "'aborted'",
-                          "[reaped:", "cron_invariant_guard"):
+                          "[reaped:", "cron_invariant_guard",
+                          "ops.invariant_run"):
                 if token not in seg:
                     bad.append(f"失败汇总缺关键判据 {token}")
             if not any(isinstance(x, ast.ExceptHandler) for x in ast.walk(fn)):
@@ -6748,80 +6749,327 @@ def _c_guard_self_liveness(c: Ctx) -> tuple[bool, str, str, str]:
     try:
         enabled = c.scalar("SELECT enabled::text FROM ops.scheduled_task "
                            "WHERE task_id='cron_invariant_guard'")
-        fresh = c.scalar("SELECT max(checked_at) >= now() - interval '30 hours' "
-                         "FROM ops.invariant_check")
-        keys = c.scalar("""
-            SELECT count(DISTINCT check_key) FROM ops.invariant_check
-            WHERE checked_at >= (SELECT max(checked_at) - interval '5 minutes'
-                                 FROM ops.invariant_check)
+        row = c.rows("""
+            SELECT r.run_id, r.finished_at, r.n_total,
+                   (SELECT count(*) FROM ops.invariant_check i
+                    WHERE i.run_id = r.run_id) AS n_rows
+            FROM ops.invariant_run r
+            ORDER BY r.finished_at DESC LIMIT 1
         """)
-        obs.append(f"字典enabled={enabled} 记录新鲜={fresh} 最近一轮={int(keys or 0)}条")
+        expected = c.scalar("""
+            SELECT CASE
+              WHEN (now() AT TIME ZONE 'Asia/Shanghai')::time >= time '11:10'
+              THEN ((now() AT TIME ZONE 'Asia/Shanghai')::date + time '09:10')
+                   AT TIME ZONE 'Asia/Shanghai'
+              ELSE ((now() AT TIME ZONE 'Asia/Shanghai')::date - 1 + time '09:10')
+                   AT TIME ZONE 'Asia/Shanghai'
+            END
+        """)
+        obs.append(f"字典enabled={enabled} 完成轮={row[0][0] if row else 'none'}")
         if enabled != "true":
             bad.append("cron_invariant_guard 字典未启用")
-        if not fresh:
-            bad.append("ops.invariant_check 最近一轮超过 30h")
-        if int(keys or 0) < 50:
-            bad.append("最近一轮覆盖不足 50 条断言（疑似 --only 单条巡检）")
+        if not row:
+            bad.append("ops.invariant_run 无完成标记（守卫未跑完）")
+        else:
+            _rid, finished, n_total, n_rows = row[0]
+            if int(n_total or 0) != int(n_rows or 0):
+                bad.append(f"最近轮标记 {n_total} 条/流水 {n_rows} 条（半途崩溃）")
+            if finished is None or (expected is not None and finished < expected):
+                bad.append("最近完成轮早于期望 09:10 轮次")
     except Exception as exc:  # noqa: BLE001
         bad.append(f"存活性状态查询失败 {type(exc).__name__}: {str(exc)[:100]}")
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
 def _c_l0_src_audit(c: Ctx) -> tuple[bool, str, str, str]:
-    """L0 跨源覆盖必须可审计（B-4）：触发器真挂载、函数真比较 src。
+    """L0 跨源冲突必须**真能**留痕（CL-20261112-06 P0-1）：验行为，不验挂载。
 
-    主键 (symbol, ts) 不含 src，历史覆盖不可追溯。本断言不查「表里有没有
-    审计行」（刚装好当然是 0，那是拿历史凑数），而是锁**现在的行为**：
-    审计表存在、触发器挂在 l0_raw.minute_bar 且启用、函数体真的引用
-    ``OLD.src`` / ``NEW.src`` 并写入审计表。缺任何一环都会退回「看不见」。
+    ★ 旧版是假绿：只验「077 的 AFTER UPDATE 触发器挂在 282 处、函数体含
+      OLD.src/NEW.src」，于是 PASS 了一整轮审计。但常态写入全是
+      ON CONFLICT (symbol,ts) DO NOTHING / COPY，**从不产生 UPDATE**，
+      审计表实测 0 行 —— 典型的「触发器挂了没人触发」。
+
+    现在锁三层「此刻可判定」的事实：
+      ① 行为探针：TEMP 表挂 ops.fn_log_l0_src_conflict，同键不同 src 冲突
+         必须留痕、同 src 重跑不得重复；独立事务 ROLLBACK，零副作用；
+      ② 真接线：BEFORE INSERT 触发器覆盖全部 chunk、函数按 TG_RELID 查旧行；
+         常态采集路径确实使用 DO NOTHING（探针前提）；
+      ③ 审计表当前行数（仅观测，不拿历史流水凑 PASS）。
     """
-    label = "L0 跨源覆盖可审计（触发器真挂载 + 函数真比较 src）"
+    label = "L0 跨源冲突真可审计（行为探针 + 写入路径真接线）"
     bad, obs = [], []
+
+    # ① 行为探针：独立连接 + 独立事务，绝不污染守卫主 session
     try:
-        tbl = c.scalar("SELECT to_regclass('ops.minute_bar_src_overlay')::text")
-        if not tbl:
-            bad.append("缺 ops.minute_bar_src_overlay 审计表（migration 077 未执行）")
+        from app.core.db import get_engine
+
+        probe = {"s": "R3GUARD", "t": "2026-11-12 10:00+08"}
+        with get_engine().connect() as conn:
+            tx = conn.begin()
+            try:
+                conn.execute(text(
+                    "CREATE TEMP TABLE _r3_probe ("
+                    "symbol text NOT NULL, ts timestamptz NOT NULL, "
+                    "src text, layer text, PRIMARY KEY (symbol, ts))"))
+                conn.execute(text(
+                    "CREATE TRIGGER _r3_probe_trg BEFORE INSERT ON _r3_probe "
+                    "FOR EACH ROW EXECUTE FUNCTION ops.fn_log_l0_src_conflict()"))
+                conn.execute(text(
+                    "INSERT INTO _r3_probe VALUES (:s,:t,'src_a','continuous')"), probe)
+                conn.execute(text(
+                    "INSERT INTO _r3_probe VALUES (:s,:t,'src_b','continuous') "
+                    "ON CONFLICT (symbol,ts) DO NOTHING"), probe)
+                conn.execute(text(
+                    "INSERT INTO _r3_probe VALUES (:s,:t,'src_a','continuous') "
+                    "ON CONFLICT (symbol,ts) DO NOTHING"), probe)
+                rows = conn.execute(text(
+                    "SELECT attempted_src, kept_src FROM ops.l0_src_conflict "
+                    "WHERE symbol=:s"), probe).fetchall()
+                got = [(str(r[0]), str(r[1])) for r in rows]
+                if got != [("src_b", "src_a")]:
+                    bad.append(f"冲突留痕行为异常（得到 {got}）")
+                else:
+                    obs.append("行为探针 src_b→src_a 留痕 / 同src不重复")
+            finally:
+                tx.rollback()
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"行为探针失败 {type(exc).__name__}: {str(exc)[:140]}")
+
+    # ② 挂载覆盖 + 函数体 + 常态写入路径
+    try:
+        n_chunk = int(c.scalar(
+            "SELECT count(*) FROM timescaledb_information.chunks "
+            "WHERE hypertable_schema='l0_raw' AND hypertable_name='minute_bar'") or 0)
+        n_trg = int(c.scalar(
+            "SELECT count(*) FROM pg_trigger "
+            "WHERE tgname='trg_l0_src_conflict' AND NOT tgisinternal") or 0)
+        if n_trg < max(1, n_chunk):
+            bad.append(f"BEFORE INSERT 触发器覆盖不足 {n_trg}/{n_chunk} chunk")
         else:
-            obs.append("审计表存在")
-        trg = c.scalar("""
-            SELECT count(*) FROM pg_trigger
-            WHERE tgname='trg_minute_bar_src_overlay' AND NOT tgisinternal
-        """)
-        enabled = c.scalar("""
-            SELECT tgenabled FROM pg_trigger t
-            JOIN pg_class r ON r.oid = t.tgrelid
-            JOIN pg_namespace n ON n.oid = r.relnamespace
-            WHERE t.tgname='trg_minute_bar_src_overlay' AND NOT t.tgisinternal
-              AND n.nspname='l0_raw' AND r.relname='minute_bar'
-        """)
-        if int(trg or 0) < 1:
-            bad.append("hypertable/chunk 上无 src 覆盖触发器")
-        else:
-            obs.append(f"触发器挂载 {int(trg)} 处")
-        if enabled is not None and str(enabled) != "O":
-            bad.append(f"主表触发器未启用 (tgenabled={enabled})")
-        elif enabled == "O":
-            obs.append("主表触发器启用")
-        fn = c.scalar("""
+            obs.append(f"触发器覆盖 {n_trg}/{n_chunk} chunk")
+        body = str(c.scalar("""
             SELECT pg_get_functiondef(p.oid) FROM pg_proc p
             JOIN pg_namespace n ON n.oid = p.pronamespace
-            WHERE n.nspname='ops' AND p.proname='fn_log_minute_bar_src_overlay'
-        """)
-        if not fn:
-            bad.append("缺 ops.fn_log_minute_bar_src_overlay 函数")
+            WHERE n.nspname='ops' AND p.proname='fn_log_l0_src_conflict'
+        """) or "")
+        if not body:
+            bad.append("缺 ops.fn_log_l0_src_conflict（migration 078 未执行）")
         else:
-            body = str(fn)
-            for token in ("OLD.src", "NEW.src", "minute_bar_src_overlay"):
+            for token in ("TG_RELID", "NEW.src", "l0_src_conflict", "ON CONFLICT"):
                 if token not in body:
-                    bad.append(f"触发器函数未真引用 {token}")
-            if "OLD.src" in body and "NEW.src" in body:
-                obs.append("函数真比较 old/new src")
-        if tbl:
-            n = c.scalar("SELECT count(*) FROM ops.minute_bar_src_overlay")
-            obs.append(f"已留痕 {int(n or 0)} 次跨源覆盖")
+                    bad.append(f"冲突函数缺关键判据 {token}")
+            if all(t in body for t in ("TG_RELID", "NEW.src", "l0_src_conflict")):
+                obs.append("函数按 TG_RELID 查旧 src")
+        root = Path(__file__).resolve().parents[2]
+        for rel, tokens in (
+            ("app/ingest/minute_collector.py",
+             ("on_conflict_do_nothing", "index_elements")),
+            ("app/ingest/contract_minute_collector.py",
+             ("ON CONFLICT", "DO NOTHING")),
+        ):
+            src = (root / rel).read_text(encoding="utf-8", errors="ignore")
+            if not all(t in src for t in tokens):
+                bad.append(f"{rel} 常态写入不再是 DO NOTHING（探针前提失效）")
+            else:
+                obs.append(f"{rel.split('/')[-1]} 真 DO NOTHING")
     except Exception as exc:  # noqa: BLE001
-        bad.append(f"审计接线查询失败 {type(exc).__name__}: {str(exc)[:120]}")
+        bad.append(f"接线查询失败 {type(exc).__name__}: {str(exc)[:140]}")
+
+    # ③ 当前审计状态（观测）
+    try:
+        n = int(c.scalar("SELECT count(*) FROM ops.l0_src_conflict") or 0)
+        obs.append(f"已留痕 {n} 个跨源冲突键")
+    except Exception as exc:  # noqa: BLE001
+        obs.append(f"审计表不可读({type(exc).__name__})")
     return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_v5x_brake_close_safe(c: Ctx) -> tuple[bool, str, str, str]:
+    """组合熔断不得误伤 CLOSE 平仓手数（CL-20261112-06 P0-2，行为级）。
+
+    直接 import 纯函数跑一次 scalar=0，比「源码里有没有 if」更可信；
+    同时锁消费点真调用、CLOSE 文案真展示手数（否则用户看不出被清零）。
+    """
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    label = "组合熔断 scalar=0 时平仓手数保持不变（行为探针 + 真接线）"
+    bad, obs = [], []
+    try:
+        from app.strategies.v5x.live import scale_signal_lots
+
+        sigs = [SimpleNamespace(action="OPEN", lots=2.0),
+                SimpleNamespace(action="ADD", lots=2.0),
+                SimpleNamespace(action="CLOSE", lots=2.0)]
+        n_scaled, n_exempt = scale_signal_lots(sigs, 0.0)
+        if (n_scaled, n_exempt) != (2, 1):
+            bad.append(f"缩放计数异常 scaled={n_scaled} exempt={n_exempt}")
+        if sigs[2].lots != 2.0:
+            bad.append("scalar=0 把 CLOSE 平仓手数清零（清仓观望时禁止离场）")
+        else:
+            obs.append("scalar=0 CLOSE lots 2.0 保持")
+        if sigs[0].lots != 0.0 or sigs[1].lots != 0.0:
+            bad.append("scalar=0 未把开仓/加仓手数清零")
+        else:
+            obs.append("OPEN/ADD lots 归零")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"熔断行为探针失败 {type(exc).__name__}: {str(exc)[:140]}")
+    try:
+        src = (Path(__file__).resolve().parents[2] / "app" / "strategies"
+               / "v5x" / "live.py").read_text(encoding="utf-8", errors="ignore")
+        if "scale_signal_lots(sigs" not in src:
+            bad.append("消费点未调用纯函数（函数写好了没人用）")
+        else:
+            obs.append("消费点真调用")
+        if "平仓手数" not in src:
+            bad.append("CLOSE 文案不展示手数，用户看不出异常")
+        else:
+            obs.append("CLOSE 文案展示手数")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"静态接线检查失败 {type(exc).__name__}: {str(exc)[:100]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_guard_run_complete(c: Ctx) -> tuple[bool, str, str, str]:
+    """守卫轮次必须「跑完」而不只是「写过几条」（CL-20261112-06 P1）。
+
+    ops.invariant_check 是逐条流水；写入 60 条后崩溃看起来也像跑过。
+    ops.invariant_run 的完整标记 + n_total 与流水条数一致，才是完成判据。
+    再叠加「最近一个应完成的 09:10 轮次」闸门，堵住「今天根本没跑但昨天
+    记录在 30h 窗口内」的旧漏洞。
+    """
+    label = "守卫最近一轮完整且有完成标记（轮次/条数/期望 09:10）"
+    bad, obs = [], []
+    try:
+        code = Path(__file__).read_text(encoding="utf-8", errors="ignore")
+        if "INSERT INTO ops.invariant_run" not in code:
+            bad.append("守卫 --record 未写完成标记（等于没接线）")
+        else:
+            obs.append("--record 真写完成标记")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"源码检查失败 {type(exc).__name__}: {str(exc)[:100]}")
+    try:
+        rows = c.rows("""
+            SELECT r.run_id, r.finished_at, r.n_total,
+                   (SELECT count(*) FROM ops.invariant_check i
+                    WHERE i.run_id = r.run_id) AS n_rows
+            FROM ops.invariant_run r
+            ORDER BY r.finished_at DESC LIMIT 1
+        """)
+        if not rows:
+            bad.append("ops.invariant_run 无任何完成标记")
+        else:
+            rid, finished, n_total, n_rows = rows[0]
+            obs.append(f"最近完成轮 {rid} n_total={n_total} 流水={n_rows}")
+            if int(n_total or 0) != int(n_rows or 0):
+                bad.append(f"完成轮 {rid} 标记 {n_total} 条但流水仅 {n_rows} 条（半途崩溃）")
+            expected = c.scalar("""
+                SELECT CASE
+                  WHEN (now() AT TIME ZONE 'Asia/Shanghai')::time >= time '11:10'
+                  THEN ((now() AT TIME ZONE 'Asia/Shanghai')::date + time '09:10')
+                       AT TIME ZONE 'Asia/Shanghai'
+                  ELSE ((now() AT TIME ZONE 'Asia/Shanghai')::date - 1 + time '09:10')
+                       AT TIME ZONE 'Asia/Shanghai'
+                END
+            """)
+            if finished is None or (expected is not None and finished < expected):
+                bad.append(f"最近完成轮 {finished} 早于期望 09:10 轮次 {expected}")
+            else:
+                obs.append("已完成最近一个 09:10 轮次")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"完成标记查询失败 {type(exc).__name__}: {str(exc)[:140]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_backup_capacity_safe(c: Ctx) -> tuple[bool, str, str, str]:
+    """备份不得把系统盘撑爆，且状态必须可见（CL-20261112-06 P1）。
+
+    宿主 weekly_pgdump.sh 写 /app/runtime/backup_health.json（容器内可见的
+    bind mount）；守卫读它判定「此刻」的总量/可用空间/异地状态。
+    """
+    import json  # noqa: PLC0415
+
+    label = "周全量备份容量受控、可校验、状态可见"
+    bad, obs = [], []
+    try:
+        src = (Path(__file__).resolve().parents[2] / "scripts" / "ops"
+               / "weekly_pgdump.sh").read_text(encoding="utf-8", errors="ignore")
+        for token in ("BACKUP_MAX_TOTAL_GB", "pg_restore --list",
+                      "backup_health.json", "BACKUP_MIN_FREE_GB"):
+            if token not in src:
+                bad.append(f"备份脚本缺关键判据 {token}")
+        if "tail -n +8" in src:
+            bad.append("仍是固定 retain-7（容量炸弹未拆）")
+        else:
+            obs.append("动态保留已接线")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"备份脚本检查失败 {type(exc).__name__}: {str(exc)[:120]}")
+    p = Path("/app/runtime/backup_health.json")
+    if not p.exists():
+        bad.append("无备份健康状态文件（脚本未运行或未接线）")
+    else:
+        try:
+            st = json.loads(p.read_text(encoding="utf-8"))
+            total = float(st.get("total_gb") or 0)
+            free = float(st.get("free_gb") or 0)
+            max_total = float(st.get("max_total_gb") or 25)
+            min_free = float(st.get("min_free_gb") or 20)
+            obs.append(f"dump总量={total:.1f}G/{max_total:.0f}G 可用={free:.1f}G"
+                       f" 异地={'已配' if st.get('remote_configured') else '未配(CL-20261110-06待输入)'}")
+            if total > max_total:
+                bad.append(f"周全量 dump 总量 {total:.1f}G 超上限 {max_total:.0f}G")
+            if free < min_free:
+                bad.append(f"磁盘可用 {free:.1f}G 低于安全线 {min_free:.0f}G")
+            if not st.get("last_restore_list_ok"):
+                bad.append("dump 目录未通过 pg_restore --list 校验")
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"备份状态不可解析 {type(exc).__name__}: {str(exc)[:120]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_push_guard_r3(c: Ctx) -> tuple[bool, str, str, str]:
+    """推送额度必须跨进程/重启，备用通道必须真接线（CL-20261112-06 P1）。
+
+    旧 _DAILY_BUDGET 是进程内 dict：重启归零、只统计 alerting.send_alert，
+    而 11-06 事故是多来源共用 pushplus 服务端额度。修法 = DB 原子计数 +
+    全来源 send_notify 留痕 + 告警侧读取 fusion.fallback_webhook。
+    """
+    label = "推送额度 DB 持久化 + 全来源留痕 + 备用通道真接线"
+    bad, obs = [], []
+    root = Path(__file__).resolve().parents[2]
+    try:
+        al = (root / "app" / "ops" / "alerting.py").read_text(
+            encoding="utf-8", errors="ignore")
+        if "ops.alert_push_quota" not in al:
+            bad.append("告警配额仍是进程内 dict（重启归零）")
+        else:
+            obs.append("配额走 DB 原子计数")
+        if "fallback_webhook" not in al:
+            bad.append("告警未读取备用 webhook（配置也永远不生效）")
+        else:
+            obs.append("告警备用通道真接线")
+        pp = (root / "app" / "notify" / "pushplus.py").read_text(
+            encoding="utf-8", errors="ignore")
+        if "ops.push_send_ledger" not in pp:
+            bad.append("send_notify 未做全来源发送留痕")
+        else:
+            obs.append("全来源留痕真接线")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"静态接线检查失败 {type(exc).__name__}: {str(exc)[:120]}")
+    try:
+        for tbl in ("ops.alert_push_quota", "ops.push_send_ledger"):
+            if not c.scalar(f"SELECT to_regclass('{tbl}')::text"):
+                bad.append(f"缺 {tbl}（migration 078 未执行）")
+        n = c.scalar("SELECT count(*) FROM ops.push_send_ledger "
+                     "WHERE sent_at > now() - interval '24 hours'")
+        obs.append(f"近24h发送留痕 {int(n or 0)} 条")
+        cur = c.scalar("SELECT status FROM ops.v_invariant_current "
+                       "WHERE check_key='V5X-PUSH-SINGLE-CHANNEL'")
+        obs.append(f"备用通道当前状态={cur}")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"推送状态查询失败 {type(exc).__name__}: {str(exc)[:120]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 
 
 # ---------------------------------------------------------------- 主力合约反解口径（CL-20261112-11）
@@ -7285,8 +7533,17 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      _c_job_failure_loud),
     ("OPS-GUARD-SELF-LIVENESS", "不变量守卫自身存活性被独立触发链检查", "block",
      _c_guard_self_liveness),
-    ("DATA-L0-SRC-AUDIT", "L0 跨源覆盖可审计（触发器真挂载）", "block",
+    ("DATA-L0-SRC-AUDIT", "L0 跨源冲突真可审计（行为探针 + 真接线）", "block",
      _c_l0_src_audit),
+    # CL-20261112-06：第三轮「看不见」修复的行为级护栏。
+    ("OPS-V5X-BRAKE-CLOSE-SAFE", "组合熔断不误伤 CLOSE 平仓手数", "block",
+     _c_v5x_brake_close_safe),
+    ("OPS-GUARD-RUN-COMPLETE", "守卫轮次完成标记与期望 09:10 轮次", "block",
+     _c_guard_run_complete),
+    ("OPS-BACKUP-CAPACITY-SAFE", "周全量备份容量受控且状态可见", "block",
+     _c_backup_capacity_safe),
+    ("OPS-PUSH-GUARD-R3", "推送额度 DB 持久化 + 备用通道真接线", "block",
+     _c_push_guard_r3),
 ]
 
 
@@ -7362,6 +7619,24 @@ def main() -> int:
                     """), {"rid": run_id, "k": r.key, "t": r.title, "sev": r.severity,
                            "st": r.status, "exp": r.expected, "obs": r.observed,
                            "det": r.detail[:1000], "wr": r.waiver_ref or None})
+                # CL-20261112-06 P1：只有整轮跑完才写完成标记；半途崩溃时
+                # 本行不会落库，_check_guard_liveness 与 OPS-GUARD-RUN-COMPLETE
+                # 会据此判定「守卫没跑完」，而不是被逐条流水骗成 PASS。
+                s.execute(text("""
+                    INSERT INTO ops.invariant_run
+                        (run_id, finished_at, n_total, n_fail, n_waived, n_warn)
+                    VALUES (:rid, now(), :n, :nf, :nw, :nwarn)
+                    ON CONFLICT (run_id) DO UPDATE SET
+                        finished_at = EXCLUDED.finished_at,
+                        n_total = EXCLUDED.n_total, n_fail = EXCLUDED.n_fail,
+                        n_waived = EXCLUDED.n_waived, n_warn = EXCLUDED.n_warn
+                """), {
+                    "rid": run_id, "n": len(results),
+                    "nf": sum(1 for x in results if x.status == "FAIL"),
+                    "nw": sum(1 for x in results if x.status == "WAIVED"),
+                    "nwarn": sum(1 for x in results
+                                 if x.severity == "warn" and x.status == "FAIL"),
+                })
                 s.commit()
     except Exception as e:  # noqa: BLE001
         print(f"[guard] 运行失败：{type(e).__name__}: {e}", file=sys.stderr)

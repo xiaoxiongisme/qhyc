@@ -119,17 +119,47 @@ def send_webhook(url: str, title: str, content: str) -> bool:
     return False
 
 
-def send_notify(title: str, content: str, fallback_webhook: str = "") -> tuple[bool, str]:
+def _ledger(source: str, channel: str, ok: bool, title: str) -> None:
+    """全来源发送留痕（CL-20261112-06 P1），旁路：绝不因留痕失败影响推送。
+
+    11-06 事故的根源是「多来源共用 pushplus 服务端额度」，而旧配额闸门只
+    统计 ``alerting.send_alert`` 一个函数、且是重启即归零的进程内 dict。
+    这里记下每一次实际发送（含交易信号 / 简报 / 告警），让总量可见、可限额。
+    """
+    try:
+        from sqlalchemy import text
+
+        from app.core.db import get_engine
+
+        with get_engine().begin() as conn:
+            conn.execute(text("""
+                INSERT INTO ops.push_send_ledger
+                    (sent_at, source, channel, ok, title)
+                VALUES (now(), :s, :ch, :ok, :t)
+            """), {"s": source or "unknown", "ch": channel,
+                   "ok": bool(ok), "t": (title or "")[:200]})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"[notify] 发送留痕失败（不影响推送）: "
+            f"{type(exc).__name__}: {str(exc)[:120]}")
+
+
+def send_notify(title: str, content: str, fallback_webhook: str = "",
+                source: str = "") -> tuple[bool, str]:
     """统一发送入口：主通道 pushplus → 失败降级备用 webhook。
 
-    返回 (是否送达, 实际通道名)。通道名用于留痕/统计。
+    返回 (是否送达, 实际通道名)。``source`` 标记来源（alert / v5x / brief…），
+    仅用于 ``ops.push_send_ledger`` 留痕，不改变任何既有调用语义。
     """
     if send_pushplus(title, content):
+        _ledger(source, "pushplus", True, title)
         return True, "pushplus"
     if fallback_webhook:
         logger.warning("[notify] pushplus 失败，降级备用 webhook")
         if send_webhook(fallback_webhook, title, content):
+            _ledger(source, "webhook", True, title)
             return True, "webhook"
+    _ledger(source, "none", False, title)
     return False, "none"
 
 

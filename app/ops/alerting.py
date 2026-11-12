@@ -43,18 +43,57 @@ _DIGEST_FALLBACK: dict = {"fingerprint": None, "sent_at": 0.0}
 
 
 def _budget_take(cfg: "AlertConfig") -> bool:
-    """日推送配额闸门。返回 False 表示今日额度已用尽，本次不再推送。"""
+    """日推送配额闸门（CL-20261112-06 P1）：DB 原子计数，跨进程/重启有效。
+
+    旧版是进程内 dict —— 调度器一重启就归零，且只统计 ``alerting.send_alert``，
+    而 11-06 事故的根源是**多来源共用 pushplus 服务端额度**。现在：
+      * ``ops.alert_push_quota`` 原子 UPSERT...RETURNING 计告警用量；
+      * ``ops.push_send_ledger``（send_notify 全来源留痕）逼近服务端额度时，
+        告警主动退让，把余量留给交易信号。
+    表不可用时退回进程内计数并记日志（告警链路绝不因计数设施故障而中断）。
+    """
     today = datetime.now(CST).date()
-    if _DAILY_BUDGET.get("day") != today:
-        _DAILY_BUDGET["day"] = today
-        _DAILY_BUDGET["used"] = 0
     limit = int(getattr(cfg, "max_per_day", 0) or 0)
     if limit <= 0:
         return True
-    if _DAILY_BUDGET["used"] >= limit:
-        return False
-    _DAILY_BUDGET["used"] += 1
-    return True
+    try:
+        from app.core.db import get_engine
+
+        with get_engine().begin() as conn:
+            used = conn.execute(text("""
+                INSERT INTO ops.alert_push_quota (day, used, updated_at)
+                VALUES (:d, 1, now())
+                ON CONFLICT (day) DO UPDATE
+                    SET used = ops.alert_push_quota.used + 1,
+                        updated_at = now()
+                RETURNING used
+            """), {"d": today}).scalar()
+        if int(used or 0) > limit:
+            return False
+        total_max = int(getattr(cfg, "max_total_per_day", 0) or 0)
+        if total_max > 0:
+            with get_engine().connect() as conn:
+                n = conn.execute(text("""
+                    SELECT count(*) FROM ops.push_send_ledger
+                    WHERE (sent_at AT TIME ZONE 'Asia/Shanghai')::date =
+                          (now() AT TIME ZONE 'Asia/Shanghai')::date
+                """)).scalar()
+            if int(n or 0) >= total_max:
+                logger.warning(
+                    f"[alert] 今日全来源推送已达 {n} 条（上限 {total_max}），"
+                    "告警主动退让，保留 pushplus 额度给交易信号")
+                return False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"[alert] DB 配额不可用({type(exc).__name__})，退回进程内计数: {exc}"[:200])
+        if _DAILY_BUDGET.get("day") != today:
+            _DAILY_BUDGET["day"] = today
+            _DAILY_BUDGET["used"] = 0
+        if _DAILY_BUDGET["used"] >= limit:
+            return False
+        _DAILY_BUDGET["used"] += 1
+        return True
 
 
 @dataclass
@@ -122,6 +161,12 @@ class AlertConfig:
     #   **与告警共用同一 token 的交易信号会一并静默**（11-06 实测 60 小时）。
     #   故给运维告警设硬闸门，余量留给信号推送。
     max_per_day: int = 80
+    #: CL-20261112-06 P1：全来源（告警 + 交易信号 + 简报）当日推送总量闸门。
+    #: pushplus 服务端额度由所有来源共用，告警只限自己不够，逼近总额度须主动退让。
+    max_total_per_day: int = 180
+    #: 周全量 dump 容量红线（宿主 weekly_pgdump.sh 写 backup_health.json）。
+    backup_max_total_gb: float = 25.0
+    backup_min_free_gb: float = 20.0
     notify: bool = True                # False = 只记日志不推送
     # 新鲜度巡检表（2026-10-08 大幅扩充）。
     #
@@ -233,6 +278,9 @@ def alert_config_from_env() -> AlertConfig:
         cooldown_sec=_i("ALERT_COOLDOWN_SEC", 1800),
         digest_crit_repush_hours=_i("ALERT_DIGEST_CRIT_REPUSH_HOURS", 6),
         max_per_day=_i("ALERT_MAX_PER_DAY", 80),
+        max_total_per_day=_i("ALERT_MAX_TOTAL_PER_DAY", 180),
+        backup_max_total_gb=_f("ALERT_BACKUP_MAX_TOTAL_GB", 25.0),
+        backup_min_free_gb=_f("ALERT_BACKUP_MIN_FREE_GB", 20.0),
         notify=_b("ALERT_NOTIFY", True),
     )
 
@@ -685,9 +733,14 @@ def _check_job_failures(session, cfg: AlertConfig) -> list[dict]:
     两类刻意排除（不是漏报，是把已知噪声与真故障分开）：
       · ``aborted`` 且 message 含 ``[reaped:``：调度器重启自愈把僵尸 running
         置 aborted，属正常清理（近 3 天 78 条全是这种）；
-      · ``cron_invariant_guard``：守卫按设计在查出 block FAIL 时 ``sys.exit(1)``，
-        task_runner 因此记 failed。它的存活性由 ``_check_guard_liveness`` 专门判定，
-        在这里报只会误导成「守卫挂了」。
+      · ``cron_invariant_guard`` **按设计**在查出 block FAIL 时 ``sys.exit(1)``，
+        task_runner 因此记 failed —— 但只在「该轮确实跑完并写了
+        ``ops.invariant_run`` 完成标记」时才排除。
+
+    ★ CL-20261112-06 P1 修正：旧版无条件 ``task_id <> 'cron_invariant_guard'``，
+      把「按设计 exit=1」和 ImportError / OOM 崩溃**一起静默**了。现在守卫
+      崩溃（无完成标记）会单独升级为 CRIT ``guardfail``：09:10 断言链一旦
+      集体静默，其余监控仍全绿，这是最危险的盲区。
 
     聚合为**一条** finding 而非每条失败一条：digest 指纹只取 (key, level)，
     失败次数每轮变化不会触发重推，避免重蹈 11-10 刷爆 pushplus 额度的覆辙。
@@ -704,22 +757,44 @@ def _check_job_failures(session, cfg: AlertConfig) -> list[dict]:
             GROUP BY task_id, status
             ORDER BY n DESC, task_id
         """), {"win": win}).fetchall()
+        # 守卫 failed 单独判定：有 ops.invariant_run 完成标记 = 按设计 exit=1；
+        # 没有 = ImportError/OOM/半途崩溃，必须 CRIT（旧版在这里静默）。
+        guard_crash = session.execute(text("""
+            SELECT count(*) FROM ops.scheduled_task_run r
+            WHERE r.task_id = 'cron_invariant_guard'
+              AND r.status = 'failed'
+              AND r.started_at >= now() - make_interval(hours => :win)
+              AND NOT EXISTS (
+                  SELECT 1 FROM ops.invariant_run g
+                  WHERE g.finished_at >= r.started_at - interval '2 minutes'
+                    AND g.finished_at <= r.started_at + interval '30 minutes'
+              )
+        """), {"win": win}).scalar()
     except Exception as e:
         return [{"key": "jobfail", "level": "WARN",
                  "msg": "作业失败汇总查询失败（不静默）: {0}".format(str(e)[:120])}]
-    if not rows:
-        return []
-    total = sum(int(r[2]) for r in rows)
-    top = "、".join("{0}({1}×{2})".format(r[0], r[1], r[2]) for r in rows[:6])
-    if len(rows) > 6:
-        top += " 等 {0} 个作业".format(len(rows))
-    return [{
-        "key": "jobfail",
-        "level": "CRIT" if total >= int(cfg.job_failure_crit_count) else "WARN",
-        "msg": ("近 {0}h 有 {1} 条 cron 作业失败/异常终止：{2}；"
-                "已排除 reaped 自愈与守卫自身（后者按设计用 exit=1 报 FAIL）").format(
-                    win, total, top),
-    }]
+    out: list[dict] = []
+    if rows:
+        total = sum(int(r[2]) for r in rows)
+        top = "、".join("{0}({1}×{2})".format(r[0], r[1], r[2]) for r in rows[:6])
+        if len(rows) > 6:
+            top += " 等 {0} 个作业".format(len(rows))
+        out.append({
+            "key": "jobfail",
+            "level": "CRIT" if total >= int(cfg.job_failure_crit_count) else "WARN",
+            "msg": ("近 {0}h 有 {1} 条 cron 作业失败/异常终止：{2}；"
+                    "已排除 reaped 自愈与「有完成标记」的守卫设计内 exit=1").format(
+                        win, total, top),
+        })
+    if int(guard_crash or 0) > 0:
+        out.append({
+            "key": "guardfail", "level": "CRIT",
+            "msg": ("近 {0}h 有 {1} 次 cron_invariant_guard 异常退出且无"
+                    " ops.invariant_run 完成标记（疑似 ImportError/OOM/半途崩溃）；"
+                    "09:10 不变量断言链可能已集体静默，请立即查守卫日志").format(
+                        win, int(guard_crash)),
+        })
+    return out
 
 
 def _check_guard_liveness(session, cfg: AlertConfig) -> list[dict]:
@@ -731,8 +806,13 @@ def _check_guard_liveness(session, cfg: AlertConfig) -> list[dict]:
 
     三件套都是「此刻」可判定的状态，不靠事件流水凑数：
       ① DB 字典里 ``cron_invariant_guard`` 仍 enabled；
-      ② ``ops.invariant_check`` 最近一轮写入时间不超过阈值；
-      ③ 那一轮覆盖足够多的 check_key（防「只跑 1 条 --only」也算跑过）。
+      ② ``ops.invariant_run`` 有**完成标记**，且标记条数 == 该轮
+         ``ops.invariant_check`` 流水条数（防「写入 60 条后崩溃」被当成跑过）；
+      ③ 最近完成轮次不早于「最近一个应完成的 09:10」（防「今天根本没跑，
+         但昨天记录在 30h 窗口内」——旧版 30h 窗口正是被这样骗过去）。
+
+    ★ CL-20261112-06 P1：旧判据是「30h 内有记录 + 最近一轮 ≥50 条」，
+      守卫崩在第 60 条、或当天压根没跑，两者都仍 PASS。
     """
     max_h = max(1, int(cfg.guard_liveness_max_hours))
     try:
@@ -740,13 +820,21 @@ def _check_guard_liveness(session, cfg: AlertConfig) -> list[dict]:
             "SELECT enabled FROM ops.scheduled_task "
             "WHERE task_id='cron_invariant_guard'"
         )).scalar()
-        last = session.execute(text(
-            "SELECT max(checked_at) FROM ops.invariant_check"
-        )).scalar()
-        keys = session.execute(text("""
-            SELECT count(DISTINCT check_key) FROM ops.invariant_check
-            WHERE checked_at >= (SELECT max(checked_at) - interval '5 minutes'
-                                 FROM ops.invariant_check)
+        row = session.execute(text("""
+            SELECT r.run_id, r.finished_at, r.n_total,
+                   (SELECT count(*) FROM ops.invariant_check i
+                    WHERE i.run_id = r.run_id) AS n_rows
+            FROM ops.invariant_run r
+            ORDER BY r.finished_at DESC LIMIT 1
+        """)).first()
+        expected = session.execute(text("""
+            SELECT CASE
+              WHEN (now() AT TIME ZONE 'Asia/Shanghai')::time >= time '11:10'
+              THEN ((now() AT TIME ZONE 'Asia/Shanghai')::date + time '09:10')
+                   AT TIME ZONE 'Asia/Shanghai'
+              ELSE ((now() AT TIME ZONE 'Asia/Shanghai')::date - 1 + time '09:10')
+                   AT TIME ZONE 'Asia/Shanghai'
+            END
         """)).scalar()
     except Exception as e:
         return [{"key": "guardlive", "level": "CRIT",
@@ -756,22 +844,93 @@ def _check_guard_liveness(session, cfg: AlertConfig) -> list[dict]:
         problems.append("ops.scheduled_task 缺 cron_invariant_guard 字典行")
     elif not enabled:
         problems.append("cron_invariant_guard 已被禁用")
-    if last is None:
-        problems.append("ops.invariant_check 无任何记录")
+    if row is None:
+        problems.append("ops.invariant_run 无任何完成标记（守卫未跑完或未接线）")
     else:
-        now = datetime.now(timezone.utc)
-        ref = last.replace(tzinfo=timezone.utc) if last.tzinfo is None else last
-        hours = (now - ref).total_seconds() / 3600.0
-        if hours > max_h:
-            problems.append("最近一轮守卫记录已是 {0:.1f}h 前（阈值 {1}h）".format(
-                hours, max_h))
-    n_keys = int(keys or 0)
-    if n_keys < 50:
-        problems.append("最近一轮仅覆盖 {0} 条断言（疑似 --only 单条巡检）".format(n_keys))
+        _rid, finished, n_total, n_rows = row
+        if int(n_total or 0) != int(n_rows or 0):
+            problems.append("最近轮标记 {0} 条但流水仅 {1} 条（半途崩溃）".format(
+                n_total, n_rows))
+        if finished is None:
+            problems.append("最近完成轮缺 finished_at")
+        else:
+            now = datetime.now(timezone.utc)
+            ref = finished.replace(tzinfo=timezone.utc) if finished.tzinfo is None else finished
+            hours = (now - ref).total_seconds() / 3600.0
+            if hours > max_h:
+                problems.append("最近完成轮已是 {0:.1f}h 前（阈值 {1}h）".format(
+                    hours, max_h))
+            exp = expected.replace(tzinfo=timezone.utc) if (
+                expected is not None and expected.tzinfo is None) else expected
+            if exp is not None and ref < exp:
+                problems.append("最近完成轮早于期望 09:10 轮次（今日守卫尚未跑完）")
     if not problems:
         return []
     return [{"key": "guardlive", "level": "CRIT",
              "msg": "不变量守卫存活性异常：" + "；".join(problems)}]
+
+
+def _check_push_fallback(session, cfg: AlertConfig) -> list[dict]:
+    """备用推送通道必须「可见」（CL-20261110-06 / CL-20261112-06 P1）。
+
+    告警侧此前连 ``fusion.fallback_webhook`` 都不读 —— 用户即使配了 URL，
+    运维告警也永远是单点。现已接线；这里只把「尚未配置」从无声变成一条
+    稳定 WARN（状态指纹去重，不会每轮重推），等用户提供 webhook 即消失。
+    """
+    try:
+        from app.core.config import get_settings
+
+        fb = getattr(get_settings().fusion, "fallback_webhook", "") or ""
+    except Exception as exc:  # noqa: BLE001
+        return [{"key": "pushfallback", "level": "WARN",
+                 "msg": "备用通道配置不可读({0})".format(type(exc).__name__)}]
+    if fb:
+        return []
+    return [{"key": "pushfallback", "level": "WARN",
+             "msg": ("fusion.fallback_webhook 未配置 → pushplus 是唯一推送通道，"
+                     "且与运维告警共用服务端额度（11-06 曾致交易信号静默 60h）。"
+                     "告警链路已接线，填入 URL 即自动降级生效；见 CL-20261110-06。")}]
+
+
+def _check_backup_capacity(session, cfg: AlertConfig) -> list[dict]:
+    """周全量备份容量与状态（CL-20261112-06 P1）——从「无声」改为可告警。
+
+    宿主 ``weekly_pgdump.sh`` 每次运行后写 ``/app/runtime/backup_health.json``
+    （容器内可见的 bind mount）。旧脚本固定 retain-7 × ~7.6G ≈ 53G，
+    而 /dev/vda2 仅剩 34G；这里读实时总量/可用空间/校验结果并告警。
+    """
+    import json  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    p = Path("/app/runtime/backup_health.json")
+    if not p.exists():
+        return [{"key": "backupcap", "level": "WARN",
+                 "msg": "无备份健康状态文件（周备份脚本未运行或未接线）"}]
+    try:
+        st = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return [{"key": "backupcap", "level": "WARN",
+                 "msg": "备份健康状态不可解析({0})".format(type(exc).__name__)}]
+    problems: list[str] = []
+    level = "WARN"
+    total = float(st.get("total_gb") or 0)
+    free = float(st.get("free_gb") or 0)
+    if total > float(cfg.backup_max_total_gb):
+        problems.append("dump 总量 {0:.1f}G 超上限 {1:.0f}G".format(
+            total, cfg.backup_max_total_gb))
+        level = "CRIT"
+    if free < float(cfg.backup_min_free_gb):
+        problems.append("磁盘可用 {0:.1f}G 低于安全线 {1:.0f}G".format(
+            free, cfg.backup_min_free_gb))
+        level = "CRIT"
+    if not st.get("last_restore_list_ok"):
+        problems.append("dump 未通过 pg_restore --list 完整性校验")
+    if not st.get("remote_configured"):
+        problems.append("无异地副本（BACKUP_REMOTE_DIR 未配置，待用户提供目标）")
+    if not problems:
+        return []
+    return [{"key": "backupcap", "level": level,
+             "msg": "备份健康：" + "；".join(problems)}]
 
 
 def _check_db_uptime(session, cfg: AlertConfig) -> list[dict]:
@@ -835,8 +994,14 @@ def send_alert(title: str, content: str, cfg: AlertConfig | None = None,
                        .format(cfg.max_per_day, title))
         return False, "日推送配额已用尽（上限 {0} 条）".format(cfg.max_per_day)
     try:
+        from app.core.config import get_settings
         from app.notify.pushplus import send_notify
-        ok, msg = send_notify(title, content)
+
+        # CL-20261112-06 P1：此前 send_alert 从不传 fallback_webhook，
+        # 于是即便用户配了 fusion.fallback_webhook，运维告警也仍是单点。
+        # 其余链路（V5X live/brief、scheduler）都传了，只有这里漏了。
+        fallback = getattr(get_settings().fusion, "fallback_webhook", "") or ""
+        ok, msg = send_notify(title, content, fallback, source="alert")
         return bool(ok), msg
     except Exception as e:
         return False, "推送通道异常: {0}".format(str(e)[:160])
@@ -963,6 +1128,9 @@ def check_all(session=None, cfg: AlertConfig | None = None) -> dict:
         findings += _check_job_failures(session, cfg)
         findings += _check_guard_liveness(session, cfg)
         findings += _check_push_silence(session, cfg)
+        # CL-20261112-06 P1：备用通道单点与备份容量炸弹，从无声改为可告警。
+        findings += _check_push_fallback(session, cfg)
+        findings += _check_backup_capacity(session, cfg)
     finally:
         if owns:
             try:
