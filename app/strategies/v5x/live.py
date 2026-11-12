@@ -633,6 +633,39 @@ def _mark_notify(session, sigs: Iterable[V5XSignal], ok: bool, via: str) -> None
 #: 熔断空转每日只 ``logger.error`` 一次（扫描 :05/:35 每轮跑，避免刷屏）。
 _BRAKE_IDLE_DAY: str = ""
 
+#: CL-20261112-06 P0-2：组合回撤熔断只该压「新开仓风险敞口」，绝不该压平仓。
+#: ``CLOSE`` 是减仓/离场动作，把它手数置 0 等于「清仓观望时禁止平仓」——
+#: 与熔断语义完全相反，且 ``_persist`` 会把被清零的 lots 落进 v5x_signal_log，
+#: 实盘一旦补齐 20 天净值（S2）就必然发作。实测近 30 天 CLOSE 9 条、lots 1~2。
+BRAKE_EXEMPT_ACTIONS: frozenset[str] = frozenset({"CLOSE"})
+
+
+def scale_signal_lots(sigs, scalar: float) -> tuple[int, int]:
+    """按组合熔断标量缩放建议手数，返回 ``(n_scaled, n_exempt)``。
+
+    纯函数（不碰 DB、不 import 风控模块），便于不变量守卫直接 import 做**行为级**
+    验证 —— 避免重演 077「只验触发器挂载、不验会不会触发」的假绿。
+
+    * 只对开仓/加仓类（``OPEN`` / ``ADD``）缩放；``BRAKE_EXEMPT_ACTIONS`` 里的
+      平仓动作保持原手数。
+    * ``scalar <= 0`` → 开仓手数置 0；``0 < scalar < 1`` → 向上取整且至少 1 手。
+    * ``scalar >= 1`` 视为恒等放行，不改任何值。
+    """
+    import math as _math
+
+    if scalar >= 1.0:
+        return 0, 0
+    n_scaled = n_exempt = 0
+    for g in sigs:
+        if str(getattr(g, "action", "")).upper() in BRAKE_EXEMPT_ACTIONS:
+            n_exempt += 1
+            continue
+        cur = float(getattr(g, "lots", 0.0) or 0.0)
+        g.lots = 0.0 if scalar <= 0.0 else max(
+            1.0, float(_math.ceil(cur * scalar - 1e-9)))
+        n_scaled += 1
+    return n_scaled, n_exempt
+
 
 def _apply_v5x_portfolio_brake(session, sigs: list["V5XSignal"]) -> tuple[str, dict]:
     """V5X 组合级回撤熔断消费点（CL-20261111-13 / A 接线 S1）。
@@ -647,7 +680,10 @@ def _apply_v5x_portfolio_brake(session, sigs: list["V5XSignal"]) -> tuple[str, d
       * **只缩放 ``lots``**，不增删信号、不改 ``dedupe_key``、不改推送通道；
         否则抑制 OPEN 会让同一根 bar 下轮重新产出并刷屏（去重记录没写进去）。
       * **fail-open**：任何异常恒等返回 scalar=1.0 —— 熔断失效可以，误杀不行。
-      * ``scalar=0`` 时把建议手数置 0 并在文案顶部加显式警示，信号仍留痕。
+      * ``scalar=0`` 时把**开仓**建议手数置 0 并在文案顶部加显式警示，信号仍留痕。
+      * ★ CL-20261112-06 P0-2：**平仓 ``CLOSE`` 不缩放**。熔断是「停止承担新风险」，
+        不是「禁止离场」；``_persist`` 会把 lots 落库，把平仓手数清零会直接写坏
+        ``v5x_signal_log``。豁免集合见 :data:`BRAKE_EXEMPT_ACTIONS`。
 
     Returns:
         ``(brake_note, summary)``：文案警示（无则空串）+ 本轮熔断读数，
@@ -655,8 +691,6 @@ def _apply_v5x_portfolio_brake(session, sigs: list["V5XSignal"]) -> tuple[str, d
     """
     global _BRAKE_IDLE_DAY
     try:
-        import math as _math
-
         from app.risk.portfolio_brake import brake_state_for_session
 
         bs = brake_state_for_session(session)
@@ -676,21 +710,17 @@ def _apply_v5x_portfolio_brake(session, sigs: list["V5XSignal"]) -> tuple[str, d
         if not bs.enabled or bs.scalar >= 1.0:
             return "", summary
 
-        n_cut = 0
-        for g in sigs:
-            if bs.scalar <= 0.0:
-                g.lots = 0.0
-            else:
-                g.lots = max(1.0, float(_math.ceil(float(g.lots) * bs.scalar - 1e-9)))
-            n_cut += 1
+        n_cut, n_exempt = scale_signal_lots(sigs, float(bs.scalar))
+        summary["n_scaled"] = n_cut
+        summary["n_exempt_close"] = n_exempt
         logger.warning(
             f"[portfolio_brake] V5X 回撤熔断生效 scalar={bs.scalar}"
-            f" → 缩放 {n_cut} 条信号建议手数")
+            f" → 缩放 {n_cut} 条开仓/加仓手数，豁免 {n_exempt} 条平仓信号")
         if bs.scalar <= 0.0:
-            return ("⛔ 组合回撤熔断已触发（清仓观望）：以上信号仅作记录，"
-                    "建议手数已置 0，请勿据其开仓。"), summary
-        return (f"⛔ 组合回撤熔断已触发（降半仓）：以上信号建议手数已按 "
-                f"scalar={bs.scalar:g} 缩放。"), summary
+            return ("⛔ 组合回撤熔断已触发（清仓观望）：开仓/加仓建议手数已置 0，"
+                    "请勿据其开新仓；平仓信号手数保持不变，请照常离场。"), summary
+        return (f"⛔ 组合回撤熔断已触发（降半仓）：开仓/加仓建议手数已按 "
+                f"scalar={bs.scalar:g} 缩放；平仓信号手数保持不变。"), summary
     except Exception as exc:  # noqa: BLE001 —— fail-open，绝不因熔断接线阻断信号链
         logger.exception(f"[portfolio_brake] V5X 熔断接线异常，恒等放行：{exc}")
         return "", {"enabled": False, "scalar": 1.0, "idle": False,
@@ -768,6 +798,8 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
         if s.action == "CLOSE":
             r = reason_cn.get((s.reason or "").lower(), s.reason or "未注明")
             lines.append(f"   离场原因：{r}")
+            # CL-20261112-06 P0-2：平仓手数此前完全不展示，熔断把它清零也无人察觉。
+            lines.append(f"   平仓手数：{s.lots:g}")
             if s.net_yuan is not None:
                 lines.append(f"   本笔盈亏：{s.net_yuan:+,.0f} 元")
         elif s.action == "OPEN":
