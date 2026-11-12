@@ -1276,24 +1276,31 @@ def _c_jobhb_cron_aware(c: Ctx) -> tuple[bool, str, str, str]:
                     return _R(self._dict_rows)
                 return _R([("lstm_train", "weekly", d("2026-11-01 06:06"))])
 
-        class _Frozen(_DateTime):
-            @classmethod
-            def now(cls, tz=None):
-                n = d("2026-11-10 18:00")
-                return n if tz is None else n.astimezone(tz)
+        def _run(shape, dict_rows, now_s, want_alarm):
+            class _Frozen(_DateTime):
+                @classmethod
+                def now(cls, tz=None):
+                    n = d(now_s)
+                    return n if tz is None else n.astimezone(tz)
+
+            alerting.datetime = _Frozen
+            got = alerting._check_job_heartbeat(_S(dict_rows), AlertConfig())
+            if bool(got) != want_alarm:
+                bad.append(f"{shape}字典行 now={now_s} 告警={bool(got)} "
+                           f"期望={want_alarm}（{got}）")
 
         _orig_jobs, _orig_dt = _sj.monitored_jobs, alerting.datetime
         try:
             _sj.monitored_jobs = lambda: [JobSpec(
                 "lstm_weekly_retrain", "lstm_train", "weekly", 9, True, True)]
-            alerting.datetime = _Frozen
             for shape, dict_rows in (
                 ("5列现行", [("lstm_weekly_retrain", "0 6 * * 5", 9, "", "apscheduler")]),
                 ("2列精简", [("lstm_weekly_retrain", "0 6 * * 5")]),
             ):
-                got = alerting._check_job_heartbeat(_S(dict_rows), AlertConfig())
-                if got:
-                    bad.append(f"{shape}字典行在改期空档仍误报: {got}")
+                # ① 改期空档零告警 ② 连续漏跑仍须报——只测①会让「整段跳过」
+                #    造成的假通过蒙混过关（CL-20261112-12 实测踩到）。
+                _run(shape, dict_rows, "2026-11-10 18:00", False)
+                _run(shape, dict_rows, "2026-11-15 12:00", True)
         finally:
             _sj.monitored_jobs, alerting.datetime = _orig_jobs, _orig_dt
     except Exception as exc:  # noqa: BLE001

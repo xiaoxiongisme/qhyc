@@ -657,7 +657,7 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
     #   口径），不是 meta.status_source：迁移 073 给 backtest_weekly 同时写了
     #   status_source 与 gap=14，它按设计「保留心跳」，不能被跳过。
     #   字典不可读/迁移中时全部回退代码值，既不静默也不让巡检本身崩掉。
-    task_meta: dict[str, tuple[str | None, float | None, str]] = {}
+    task_meta: dict[str, tuple[str | None, float | None, str, bool]] = {}
     try:
         sched_rows = session.execute(text(
             "SELECT task_id, schedule, expected_gap_days, "
@@ -683,10 +683,16 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
                 gap_num = float(gap) if gap is not None else None
             except (TypeError, ValueError):
                 gap_num = None  # 精简/异构查询里该列不是阈值 → 回退代码值
+            # 只有**现行完整 5 列字典行**才有权用 expected_gap_days IS NULL
+            # 声明 no_heartbeat；精简行的 None 只是「没取到这一列」，不能让
+            # 下面的跳过分支把整个作业静默略过（否则改期空档会「假通过」、
+            # 真停摆也报不出来，CL-20261112-12 实测踩过）。
+            gap_known = len(cells) >= 5
             task_meta[str(t)] = (
                 str(sch) if (sch and str(exe) == "apscheduler") else None,
                 gap_num,
                 str(src or ""),
+                gap_known,
             )
     except Exception:  # noqa: BLE001 —— 含测试用 FakeSession、字典缺失等
         task_meta = {}
@@ -710,10 +716,11 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
     for j in jobs:
         tt, lb = j.task_type, j.label
         meta = task_meta.get(j.job_id)
-        if meta is not None and meta[1] is None:
-            # 字典显式置 expected_gap_days=NULL（TSDB job_stats / sync-only 实例 /
-            # python 合成等，真实状态源不在 task_run）→ 不用流水心跳判，
-            # 避免「健康作业被判停摆」。backtest_weekly gap=14 不在此列。
+        if meta is not None and meta[3] and meta[1] is None:
+            # 字典**完整行**显式置 expected_gap_days=NULL（TSDB job_stats /
+            # sync-only 实例 / python 合成等，真实状态源不在 task_run）→
+            # 不用流水心跳判，避免「健康作业被判停摆」。精简行缺列不算声明，
+            # backtest_weekly gap=14 也不在此列。
             continue
         last = last_map.get((tt, lb))
         if last is None:
@@ -724,7 +731,7 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
         if last.tzinfo is None:
             last = last.replace(tzinfo=CST)
         lag = (now - last).total_seconds() / 86400.0
-        schedule, gap_db, _ = meta if meta else (None, None, "")
+        schedule, gap_db, _, _ = meta if meta else (None, None, "", False)
         gap = gap_db if gap_db is not None else float(j.expected_gap_days)
         overdue, detail = job_heartbeat_verdict(
             last, now, schedule=schedule, expected_gap_days=gap)
