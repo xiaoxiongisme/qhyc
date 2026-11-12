@@ -6824,7 +6824,134 @@ def _c_l0_src_audit(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+# ---------------------------------------------------------------- 主力合约反解口径（CL-20261112-11）
+def _load_main_contract_infer():
+    """加载每日推断脚本的实现，守卫与写入方共用同一段 MAD 口径（避免两处漂）。"""
+    import importlib.util  # noqa: PLC0415
+
+    path = Path(__file__).with_name("infer_main_contract.py")
+    spec = importlib.util.spec_from_file_location("_qhyc_main_contract_infer", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _c_main_contract_infer_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261112-11：反推字典必须跟上交易日，且**写入链路真实存在**。
+
+    根因不是「表没数据」，是「写入方从未进仓库 / 未挂调度」：表停在 2026-09-30，
+    而 ``roll_policy._resolve_inferred`` 用 ``trade_date <= d ORDER BY DESC`` 静默
+    回退，26/50 品种反解到陈旧合约且零告警。所以本断言同时验三件「此刻」的事：
+
+    1. 最新反推日期 == main_contract_map 最新交易日，且当日行数足够（覆盖率）；
+    2. 执行层 ``app/execution/roll_policy.py`` 仍**真实引用**这张表（表建了没人读）；
+    3. 写入脚本 + 作业字典登记仍在（防「修完一次，写入方又消失」）。
+    """
+    label = "主力反推字典新鲜且写入链路真实存在"
+    bad: list[str] = []
+    obs: list[str] = []
+    root = Path(__file__).resolve().parents[2]
+    try:
+        d_map = c.scalar("SELECT max(trade_date) FROM l3_ref.main_contract_map")
+        d_inf = c.scalar("SELECT max(trade_date) FROM l3_ref.dim_main_contract_inferred")
+        obs.append(f"map={d_map} inferred={d_inf}")
+        if d_map is None:
+            bad.append("main_contract_map 为空，无可判定基准")
+        else:
+            if d_inf is None or d_inf < d_map:
+                bad.append(f"反推字典落后于最新交易日 {d_map}"
+                           "（执行层会静默回退到陈旧合约）")
+            n = c.scalar(
+                "SELECT count(*) FROM l3_ref.dim_main_contract_inferred "
+                "WHERE trade_date=:d AND inferred_symbol IS NOT NULL", d=d_map)
+            obs.append(f"当日有效行={n}")
+            if int(n or 0) < 30:
+                bad.append(f"最新交易日仅 {n} 行，覆盖不足（应 >=30）")
+
+        # 2) 真实引用（执行层反解真源不许被悄悄改成 underlying）
+        rp = (root / "app" / "execution" / "roll_policy.py").read_text(
+            encoding="utf-8", errors="ignore")
+        if ("dim_main_contract_inferred" not in rp
+                or "inferred_symbol" not in rp
+                or rp.count("_resolve_inferred(") < 2):
+            bad.append("roll_policy.py 不再真实读取反推字典（表建了没人读）")
+        else:
+            obs.append("roll_policy 真实引用")
+
+        # 3) 写入链路
+        ip = root / "scripts" / "ops" / "infer_main_contract.py"
+        if not ip.exists():
+            bad.append("缺 scripts/ops/infer_main_contract.py（写入方再次消失）")
+        else:
+            isrc = ip.read_text(encoding="utf-8", errors="ignore")
+            if ("INSERT INTO l3_ref.dim_main_contract_inferred" not in isrc
+                    or "--apply" not in isrc):
+                bad.append("推断脚本不再写入反推字典或丢失 --apply 开关")
+            else:
+                obs.append("写入脚本在库")
+        job = c.scalar(
+            "SELECT enabled FROM ops.scheduled_task "
+            "WHERE task_id=:t", t="infer_main_contract_daily")
+        if job is not True:
+            bad.append("ops.scheduled_task 缺 infer_main_contract_daily 或未启用")
+        else:
+            obs.append("作业字典已登记")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询/读源码失败 {type(exc).__name__}: {str(exc)[:160]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_main_contract_follow(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261112-11：行为级对拍——重算「888 当日实际所跟合约」并与字典逐品种比。
+
+    不查历史流水，只对 **main_contract_map 最新交易日** 重跑一次分钟序列 MAD 判定。
+    单点收盘价相等不可用（akshare 主连与具体合约是两条独立序列，14:15 snapshot
+    可差 4~13 点），必须按整日序列算平均绝对差。这样「888 换月滞后」「映射表写错」
+    「推断表被改成 underlying 硬填」三种漂移都会被抓到。
+    """
+    label = "888 主连实际跟随合约与反推字典逐品种一致"
+    bad: list[str] = []
+    obs: list[str] = []
+    try:
+        d = c.scalar("SELECT max(trade_date) FROM l3_ref.main_contract_map")
+        if d is None:
+            return False, label, "无交易日", "main_contract_map 为空"
+        mod = _load_main_contract_infer()
+        recomputed = mod.infer_for_date(c.session, d)
+        obs.append(f"{d} 可判定 {len(recomputed)} 品种")
+        if len(recomputed) < 30:
+            bad.append(f"可判定品种仅 {len(recomputed)}（分钟数据未到齐或窗口口径被改）")
+        stored = {r[0]: r[1] for r in c.rows(
+            "SELECT variety_code, inferred_symbol "
+            "FROM l3_ref.dim_main_contract_inferred WHERE trade_date=:d", d=d)}
+        obs.append(f"字典当日 {len(stored)} 行")
+        missing = [it["variety_code"] for it in recomputed
+                   if it["variety_code"] not in stored]
+        mismatch = [f"{it['variety_code']}:字典={stored[it['variety_code']]}"
+                    f"/实际={it['inferred_symbol']}"
+                    for it in recomputed
+                    if it["variety_code"] in stored
+                    and stored[it["variety_code"]] != it["inferred_symbol"]]
+        if missing:
+            bad.append(f"缺 {len(missing)} 行: {','.join(missing[:8])}")
+        if mismatch:
+            bad.append(f"跟随判定不符 {len(mismatch)} 个: {'; '.join(mismatch[:8])}")
+        if not (missing or mismatch):
+            obs.append("逐品种一致")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"行为对拍失败 {type(exc).__name__}: {str(exc)[:160]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
+    # CL-20261112-11：dim_main_contract_inferred 是执行层反解真实合约的首选真源，
+    # 写入方从未进仓库/未挂调度 → 停在 2026-09-30，26/50 品种静默反解到陈旧合约。
+    # 两条分别锁「写入链路 + 新鲜度」与「888 实际跟随行为」，均为 block。
+    ("DATA-MAIN-CONTRACT-INFER-FRESH", "主力反推字典新鲜且写入链路真实存在",
+     "block", _c_main_contract_infer_fresh),
+    ("DATA-MAIN-CONTRACT-FOLLOW", "888 主连实际跟随合约与反推字典一致",
+     "block", _c_main_contract_follow),
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
     ("OPS-PUSH-QUOTA", "告警日配额与单轮 digest（不挤爆信号通道）",
