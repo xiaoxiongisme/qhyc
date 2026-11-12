@@ -7170,6 +7170,17 @@ def _c_main_contract_follow(c: Ctx) -> tuple[bool, str, str, str]:
         obs.append(f"{d} 可判定 {len(recomputed)} 品种")
         if len(recomputed) < 30:
             bad.append(f"可判定品种仅 {len(recomputed)}（分钟数据未到齐或窗口口径被改）")
+        # 无 888 主连分钟数据的品种走 underlying 兜底；少量属正常（2026-11-12 实测
+        # PG/PR/PS 三个），大面积出现说明采集链断了，不能靠兜底蒙混过关。
+        n_fb = sum(1 for it in recomputed if it["method"] == "fallback_underlying")
+        obs.append(f"兜底 {n_fb} 品种")
+        if n_fb > 5:
+            bad.append(f"兜底品种 {n_fb} 个（>5）：888 主连分钟数据大面积缺失")
+        bad_fb = [it["variety_code"] for it in recomputed
+                  if it["method"] == "fallback_underlying"
+                  and it["inferred_symbol"] != it["mapped_symbol"]]
+        if bad_fb:
+            bad.append(f"兜底行未采用当日 underlying: {','.join(bad_fb[:8])}")
         stored = {r[0]: r[1] for r in c.rows(
             "SELECT variety_code, inferred_symbol "
             "FROM l3_ref.dim_main_contract_inferred WHERE trade_date=:d", d=d)}

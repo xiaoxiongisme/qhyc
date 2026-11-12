@@ -171,6 +171,36 @@ def _assemble(rows: list[Any], mp: dict[str, str | None],
     return out
 
 
+def _with_fallback(items: list[dict[str, Any]], products: list[str],
+                   mp: dict[str, str | None], d: date) -> list[dict[str, Any]]:
+    """无 888 主连分钟数据的品种，用当日 ``main_contract_map.underlying`` 兜底。
+
+    2026-11-12 实测 PG/PR/PS 只有具体合约分钟线、没有 ``X888``，MAD 无从判定；
+    若留空，``roll_policy._resolve_inferred`` 又会静默回退到几周前的陈旧合约
+    （PS 就停在 11-06 的 PS2612，而当日主力已是 PS2701）。兜底行显式标
+    ``method='fallback_underlying'`` / ``n_candidates=0``，不冒充 MAD 实证。
+    """
+    have = {it["variety_code"] for it in items}
+    out = list(items)
+    for v in sorted(set(products) - have):
+        out.append({
+            "variety_code": v,
+            "trade_date": d,
+            "inferred_symbol": mp.get(v),
+            "n_minutes": 0,
+            "mad": None,
+            "ref_close": None,
+            "match_diff": None,
+            "n_candidates": 0,
+            "method": "fallback_underlying",
+            "mapped_symbol": mp.get(v),
+            "agrees_with_map": True,
+            "runner_up": None,
+            "runner_up_mad": None,
+        })
+    return sorted(out, key=lambda it: it["variety_code"])
+
+
 def infer_for_date(session, d: date, *,
                    min_minutes: int = MIN_MINUTES,
                    products: list[str] | None = None) -> list[dict[str, Any]]:
@@ -188,7 +218,8 @@ def infer_for_date(session, d: date, *,
     rows = session.execute(text(_INFER_SQL), {
         "t0": t0, "t1": t1, "pat": _pattern(products), "min_minutes": min_minutes,
     }).fetchall()
-    return _assemble(rows, mapped_on(session, d), d)
+    mp = mapped_on(session, d)
+    return _with_fallback(_assemble(rows, mp, d), products, mp, d)
 
 
 def _db_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -222,22 +253,25 @@ def main(argv: list[str] | None = None) -> int:
         for d in dates:
             items = infer_for_date(s, d, min_minutes=args.min_minutes)
             disagree += sum(1 for it in items if not it["agrees_with_map"])
+            n_fb = sum(1 for it in items if it["method"] == "fallback_underlying")
             if args.apply and items:
                 s.execute(text(_UPSERT), _db_rows(items))
             total += len(items)
             print(f"[{d}] 推断 {len(items)} 个品种  "
                   f"与参考主力不一致 {sum(1 for it in items if not it['agrees_with_map'])}  "
-                  f"method={METHOD}")
+                  f"兜底(无888主连) {n_fb}  method={METHOD}")
             if args.date or len(dates) <= 2:
                 for it in items:
-                    print("  {0:>3} 888 -> {1:<9} MAD={2:>10.4f} "
-                          "次优={3:<9}({4}) map={5} {6}".format(
-                              it["variety_code"], it["inferred_symbol"], it["mad"],
+                    mad_s = "-" if it["mad"] is None else f"{it['mad']:.4f}"
+                    print("  {0:>3} 888 -> {1:<9} MAD={2:>10} "
+                          "次优={3:<9}({4}) map={5} {6}{7}".format(
+                              it["variety_code"], it["inferred_symbol"], mad_s,
                               it["runner_up"] or "-",
                               "-" if it["runner_up_mad"] is None
                               else f"{it['runner_up_mad']:.4f}",
                               it["mapped_symbol"] or "-",
-                              "OK" if it["agrees_with_map"] else "DIFF"))
+                              "OK" if it["agrees_with_map"] else "DIFF",
+                              " [FALLBACK]" if it["method"] == "fallback_underlying" else ""))
         print(f"合计 {len(dates)} 个交易日 / {total} 行 / 与参考主力不一致 {disagree} 行；"
               f"{'已写入' if args.apply else 'DRY-RUN 未写库'}")
     return 0

@@ -93,6 +93,35 @@ def test_writer_chain_contract_not_removed():
     assert "MIN_MINUTES" in src and "min_minutes" in src
 
 
+def test_fallback_for_varieties_without_888_minute_data():
+    """PG/PR/PS 无 X888 主连分钟线：必须显式兜底到当日 underlying，不许留空洞。
+
+    留空洞会让 roll_policy._resolve_inferred 静默回退到几周前的陈旧合约
+    （实测 PS 停在 11-06 的 PS2612，而 11-12 主力已是 PS2701）。
+    """
+    items = mci._assemble(
+        [_row("SI", "SI2612", 225, 0.2444, 8610.0, 10, 1)], {"SI": "SI2612"}, D)
+    mp = {"SI": "SI2612", "PG": "PG2701", "PR": "PR2701"}
+    out = mci._with_fallback(items, ["SI", "PG", "PR"], mp, D)
+    assert [it["variety_code"] for it in out] == ["PG", "PR", "SI"]
+    fb = {it["variety_code"]: it for it in out
+          if it["method"] == "fallback_underlying"}
+    assert set(fb) == {"PG", "PR"}
+    for v in ("PG", "PR"):
+        assert fb[v]["inferred_symbol"] == mp[v]
+        assert fb[v]["n_candidates"] == 0
+        assert fb[v]["match_diff"] is None
+        assert fb[v]["mad"] is None
+        assert fb[v]["agrees_with_map"] is True
+
+
+def test_no_fallback_when_all_varieties_resolved():
+    items = mci._assemble(
+        [_row("I", "I2701", 225, 0.0333, 671.0, 10, 1)], {"I": "I2701"}, D)
+    out = mci._with_fallback(items, ["I"], {"I": "I2701"}, D)
+    assert len(out) == 1 and out[0]["method"] == "minute_bar_mad"
+
+
 def test_guard_invariants_registered():
     """两条 block 断言必须注册进 INVARIANTS（防止口径加完却没挂守卫）。"""
     guard = os.path.join(_REPO, "scripts", "ops", "guard_invariants.py")
