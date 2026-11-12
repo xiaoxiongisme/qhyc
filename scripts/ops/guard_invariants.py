@@ -5218,7 +5218,9 @@ def _c_ba_price_identity(c: Ctx) -> tuple[bool, str, str, str]:
         + (f"（{per}）" if per else "")
     ), ("" if tot == 0 else
         "l1 历史被修订而后复权只增量补新桶 → 跑 "
-        "rebuild_roll_all_freqs.py --force-ba 全量重建")
+        "scripts/ops/rebuild_roll_all_freqs.py --force-ba "
+        "（--symbols 可限定品种）重建；脚本在 scripts/ops/ 下，"
+        "不在仓库根目录（CL-20261112-12 修正过时处方）")
 
 
 #: CL-20261109-13：关键存储过程 → {必须存在的 token: 引入它的迁移}。
