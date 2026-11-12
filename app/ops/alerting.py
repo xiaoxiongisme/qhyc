@@ -7,7 +7,11 @@
 1. **资源类**（容器内可观测量）：cgroup 内存占用率、磁盘占用率、负载/CPU 比值；
 2. **数据类**：关键表新鲜度（滞后期）、预测/推送静默、数据库进程uptime（<阈值=疑似
    崩溃重启，是越过容器边界观测 DB OOM 的**唯一可行代理指标**）；
-3. **作业类**：APScheduler 事件监听，作业抛错或错过调度立即告警。
+3. **作业类**：APScheduler 事件监听，作业抛错或错过调度立即告警；
+4. **作业流水类**（CL-20261112-04 B-1/B-2）：集中扫描 ``ops.scheduled_task_run`` 的
+   failed/aborted，并检查 ``cron_invariant_guard`` 自身存活性。补两个静默盲区：
+   心跳只盯「距上次成功」，对「一直在跑、一直失败」无感；守卫一停，95+ 条断言
+   集体失声而下游监控仍然全绿。
 
 ⚠ 能力边界（必读）：容器被 OOM kill 时本进程也会消失，无法自我告警——那条线必须由
 宿主侧 `scripts/ops/ops_monitor.py`（宿主 crontab）兜底。本模块负责容器内可见的部分。
@@ -73,7 +77,40 @@ class AlertConfig:
     # 首根 30 分钟桶要 09:37 才落库（minute_and_bars 在 :07/:37 跑），
     # 定在 09:00 会让 5 张行情表在每个交易日开盘瞬间各报一次假告警。
     session_open_hour: int = 10
+    #: 2026-11-12（CL-20261112-10）：session 类表「当日数据应已就绪」的时刻按表覆盖。
+    #:
+    #: 背景：``session_open_hour=10`` 假设所有盘中类表 10:00 前都有当日数据
+    #: （依据是首根 30m 桶 09:37 落库）。但 ``l2_adj.bar_{5,15,30}m_ba``
+    #: 是**收盘后批量重建**的物化层，唯一生产者 ``back_adjusted_rebuild``
+    #: 的 cron 为 ``55 2,11,15`` ⇒ 当日日盘数据首次在 **11:55** 才落库。
+    #: 于是每个交易日 10:00~11:55 必然报「缺 1 个交易日」（11-10、11-12 实证），
+    #: 而数据其实零滞后（11-12 三表 max(bucket) 当天已到 15:00）。
+    #:
+    #: 取 12 而非 11:55：给重建作业留执行余量（实测约 85s）。
+    #: 12:00 之后仍要求当日数据 ⇒ **11:55 作业真失败时仍会告警**，
+    #: 只是把「BA 真断更」的最早发现时刻从 10:00（本就是无效信息）推到 12:00。
+    #:
+    #: 未列出的表沿用 ``session_open_hour``，10 点灵敏度不变。
+    #: 本配置只影响运维告警判定，不改变任何数据产出或交易信号。
+    session_ready_hour: dict = field(default_factory=lambda: {
+        "l2_adj.bar_5m_ba": 12,
+        "l2_adj.bar_15m_ba": 12,
+        "l2_adj.bar_30m_ba": 12,
+    })
     job_heartbeat_days: int = 4        # 作业心跳阈值：近30天内有过成功的作业，若距上次成功超此天数→告警（覆盖"作业停跑但数据未滞后"盲区）
+    # ★ CL-20261112-04 B-1：cron 作业失败的中央汇总（此前完全无人扫）。
+    #   2026-11-12 实证：近 3 天 ops.scheduled_task_run 有 19 条真实 failed
+    #   （cron_fetch_1min 从 11-11 22:30 到 11-12 10:15 连续 14 条、
+    #    cron_git_sync_check 1 条…）却零告警。心跳盯的是「距上次成功」，
+    #    对「一直在跑、一直失败」完全无感。
+    job_failure_window_hours: int = 24
+    job_failure_crit_count: int = 5    # 达到该条数升 CRIT（连续失败不是偶发抖动）
+    # ★ CL-20261112-04 B-2：不变量守卫自身的存活性。
+    #   cron_invariant_guard 每日 09:10 跑 --record --alert，但「守卫没跑」
+    #   从来没人检查；它一停，95+ 条断言集体静默而下游监控仍全绿。
+    #   注意它按设计在查出 block FAIL 时 sys.exit(1)，task_runner 因此记 failed
+    #   —— 所以 B-1 的失败汇总刻意排除它，改由这里按 invariant_check 记录判定。
+    guard_liveness_max_hours: int = 30
     push_silence_hours: int = 36       # 预测/推送静默告警阈值（小时）
     db_restart_alert_min: int = 10     # DB uptime < 该分钟数 → 疑似崩溃重启
     cooldown_sec: int = 1800
@@ -188,6 +225,9 @@ def alert_config_from_env() -> AlertConfig:
         data_lag_trade_days=_i("ALERT_DATA_LAG_TRADE_DAYS", 0),
         settle_cutoff_hour=_i("ALERT_SETTLE_CUTOFF_HOUR", 21),
         session_open_hour=_i("ALERT_SESSION_OPEN_HOUR", 10),
+        job_failure_window_hours=_i("ALERT_JOB_FAILURE_WINDOW_HOURS", 24),
+        job_failure_crit_count=_i("ALERT_JOB_FAILURE_CRIT_COUNT", 5),
+        guard_liveness_max_hours=_i("ALERT_GUARD_LIVENESS_MAX_HOURS", 30),
         push_silence_hours=_i("ALERT_PUSH_SILENCE_HOURS", 36),
         db_restart_alert_min=_i("ALERT_DB_RESTART_MIN", 10),
         cooldown_sec=_i("ALERT_COOLDOWN_SEC", 1800),
@@ -393,13 +433,21 @@ def _check_freshness(session, cfg: AlertConfig, now: datetime | None = None) -> 
     trade_day：值为交易日/报告日，只在交易日产出 → 滞后 = 缺失交易日数
     session  ：值为盘中时间戳 → 先映射交易日，再按交易日数计
     natural  ：每日计算、节假日也产出 → 只能按自然日计（当前无成员；真源不可用时降级到此）
+
+    session 类表的「当日应就绪时刻」可按表覆盖（``session_ready_hour``，
+    CL-20261112-10）：BA 5/15/30m 由 11:55 的批量重建作业产出，12 点前不要求当日数据。
     """
     out = []
     now = now or datetime.now(CST)
     today = now.date()
     days = _trading_days(session)
     expected_daily = _expected_trade_day(days, now, cfg.settle_cutoff_hour) if days else None
-    expected_session = _expected_trade_day(days, now, cfg.session_open_hour) if days else None
+    # 按「就绪时刻」缓存 expected：同一 hour 只算一次，避免逐表重复扫交易日历。
+    # 默认 hour 预先放入，保证未被覆盖的表行为与改动前逐位一致。
+    expected_by_hour: dict = {}
+    if days:
+        expected_by_hour[cfg.session_open_hour] = _expected_trade_day(
+            days, now, cfg.session_open_hour)
 
     for tbl, col in cfg.freshness_tables.items():
         try:
@@ -424,7 +472,18 @@ def _check_freshness(session, cfg: AlertConfig, now: datetime | None = None) -> 
                                 tbl, lag, d, cfg.data_lag_days)})
             continue
 
-        expected = expected_session if cadence == "session" else expected_daily
+        if cadence == "session":
+            # ★ 按表取就绪时刻（CL-20261112-10）：未覆盖的表走 session_open_hour，
+            #   覆盖的表（BA 5/15/30m）走各自的 12 点。此前所有 session 表共用 10 点，
+            #   与 BA 批量重建的 11:55 产出节奏错配，形成每交易日 1h55m 的假告警窗口。
+            ready_hour = int(getattr(cfg, "session_ready_hour", {}).get(
+                tbl, cfg.session_open_hour))
+            if ready_hour not in expected_by_hour:
+                expected_by_hour[ready_hour] = _expected_trade_day(
+                    days, now, ready_hour)
+            expected = expected_by_hour[ready_hour]
+        else:
+            expected = expected_daily
         if expected is None:
             continue
         own = _session_trade_day(days, mx) if cadence == "session" else \
@@ -614,6 +673,107 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- 作业失败 / 守卫自存活
+def _check_job_failures(session, cfg: AlertConfig) -> list[dict]:
+    """近窗口内 cron 作业真实失败的**中央汇总**（CL-20261112-04 B-1）。
+
+    ``check_all`` 此前只查资源 / 新鲜度 / 心跳 / DB uptime / 推送静默。心跳判据
+    （``_check_job_heartbeat``）盯的是「距上次成功多久」，一个作业可以每 30 分钟
+    被调用、每次都失败，只要历史上成功过且间隔没超阈值就永远不报 ——
+    2026-11-12 实测 ``cron_fetch_1min`` 连续失败 14 次就是这样静默过去的。
+
+    两类刻意排除（不是漏报，是把已知噪声与真故障分开）：
+      · ``aborted`` 且 message 含 ``[reaped:``：调度器重启自愈把僵尸 running
+        置 aborted，属正常清理（近 3 天 78 条全是这种）；
+      · ``cron_invariant_guard``：守卫按设计在查出 block FAIL 时 ``sys.exit(1)``，
+        task_runner 因此记 failed。它的存活性由 ``_check_guard_liveness`` 专门判定，
+        在这里报只会误导成「守卫挂了」。
+
+    聚合为**一条** finding 而非每条失败一条：digest 指纹只取 (key, level)，
+    失败次数每轮变化不会触发重推，避免重蹈 11-10 刷爆 pushplus 额度的覆辙。
+    """
+    win = max(1, int(cfg.job_failure_window_hours))
+    try:
+        rows = session.execute(text("""
+            SELECT task_id, status, count(*) AS n
+            FROM ops.scheduled_task_run
+            WHERE started_at >= now() - make_interval(hours => :win)
+              AND status IN ('failed', 'aborted')
+              AND coalesce(message, '') NOT LIKE '%[reaped:%'
+              AND task_id <> 'cron_invariant_guard'
+            GROUP BY task_id, status
+            ORDER BY n DESC, task_id
+        """), {"win": win}).fetchall()
+    except Exception as e:
+        return [{"key": "jobfail", "level": "WARN",
+                 "msg": "作业失败汇总查询失败（不静默）: {0}".format(str(e)[:120])}]
+    if not rows:
+        return []
+    total = sum(int(r[2]) for r in rows)
+    top = "、".join("{0}({1}×{2})".format(r[0], r[1], r[2]) for r in rows[:6])
+    if len(rows) > 6:
+        top += " 等 {0} 个作业".format(len(rows))
+    return [{
+        "key": "jobfail",
+        "level": "CRIT" if total >= int(cfg.job_failure_crit_count) else "WARN",
+        "msg": ("近 {0}h 有 {1} 条 cron 作业失败/异常终止：{2}；"
+                "已排除 reaped 自愈与守卫自身（后者按设计用 exit=1 报 FAIL）").format(
+                    win, total, top),
+    }]
+
+
+def _check_guard_liveness(session, cfg: AlertConfig) -> list[dict]:
+    """不变量守卫自身是否还活着（CL-20261112-04 B-2）——「监控的监控」。
+
+    ``cron_invariant_guard`` 每日 09:10 跑 ``--record --alert``，但从来没人检查
+    「它今天到底跑了没有」。它一旦被摘掉，95+ 条断言集体静默，而所有下游
+    监控仍显示全绿 —— 这是最典型的看不见的失效。
+
+    三件套都是「此刻」可判定的状态，不靠事件流水凑数：
+      ① DB 字典里 ``cron_invariant_guard`` 仍 enabled；
+      ② ``ops.invariant_check`` 最近一轮写入时间不超过阈值；
+      ③ 那一轮覆盖足够多的 check_key（防「只跑 1 条 --only」也算跑过）。
+    """
+    max_h = max(1, int(cfg.guard_liveness_max_hours))
+    try:
+        enabled = session.execute(text(
+            "SELECT enabled FROM ops.scheduled_task "
+            "WHERE task_id='cron_invariant_guard'"
+        )).scalar()
+        last = session.execute(text(
+            "SELECT max(checked_at) FROM ops.invariant_check"
+        )).scalar()
+        keys = session.execute(text("""
+            SELECT count(DISTINCT check_key) FROM ops.invariant_check
+            WHERE checked_at >= (SELECT max(checked_at) - interval '5 minutes'
+                                 FROM ops.invariant_check)
+        """)).scalar()
+    except Exception as e:
+        return [{"key": "guardlive", "level": "CRIT",
+                 "msg": "守卫存活性检查失败（不静默）: {0}".format(str(e)[:120])}]
+    problems = []
+    if enabled is None:
+        problems.append("ops.scheduled_task 缺 cron_invariant_guard 字典行")
+    elif not enabled:
+        problems.append("cron_invariant_guard 已被禁用")
+    if last is None:
+        problems.append("ops.invariant_check 无任何记录")
+    else:
+        now = datetime.now(timezone.utc)
+        ref = last.replace(tzinfo=timezone.utc) if last.tzinfo is None else last
+        hours = (now - ref).total_seconds() / 3600.0
+        if hours > max_h:
+            problems.append("最近一轮守卫记录已是 {0:.1f}h 前（阈值 {1}h）".format(
+                hours, max_h))
+    n_keys = int(keys or 0)
+    if n_keys < 50:
+        problems.append("最近一轮仅覆盖 {0} 条断言（疑似 --only 单条巡检）".format(n_keys))
+    if not problems:
+        return []
+    return [{"key": "guardlive", "level": "CRIT",
+             "msg": "不变量守卫存活性异常：" + "；".join(problems)}]
+
+
 def _check_db_uptime(session, cfg: AlertConfig) -> list[dict]:
     """DB 进程 uptime 过短 = 疑似崩溃/被 OOM kill 后重启（跨越容器边界的代理指标）。"""
     if cfg.db_restart_alert_min <= 0:
@@ -799,6 +959,9 @@ def check_all(session=None, cfg: AlertConfig | None = None) -> dict:
         findings += _check_db_uptime(session, cfg)
         findings += _check_freshness(session, cfg)
         findings += _check_job_heartbeat(session, cfg)
+        # CL-20261112-04 B-1/B-2：作业失败中央汇总 + 守卫自存活
+        findings += _check_job_failures(session, cfg)
+        findings += _check_guard_liveness(session, cfg)
         findings += _check_push_silence(session, cfg)
     finally:
         if owns:

@@ -688,7 +688,18 @@ def _c_calendar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     而不是 ``l0_raw.minute_bar.max(ts)::date``——后者会被休市期的零星桶骗到：
     2026-11-09 00:00 有 3 品种/125 手的残留 tick，把「最新数据日」拽到周一凌晨，
     日历明明正确覆盖到 11-06，却被判「落后 3 天」（CL-20261109-03）。
-    容差 0：日线日期本身就是交易日，不需要为跨夜盘留 1 天。
+
+    ★ 2026-11-12（CL-20261112-04 B-3）修正两个「看不见」的失效：
+      ① **相对比较会一起瞎**：原判据只有 ``lag <= 0``。若 ``seed_futures_rule``
+         与日线作业同时停摆，``futures_rule`` 和 ``daily_bar`` 会**同步落后**，
+         lag 仍是 0，断言照样 PASS —— 日历断更恰恰发生在它最该报警的时候。
+         现补绝对时间闸门：``cfg_calendar_seed_meta.updated_at`` 必须在近 30h 内
+         （作业每日 08:00 跑，周末也跑，30h 留足余量）。实测 11-12 08:00:02 有值。
+      ② **盘后时间耦合假红**：日线在当日收盘后即写入 T 日，而 akshare 有时
+         08:00 只播种到 T-1；此时 lag=1，旧判据必 FAIL，次日 08:00 补播后
+         又自动 PASS —— 同一天不同时刻结论不同，且 09:10 cron 永远落在「绿」的
+         那一侧。现改为「播种新鲜」的前提下容忍落后 1 个数据日；播种一旦停跑，
+         无论 lag 多少都 FAIL。既消假红，也不掩盖真断更。
     """
     seeded = c.scalar(
         "SELECT value FROM cfg_calendar_seed_meta WHERE key='seeded_through'")
@@ -709,19 +720,41 @@ def _c_calendar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
         st = date.fromisoformat(str(seeded)[:10]) if seeded else None
     except ValueError:
         st = None
+    # 播种新鲜度：用 DB 侧 now() 判，避开 Python/DB 时区不一致。
+    # 旧表结构若无 updated_at 列则降级为「不校验」，但绝不静默放宽 lag 容差。
+    try:
+        seed_at = c.scalar(
+            "SELECT updated_at FROM cfg_calendar_seed_meta WHERE key='seeded_through'")
+        seed_fresh = bool(c.scalar(
+            "SELECT updated_at >= now() - interval '30 hours' "
+            "FROM cfg_calendar_seed_meta WHERE key='seeded_through'"))
+    except Exception:  # noqa: BLE001 —— 表结构旧/不可读必须显式降级
+        seed_at, seed_fresh = None, None
     if st is None or cal_max is None or data_day is None:
-        return False, "官方日历覆盖到真实成交日", (
+        return False, "官方日历覆盖到真实成交日且播种仍存活", (
             f"seeded={seeded} cal_max={cal_max} data_day={data_day}"), (
             "日历真源缺失 → extend_index_8888 的坏日门无法判定，"
             "先跑 scripts/seed_futures_rule.py")
     cover = max(st, cal_max)
     lag = (data_day - cover).days
-    ok = lag <= 0
+    if seed_fresh is None:
+        ok = lag <= 0          # 降级：保持旧严格判据
+        gate = "seed_meta不可读(降级容差0)"
+    else:
+        ok = seed_fresh and lag <= 1
+        gate = f"seed_fresh={seed_fresh} 容差1数据日"
     src = "l0(降级)" if degraded else "daily_bar"
-    return ok, "官方日历覆盖到真实成交日（容差 0）", (
-        f"seeded={st} cal_max={cal_max} data_day={data_day}({src}) lag={lag}d"), (
-        "" if ok else
-        f"官方日历落后 {lag} 天 → 指数扩展的坏日门会静默失效（CL-20261107-18）")
+    detail = ""
+    if not ok:
+        if seed_fresh is False:
+            detail = ("日历播种已停跑（updated_at 超 30h）→ 相对比较会同步落后、"
+                      "坏日门静默失效，先查 seed_futures_rule 作业")
+        else:
+            detail = (f"官方日历落后 {lag} 天且播种新鲜 → 上游 akshare 或日线作业异常，"
+                      "指数扩展的坏日门可能失效（CL-20261107-18）")
+    return ok, "官方日历覆盖到真实成交日且播种作业仍存活", (
+        f"seeded={st} cal_max={cal_max} data_day={data_day}({src}) lag={lag}d "
+        f"seed_at={seed_at} {gate}"), detail
 
 
 # ---------------------------------------------------------------- 数据层缺陷修复 (CL-20261111-03)
@@ -4045,6 +4078,155 @@ def _c_ops_data_lag_trade_day(c: Ctx) -> tuple[bool, str, str, str]:
     return (not bad), label, " · ".join(observed), "；".join(bad)
 
 
+def _c_ops_fresh_ready_hour(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261112-10：session 类新鲜度的「按表就绪时刻」必须真接线且真生效。
+
+    这条断言针对 qhyc 两类最隐蔽的失效：
+
+    * **配置写了没人读**：只加 ``session_ready_hour`` 字典、``_check_freshness``
+      却仍用统一的 ``session_open_hour`` ⇒ 假告警照旧；
+    * **消除假告警时把真告警一起消掉**：把 BA 三表直接移出巡检，
+      或把全局 ``session_open_hour`` 一并推迟 ⇒ 11:55 重建作业真失败时无人知。
+
+    三面同时验（**全部衡量此刻的行为**，不查历史流水）：
+
+    1. 配置层：恰好覆盖三张 BA、值 12、均为 session 且在巡检表内；
+       ``session_open_hour`` 仍为 10（其余 7 张表的盘中灵敏度不变）。
+    2. AST 真实引用：``_check_freshness`` 函数体读 ``session_ready_hour``，
+       且把它传给 ``_expected_trade_day``（不是签名里挂个参数）。
+    3. 行为级对拍：用**生产日历真源** ``futures_rule``，构造「三张 BA 停在
+       夜盘 01:00」的假 session，真跑两遍 ``_check_freshness``：
+       10:05 不许报（假告警已消除）、12:05 必须报 3 条（真断更仍抓得到），
+       并把一张未覆盖的 session 表也设为陈旧，确认 10:05 照样报。
+    """
+    import ast
+
+    label = "新鲜度按表就绪时刻真接线且真生效"
+    bad: list[str] = []
+    observed: list[str] = []
+    late = {"l2_adj.bar_5m_ba", "l2_adj.bar_15m_ba", "l2_adj.bar_30m_ba"}
+
+    try:
+        from app.ops import alerting
+        cfg = alerting.AlertConfig()
+    except Exception as exc:                                  # noqa: BLE001
+        return False, label, f"AlertConfig 不可导入 {type(exc).__name__}: {exc}", (
+            "新鲜度配置不可读 → 断言不可用（不要当成通过）")
+
+    # ---- 1) 配置层 ----
+    ready = getattr(cfg, "session_ready_hour", None)
+    if not isinstance(ready, dict) or not ready:
+        bad.append("AlertConfig 缺 session_ready_hour（按表就绪时刻未配置）")
+    else:
+        observed.append("ready={0}".format(
+            ",".join("{0}:{1}".format(k.split(".")[-1], v)
+                     for k, v in sorted(ready.items()))))
+        if set(ready) != late:
+            bad.append("session_ready_hour 覆盖集合不是三张 BA 表：{0}".format(
+                sorted(ready)))
+        if any(int(v) != 12 for v in ready.values()):
+            bad.append("就绪时刻不是 12（11:55 作业 + 5 分钟余量）")
+        for t in ready:
+            if t not in cfg.freshness_tables:
+                bad.append("{0} 不在 freshness_tables（覆盖了无效表）".format(t))
+            if cfg.freshness_cadence.get(t) != "session":
+                bad.append("{0} 不是 session 节奏".format(t))
+    if cfg.session_open_hour != 10:
+        bad.append("session_open_hour 被改动（其余 session 表 10 点灵敏度下降）")
+
+    # ---- 2) AST 真实引用 ----
+    try:
+        root = Path(__file__).resolve().parents[2]
+        src = (root / "app" / "ops" / "alerting.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        fn = next(nd for nd in ast.walk(tree)
+                  if isinstance(nd, ast.FunctionDef) and nd.name == "_check_freshness")
+        body = ast.dump(fn)
+        if "session_ready_hour" not in body:
+            bad.append("_check_freshness 函数体未读 session_ready_hour（配置没人用）")
+        calls = [nd for nd in ast.walk(fn)
+                 if isinstance(nd, ast.Call) and isinstance(nd.func, ast.Name)
+                 and nd.func.id == "_expected_trade_day"]
+        wired = any(
+            any(isinstance(a, ast.Name) and a.id == "ready_hour" for a in call.args)
+            for call in calls
+        )
+        observed.append("ast_wired={0}".format(wired))
+        if not wired:
+            bad.append("ready_hour 未传给 _expected_trade_day（判据仍走统一时刻）")
+    except Exception as exc:                                  # noqa: BLE001
+        return False, label, f"AST 检查失败 {type(exc).__name__}: {exc}", (
+            "源码解析失败 → 无法判定")
+
+    # ---- 3) 行为级对拍（生产日历真源 + 真跑 _check_freshness）----
+    try:
+        from datetime import datetime as _dt, time as _time, timedelta as _td
+
+        days = alerting._trading_days(c.session)
+        if not days:
+            return False, label, "futures_rule 无交易日，无法做行为级对拍", (
+                "交易日真源不可用")
+        d = days[-1]
+        cst = alerting.CST
+        night = _dt.combine(d, _time(1, 0), tzinfo=cst)     # 01:00 桶属前一交易日
+        at10 = _dt.combine(d, _time(10, 5), tzinfo=cst)
+        at12 = _dt.combine(d, _time(12, 5), tzinfo=cst)
+
+        class _R:
+            def __init__(self, v):
+                self.v = v
+
+            def scalar(self):
+                return self.v
+
+            def scalars(self):
+                return self
+
+            def all(self):
+                return self.v
+
+        class _S:
+            def __init__(self, maxima):
+                self.maxima = maxima
+
+            def execute(self, stmt, params=None):
+                sql = str(stmt)
+                if "futures_rule" in sql:
+                    return _R(sorted(days))
+                for tbl, val in self.maxima.items():
+                    if " FROM " + tbl in sql:
+                        return _R(val)
+                return _R(None)
+
+        base = {t: d for t in cfg.freshness_tables}
+        for t in late:
+            base[t] = night
+        early = {x["key"] for x in alerting._check_freshness(_S(base), cfg, now=at10)}
+        noon = {x["key"] for x in alerting._check_freshness(_S(base), cfg, now=at12)}
+        want = {"fresh_" + t for t in late}
+        observed.append("at10_ba={0}/at12_ba={1}".format(
+            len(early & want), len(noon & want)))
+        if early & want:
+            bad.append("10:05 仍报三张 BA（周期性假告警未消除）")
+        if not want <= noon:
+            bad.append("12:05 未报三张 BA（11:55 作业真失败时会静默）")
+
+        # 未覆盖的 session 表：10 点仍必须抓得住盘中停采
+        stale = dict(base)
+        stale["minute_bar"] = _dt.combine(d - _td(days=1), _time(23, 0), tzinfo=cst)
+        e2 = {x["key"] for x in alerting._check_freshness(_S(stale), cfg, now=at10)}
+        observed.append("at10_minute_bar={0}".format("fresh_minute_bar" in e2))
+        if "fresh_minute_bar" not in e2:
+            bad.append("未覆盖的 session 表在 10:05 不再报（盘中灵敏度被削弱）")
+    except Exception as exc:                                  # noqa: BLE001
+        bad.append(f"行为级对拍失败 {type(exc).__name__}: {exc}")
+
+    if bad:
+        return False, label, "；".join(bad[:4]), "；".join(observed[:6])
+    return True, label, "；".join(observed[:6]), (
+        "按表就绪时刻已接线：10:05 免除、12:05 仍抓、其余表 10 点不变")
+
+
 def _c_ops_fresh_trade_day(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261109-02：新鲜度巡检必须按表节奏分类，不得回退「一律自然日」。
 
@@ -6460,6 +6642,188 @@ def _c_v5x_brake_wired(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+# ---------------------------------------------------------------- 隐形问题四项 (CL-20261112-04)
+def _c_job_failure_loud(c: Ctx) -> tuple[bool, str, str, str]:
+    """cron 作业真实失败必须被**集中**汇总进告警 digest（B-1）。
+
+    用 AST 锁「现在的行为」而不是查历史流水：``check_all`` 必须真的调用
+    ``_check_job_failures``，且该函数的 SQL 必须同时覆盖 failed/aborted、
+    排除 reaped 自愈与守卫自身。防止重演「表建好了没人读」——
+    2026-11-12 实测近 3 天 19 条 failed 全静默，正是因为没有任何调用点。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "cron 作业失败集中汇总进告警 digest（真接线 + 噪声排除）"
+    root = Path(__file__).resolve().parents[2]
+    bad, obs = [], []
+    try:
+        code = (root / "app" / "ops" / "alerting.py").read_text(
+            encoding="utf-8", errors="ignore")
+        tree = ast.parse(code)
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef)
+                   and n.name == "_check_job_failures"), None)
+        if fn is None:
+            bad.append("alerting.py 缺 _check_job_failures")
+        else:
+            seg = ast.get_source_segment(code, fn) or ""
+            for token in ("ops.scheduled_task_run", "'failed'", "'aborted'",
+                          "[reaped:", "cron_invariant_guard"):
+                if token not in seg:
+                    bad.append(f"失败汇总缺关键判据 {token}")
+            if not any(isinstance(x, ast.ExceptHandler) for x in ast.walk(fn)):
+                bad.append("失败汇总查询异常时不告警（会静默）")
+            else:
+                obs.append("查询失败不静默")
+        ca = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "check_all"), None)
+        if ca is None:
+            bad.append("check_all 不存在")
+        else:
+            calls = {x.func.id for x in ast.walk(ca)
+                     if isinstance(x, ast.Call) and isinstance(x.func, ast.Name)}
+            if "_check_job_failures" not in calls:
+                bad.append("check_all 未调用失败汇总（等于没接线）")
+            else:
+                obs.append("check_all 真调用")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"AST 检查失败 {type(exc).__name__}: {str(exc)[:100]}")
+    try:
+        n = c.scalar("""
+            SELECT count(*) FROM ops.scheduled_task_run
+            WHERE started_at >= now() - interval '24 hours'
+              AND status IN ('failed','aborted')
+              AND coalesce(message,'') NOT LIKE '%[reaped:%'
+              AND task_id <> 'cron_invariant_guard'
+        """)
+        obs.append(f"近24h真实失败 {int(n or 0)} 条")
+    except Exception as exc:  # noqa: BLE001
+        obs.append(f"流水统计不可用({type(exc).__name__})")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_guard_self_liveness(c: Ctx) -> tuple[bool, str, str, str]:
+    """「监控的监控」：守卫自身存活性必须有独立检查者（B-2）。
+
+    ``cron_invariant_guard`` 每日 09:10 跑，但过去没有任何东西检查它是否真的
+    跑了。它一停，95+ 条断言集体静默而下游仍全绿。这里锁两层：
+      ① 静态真接线：``alerting.check_all`` 调用 ``_check_guard_liveness``，
+         且该函数查的是 ``ops.invariant_check``（不是拿别的表凑数）；
+      ② 当前状态：DB 字典 enabled、最近一轮记录 <30h、覆盖 >=50 条断言。
+    注意检查者必须位于**不同的触发链**（ops_alert_check 每 10/30 分钟由
+    APScheduler 跑，与 09:10 crontab 守卫解耦），否则守卫停了检查者也停。
+    """
+    import ast  # noqa: PLC0415
+
+    label = "守卫自身存活性被独立检查（字典/记录新鲜度/覆盖条数）"
+    root = Path(__file__).resolve().parents[2]
+    bad, obs = [], []
+    try:
+        code = (root / "app" / "ops" / "alerting.py").read_text(
+            encoding="utf-8", errors="ignore")
+        tree = ast.parse(code)
+        fn = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef)
+                   and n.name == "_check_guard_liveness"), None)
+        if fn is None:
+            bad.append("alerting.py 缺 _check_guard_liveness")
+        else:
+            seg = ast.get_source_segment(code, fn) or ""
+            if "ops.invariant_check" not in seg:
+                bad.append("存活性检查未读 ops.invariant_check")
+            if "cron_invariant_guard" not in seg:
+                bad.append("存活性检查未校验字典开关")
+            obs.append("存活性函数真读记录表")
+        ca = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "check_all"), None)
+        if ca is not None:
+            calls = {x.func.id for x in ast.walk(ca)
+                     if isinstance(x, ast.Call) and isinstance(x.func, ast.Name)}
+            if "_check_guard_liveness" not in calls:
+                bad.append("check_all 未调用存活性检查（等于没接线）")
+            else:
+                obs.append("独立触发链真调用")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"AST 检查失败 {type(exc).__name__}: {str(exc)[:100]}")
+    try:
+        enabled = c.scalar("SELECT enabled::text FROM ops.scheduled_task "
+                           "WHERE task_id='cron_invariant_guard'")
+        fresh = c.scalar("SELECT max(checked_at) >= now() - interval '30 hours' "
+                         "FROM ops.invariant_check")
+        keys = c.scalar("""
+            SELECT count(DISTINCT check_key) FROM ops.invariant_check
+            WHERE checked_at >= (SELECT max(checked_at) - interval '5 minutes'
+                                 FROM ops.invariant_check)
+        """)
+        obs.append(f"字典enabled={enabled} 记录新鲜={fresh} 最近一轮={int(keys or 0)}条")
+        if enabled != "true":
+            bad.append("cron_invariant_guard 字典未启用")
+        if not fresh:
+            bad.append("ops.invariant_check 最近一轮超过 30h")
+        if int(keys or 0) < 50:
+            bad.append("最近一轮覆盖不足 50 条断言（疑似 --only 单条巡检）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"存活性状态查询失败 {type(exc).__name__}: {str(exc)[:100]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_l0_src_audit(c: Ctx) -> tuple[bool, str, str, str]:
+    """L0 跨源覆盖必须可审计（B-4）：触发器真挂载、函数真比较 src。
+
+    主键 (symbol, ts) 不含 src，历史覆盖不可追溯。本断言不查「表里有没有
+    审计行」（刚装好当然是 0，那是拿历史凑数），而是锁**现在的行为**：
+    审计表存在、触发器挂在 l0_raw.minute_bar 且启用、函数体真的引用
+    ``OLD.src`` / ``NEW.src`` 并写入审计表。缺任何一环都会退回「看不见」。
+    """
+    label = "L0 跨源覆盖可审计（触发器真挂载 + 函数真比较 src）"
+    bad, obs = [], []
+    try:
+        tbl = c.scalar("SELECT to_regclass('ops.minute_bar_src_overlay')::text")
+        if not tbl:
+            bad.append("缺 ops.minute_bar_src_overlay 审计表（migration 077 未执行）")
+        else:
+            obs.append("审计表存在")
+        trg = c.scalar("""
+            SELECT count(*) FROM pg_trigger
+            WHERE tgname='trg_minute_bar_src_overlay' AND NOT tgisinternal
+        """)
+        enabled = c.scalar("""
+            SELECT tgenabled FROM pg_trigger t
+            JOIN pg_class r ON r.oid = t.tgrelid
+            JOIN pg_namespace n ON n.oid = r.relnamespace
+            WHERE t.tgname='trg_minute_bar_src_overlay' AND NOT t.tgisinternal
+              AND n.nspname='l0_raw' AND r.relname='minute_bar'
+        """)
+        if int(trg or 0) < 1:
+            bad.append("hypertable/chunk 上无 src 覆盖触发器")
+        else:
+            obs.append(f"触发器挂载 {int(trg)} 处")
+        if enabled is not None and str(enabled) != "O":
+            bad.append(f"主表触发器未启用 (tgenabled={enabled})")
+        elif enabled == "O":
+            obs.append("主表触发器启用")
+        fn = c.scalar("""
+            SELECT pg_get_functiondef(p.oid) FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname='ops' AND p.proname='fn_log_minute_bar_src_overlay'
+        """)
+        if not fn:
+            bad.append("缺 ops.fn_log_minute_bar_src_overlay 函数")
+        else:
+            body = str(fn)
+            for token in ("OLD.src", "NEW.src", "minute_bar_src_overlay"):
+                if token not in body:
+                    bad.append(f"触发器函数未真引用 {token}")
+            if "OLD.src" in body and "NEW.src" in body:
+                obs.append("函数真比较 old/new src")
+        if tbl:
+            n = c.scalar("SELECT count(*) FROM ops.minute_bar_src_overlay")
+            obs.append(f"已留痕 {int(n or 0)} 次跨源覆盖")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"审计接线查询失败 {type(exc).__name__}: {str(exc)[:120]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -6478,6 +6842,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 防「每张表都显式分类」被漏掉（漏分类会静默落 natural，长假立刻误报）。
     ("OPS-FRESH-TRADE-DAY", "新鲜度按交易日/时间戳分类且阈值真接进判定",
      "block", _c_ops_fresh_trade_day),
+    # CL-20261112-10：BA 5/15/30m 由 11:55 批量重建产出，10:00 统一判据每个交易日
+    # 必报 1h55m 假告警。防「配置没人读」与「为消噪把真断更一起消掉」。
+    ("OPS-FRESH-READY-HOUR", "新鲜度按表就绪时刻真接线且真生效",
+     "block", _c_ops_fresh_ready_hour),
     # CL-20261108-18：恢复推送盈亏金额后，防止功能再下线 / 契约测试再僵尸化。
     ("OPS-PUSH-PNL-WIRED", "推送盈亏金额已接线且契约测试真实通过（CL-20261108-18）",
      "block", _c_ops_push_pnl_wired),
@@ -6785,6 +7153,13 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261111-01：每小时状态简报须真接线（函数/scheduler 注册/DB 字典行齐全）。
     ("OPS-V5X-HOURLYBRIEF-WIRED", "每小时状态简报真接线（函数/scheduler/DB 行齐全）",
      "block", _c_v5x_hourlybrief_wired),
+    # CL-20261112-04：全系统「看不见的问题」四项收口。
+    ("OPS-JOB-FAILURE-LOUD", "cron 作业失败被集中汇总进告警 digest", "block",
+     _c_job_failure_loud),
+    ("OPS-GUARD-SELF-LIVENESS", "不变量守卫自身存活性被独立触发链检查", "block",
+     _c_guard_self_liveness),
+    ("DATA-L0-SRC-AUDIT", "L0 跨源覆盖可审计（触发器真挂载）", "block",
+     _c_l0_src_audit),
 ]
 
 
