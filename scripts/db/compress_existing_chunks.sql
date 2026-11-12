@@ -20,3 +20,28 @@ FROM show_chunks('l0_raw.minute_bar', older_than => INTERVAL '30 days') i;
 
 SELECT compress_chunk(i, if_not_compressed => true)
 FROM show_chunks('l1_mkt.bar_5m', older_than => INTERVAL '60 days') i;
+
+-- ★ 2026-11-12（CL-20261111-14）：补齐 6 张从未纳入压缩体系的 bar hypertable。
+--   审计实测这 6 表 compression_enabled=f、无策略、也不在本文件目标列表里，
+--   合计 5.4 GB 全裸奔；而作业每天记 success（它确实压了上面两张）。
+--   迁移 076 负责开配置 + 30 天策略；本文件负责**存量 chunk**，由 03:30
+--   低峰 cron 执行（重 IO，切勿在 21:00 夜盘/采集时段手动跑）。
+--   ⚠ 与策略窗口一致取 30 天：l2_adj.bar_*_ba 会被 sp_build_l2_back_adjusted
+--     重建，留足近期可写窗口，避免压缩 chunk 撞上后复权重算。
+SELECT compress_chunk(i, if_not_compressed => true)
+FROM show_chunks('l1_mkt.bar_15m', older_than => INTERVAL '30 days') i;
+
+SELECT compress_chunk(i, if_not_compressed => true)
+FROM show_chunks('l1_mkt.bar_30m', older_than => INTERVAL '30 days') i;
+
+SELECT compress_chunk(i, if_not_compressed => true)
+FROM show_chunks('l1_mkt.bar_60m', older_than => INTERVAL '30 days') i;
+
+SELECT compress_chunk(i, if_not_compressed => true)
+FROM show_chunks('l2_adj.bar_15m_ba', older_than => INTERVAL '30 days') i;
+
+SELECT compress_chunk(i, if_not_compressed => true)
+FROM show_chunks('l2_adj.bar_30m_ba', older_than => INTERVAL '30 days') i;
+
+SELECT compress_chunk(i, if_not_compressed => true)
+FROM show_chunks('l2_adj.bar_60m_ba', older_than => INTERVAL '30 days') i;

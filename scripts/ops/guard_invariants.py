@@ -6295,6 +6295,86 @@ def _c_l0_realtime_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     return ok, "实时主连采集覆盖最近完整交易日全部 53 主连", obs, det
 
 
+#: 必须纳入压缩体系的 bar hypertable（CL-20261111-14）。
+#: 这 6 张长期 compression_enabled=f / 无策略 / 不在存量压缩 SQL 里，合计 5.4 GB。
+_COMPRESS_TARGETS: tuple[tuple[str, str], ...] = (
+    ("l1_mkt", "bar_15m"), ("l1_mkt", "bar_30m"), ("l1_mkt", "bar_60m"),
+    ("l2_adj", "bar_15m_ba"), ("l2_adj", "bar_30m_ba"), ("l2_adj", "bar_60m_ba"),
+)
+
+
+def _c_compress_effective(c: Ctx) -> tuple[bool, str, str, str]:
+    """压缩必须「真发生」，而不是「脚本接线」（CL-20261111-14）。
+
+    原 ``OPS-COMPRESS-LOG-PATH`` 只验日志路径 / ON_ERROR_STOP / 失败冒泡 /
+    cron 字典，作业每天记 success 却可能一个 chunk 都没压：2026-11-12 审计
+    实测这 6 张 bar hypertable 合计 5.4 GB 长期裸奔，而压缩作业其实天天在跑
+    （它只压 minute_bar + bar_5m）。「接线齐全」与「效果发生」是两件事。
+
+    判据锁四层「现在的行为」，任何一层退化都 FAIL：
+      ① 6 表 ``compression_enabled=t``（结构）
+      ② 6 表都有 ``policy_compression``（策略）
+      ③ ``compress_existing_chunks.sql`` 覆盖 6 表（存量通道）
+      ④ 各表确实存在 ``is_compressed`` 的 chunk（**效果，而非意图**）
+    第 ④ 条专治「表建了没人压」；存量分批压缩由 03:30 cron 承担，故只要求
+    「已压过」，不要求「全部压完」，避免开 CL 后长期假红。
+    """
+    label = "6 张 bar hypertable 压缩真生效（配置/策略/存量通道/已压 chunk）"
+    bad, obs = [], []
+    try:
+        rows = c.rows("""
+            SELECT hypertable_schema, hypertable_name, compression_enabled::text
+            FROM timescaledb_information.hypertables
+        """)
+        enabled = {(r[0], r[1]): str(r[2]).lower() in ("true", "t") for r in rows}
+        miss_cfg = [f"{s}.{t}" for s, t in _COMPRESS_TARGETS
+                    if not enabled.get((s, t))]
+        if miss_cfg:
+            bad.append("未开启压缩: " + ",".join(miss_cfg))
+        else:
+            obs.append("6 表 compression_enabled=t")
+
+        jobs = c.rows("""
+            SELECT hypertable_name FROM timescaledb_information.jobs
+            WHERE proc_name='policy_compression'
+        """)
+        jobnames = {r[0] for r in jobs}
+        miss_pol = [f"{s}.{t}" for s, t in _COMPRESS_TARGETS if t not in jobnames]
+        if miss_pol:
+            bad.append("缺压缩策略: " + ",".join(miss_pol))
+        else:
+            obs.append("6 表均有压缩策略")
+
+        sql_path = (Path(__file__).resolve().parents[2] / "scripts" / "db"
+                    / "compress_existing_chunks.sql")
+        sql_text = sql_path.read_text(encoding="utf-8", errors="ignore")
+        miss_sql = [f"{s}.{t}" for s, t in _COMPRESS_TARGETS
+                    if f"'{s}.{t}'" not in sql_text]
+        if miss_sql:
+            bad.append("存量压缩 SQL 漏目标: " + ",".join(miss_sql))
+        else:
+            obs.append("存量 SQL 覆盖 6 表")
+
+        csv = ",".join(t for _, t in _COMPRESS_TARGETS)
+        eff = c.rows("""
+            SELECT hypertable_schema, hypertable_name,
+                   count(*) FILTER (WHERE is_compressed) AS n_comp
+            FROM timescaledb_information.chunks
+            WHERE hypertable_name = ANY(string_to_array(:csv, ','))
+            GROUP BY 1,2
+        """, csv=csv)
+        comp_map = {(r[0], r[1]): int(r[2]) for r in eff}
+        no_eff = [f"{s}.{t}" for s, t in _COMPRESS_TARGETS
+                  if comp_map.get((s, t), 0) == 0]
+        if no_eff:
+            bad.append("尚无已压缩 chunk: " + ",".join(no_eff))
+        else:
+            obs.append("6 表均已有压缩 chunk")
+    except Exception as exc:  # noqa: BLE001
+        return False, label, f"检查失败 {type(exc).__name__}", str(exc)[:200]
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -6397,6 +6477,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-14 C：/var/log 硬编码靠 sudo 维持，且 psql 无 ON_ERROR_STOP 会假绿。
     ("OPS-COMPRESS-LOG-PATH", "压缩脚本日志落在项目可写目录且失败可冒泡", "block",
      _c_compress_log_path),
+    # CL-20261111-14：只验「接线」不够——6 张 bar hypertable 合计 5.4 GB 长期
+    # compression_enabled=f / 无策略 / 不在存量 SQL 里，作业却天天记 success。
+    ("OPS-COMPRESS-EFFECTIVE", "6 张 bar hypertable 压缩真生效", "block",
+     _c_compress_effective),
     # CL-20261110-15：11-09 roll_yield 0 行假绿 + f_atr_pctile 逐日 0 行巡检盲区。
     ("OPS-ROLL-YIELD-ZERO-LOUD", "roll_yield 整交易日零写入必须非零退出且调度已接线",
      "block", _c_roll_yield_zero_loud),
