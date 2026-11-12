@@ -43,6 +43,13 @@ SESSION_TABLES = [
     "l2_adj.bar_30m_ba", "l2_adj.bar_60m_ba",
 ]
 
+#: CL-20261112-10：这三张 BA 是收盘后批量重建的物化层，
+#: 唯一生产者 back_adjusted_rebuild 的 cron 是 ``55 2,11,15``，
+#: 当日日盘首次产出在 11:55 ⇒ 12 点前不要求「当日必须有数据」。
+BA_LATE_TABLES = [
+    "l2_adj.bar_5m_ba", "l2_adj.bar_15m_ba", "l2_adj.bar_30m_ba",
+]
+
 
 class _Res:
     def __init__(self, v):
@@ -149,10 +156,18 @@ def test_before_cutoff_not_reported():
 
 
 def test_intraday_tables_checked_after_open():
-    """交易日 10:00，7 张行情表都停在昨日 → 7 条（否则盘中停采无人知）。"""
+    """10:00 → 4 张即时行情表仍报；12:00 → 7 张全报（CL-20261112-10）。
+
+    原护栏是「10:00 七张全报」。三张 BA 改为 12 点就绪后，
+    10:00 只应剩 4 张即时表（10 点灵敏度不变），且 12:00 必须把 BA 也抓回来
+    —— 否则 11:55 重建作业真失败就没人知道了。
+    """
     stale = {t: dt.datetime(2026, 11, 5, 23, 0, tzinfo=CST) for t in SESSION_TABLES}
-    found = _run(dt.datetime(2026, 11, 6, 10, 0, tzinfo=CST), stale)
-    assert _keys(found) == sorted("fresh_" + t for t in SESSION_TABLES)
+    instant = [t for t in SESSION_TABLES if t not in BA_LATE_TABLES]
+    early = _run(dt.datetime(2026, 11, 6, 10, 0, tzinfo=CST), stale)
+    assert _keys(early) == sorted("fresh_" + t for t in instant)
+    noon = _run(dt.datetime(2026, 11, 6, 12, 0, tzinfo=CST), stale)
+    assert _keys(noon) == sorted("fresh_" + t for t in SESSION_TABLES)
 
 
 # --------------------------------------------------------------------------
@@ -171,6 +186,45 @@ def test_night_session_stall_reported():
                  {"l2_adj.bar_60m_ba": dt.datetime(2026, 11, 5, 1, 0, tzinfo=CST)})
     assert _keys(found) == ["fresh_l2_adj.bar_60m_ba"]
     assert "缺 2 个交易日" in found[0]["msg"]
+
+
+# --------------------------------------------------------------------------
+# 3b. 按表就绪时刻（CL-20261112-10）
+# --------------------------------------------------------------------------
+
+def test_ba_late_tables_not_reported_before_noon():
+    """10:05 三张 BA 停在夜盘 01:00（属前一交易日）→ 零告警。
+
+    复现 11-12 10:00 那条假告警：数据零滞后，只是 11:55 的重建作业还没跑。
+    """
+    stale = {t: dt.datetime(2026, 11, 6, 1, 0, tzinfo=CST) for t in BA_LATE_TABLES}
+    assert _keys(_run(dt.datetime(2026, 11, 6, 10, 5, tzinfo=CST), stale)) == []
+
+
+def test_ba_late_tables_stall_reported_after_noon():
+    """12:05 同样的数据仍在 01:00 → 3 条真告警（11:55 作业失败抓得到）。"""
+    stale = {t: dt.datetime(2026, 11, 6, 1, 0, tzinfo=CST) for t in BA_LATE_TABLES}
+    found = _run(dt.datetime(2026, 11, 6, 12, 5, tzinfo=CST), stale)
+    assert _keys(found) == sorted("fresh_" + t for t in BA_LATE_TABLES)
+    assert all("缺 1 个交易日" in f["msg"] for f in found)
+
+
+def test_ready_hour_override_is_scoped():
+    """只覆盖三张 BA；其余 session 表仍走 session_open_hour=10。"""
+    cfg = _cfg()
+    assert set(cfg.session_ready_hour) == set(BA_LATE_TABLES)
+    assert all(v >= cfg.session_open_hour for v in cfg.session_ready_hour.values())
+    assert cfg.session_open_hour == 10
+    assert all(cfg.freshness_cadence.get(t) == "session"
+               for t in cfg.session_ready_hour)
+    assert set(cfg.session_ready_hour) <= set(cfg.freshness_tables)
+
+
+def test_ready_hour_boundary_exact():
+    """11:59 不报、12:00 报 —— 就绪时刻是硬边界，不留模糊带。"""
+    stale = {t: dt.datetime(2026, 11, 6, 1, 0, tzinfo=CST) for t in BA_LATE_TABLES}
+    assert _keys(_run(dt.datetime(2026, 11, 6, 11, 59, tzinfo=CST), stale)) == []
+    assert len(_run(dt.datetime(2026, 11, 6, 12, 0, tzinfo=CST), stale)) == 3
 
 
 # --------------------------------------------------------------------------
