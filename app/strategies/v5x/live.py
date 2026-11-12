@@ -630,8 +630,75 @@ def _mark_notify(session, sigs: Iterable[V5XSignal], ok: bool, via: str) -> None
         """), {"ok": ok, "via": via, "k": s.dedupe_key})
 
 
+#: 熔断空转每日只 ``logger.error`` 一次（扫描 :05/:35 每轮跑，避免刷屏）。
+_BRAKE_IDLE_DAY: str = ""
+
+
+def _apply_v5x_portfolio_brake(session, sigs: list["V5XSignal"]) -> tuple[str, dict]:
+    """V5X 组合级回撤熔断消费点（CL-20261111-13 / A 接线 S1）。
+
+    ★ 为什么必须有这个函数
+      组合熔断模块 :mod:`app.risk.portfolio_brake` 早已写好，但唯一生产消费点
+      ``scheduler._apply_portfolio_brake`` 在 ``fusion_v34`` 关闭时的 early return
+      之后 —— 生产推送源唯一化为 V5X 后**永不可达**。即开关
+      ``portfolio_brake_enabled=t``、代码齐备、监控全绿，而投产链路从未被保护。
+
+    纪律（与 V3.4 版一致）：
+      * **只缩放 ``lots``**，不增删信号、不改 ``dedupe_key``、不改推送通道；
+        否则抑制 OPEN 会让同一根 bar 下轮重新产出并刷屏（去重记录没写进去）。
+      * **fail-open**：任何异常恒等返回 scalar=1.0 —— 熔断失效可以，误杀不行。
+      * ``scalar=0`` 时把建议手数置 0 并在文案顶部加显式警示，信号仍留痕。
+
+    Returns:
+        ``(brake_note, summary)``：文案警示（无则空串）+ 本轮熔断读数，
+        后者会进 ``run_v5x_scan`` 返回摘要，供调度日志与后续断言读取。
+    """
+    global _BRAKE_IDLE_DAY
+    try:
+        import math as _math
+
+        from app.risk.portfolio_brake import brake_state_for_session
+
+        bs = brake_state_for_session(session)
+        summary = {
+            "enabled": bs.enabled, "scalar": bs.scalar, "idle": bs.idle,
+            "reason": bs.reason, "n_days": bs.n_days, "need_days": bs.need_days,
+        }
+        if bs.idle:
+            day = datetime.now().strftime("%Y-%m-%d")
+            if _BRAKE_IDLE_DAY != day:
+                _BRAKE_IDLE_DAY = day
+                logger.error(
+                    "[portfolio_brake] V5X 组合熔断空转：开关已开但无有效权益曲线"
+                    f"（reason={bs.reason} 样本={bs.n_days}/{bs.need_days} 交易日）"
+                    " → 本轮恒等放行，组合风控未生效。请补 portfolio_equity 真实净值"
+                    "（绝不推算/造数，见 upsert_equity.py 口径纪律）。")
+        if not bs.enabled or bs.scalar >= 1.0:
+            return "", summary
+
+        n_cut = 0
+        for g in sigs:
+            if bs.scalar <= 0.0:
+                g.lots = 0.0
+            else:
+                g.lots = max(1.0, float(_math.ceil(float(g.lots) * bs.scalar - 1e-9)))
+            n_cut += 1
+        logger.warning(
+            f"[portfolio_brake] V5X 回撤熔断生效 scalar={bs.scalar}"
+            f" → 缩放 {n_cut} 条信号建议手数")
+        if bs.scalar <= 0.0:
+            return ("⛔ 组合回撤熔断已触发（清仓观望）：以上信号仅作记录，"
+                    "建议手数已置 0，请勿据其开仓。"), summary
+        return (f"⛔ 组合回撤熔断已触发（降半仓）：以上信号建议手数已按 "
+                f"scalar={bs.scalar:g} 缩放。"), summary
+    except Exception as exc:  # noqa: BLE001 —— fail-open，绝不因熔断接线阻断信号链
+        logger.exception(f"[portfolio_brake] V5X 熔断接线异常，恒等放行：{exc}")
+        return "", {"enabled": False, "scalar": 1.0, "idle": False,
+                    "reason": f"exception:{type(exc).__name__}"}
+
+
 def format_message(sigs: list[V5XSignal], *, retry: bool = False,
-                   batch: str = "") -> tuple[str, str]:
+                   batch: str = "", brake_note: str = "") -> tuple[str, str]:
     """生成推送标题与正文（价格一律真实合约价，BA 价附在括号里备查）。
 
     Args:
@@ -684,6 +751,11 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
             return sym
 
     lines: list[str] = []
+    if brake_note:
+        # 熔断生效必须让用户一眼看到：format_message 只显示手数，
+        # 若不在正文顶部点明，scalar=0 时「手数：0」很容易被当成显示异常忽略。
+        lines.append(brake_note)
+        lines.append("")
     for s in sorted(sigs, key=lambda x: (x.action != "OPEN", x.symbol)):
         label = action_cn.get((s.action, s.side), f"{s.action} {s.side}")
         cn = _cn(s.symbol)
@@ -754,12 +826,16 @@ def run_v5x_scan(session, *, now: datetime | None = None,
     now = now or datetime.now()
     sigs = scan_once(session, symbols=symbols, now=now, overrides=overrides,
                      emit_symbols=emit_symbols, finalized=finalized)
+    # ★ CL-20261111-13 / A 接线 S1：组合熔断在「生成信号后、落库前」生效。
+    #   放在 run_v5x_scan 内部可覆盖全部三条生产路径（scheduler 兜底 +
+    #   close_pipeline 首批/补发），不依赖任何单一调度作业是否可达。
+    brake_note, brake_summary = _apply_v5x_portfolio_brake(session, sigs)
     new = _persist(session, sigs) if sigs else []
     session.commit()
 
     if not do_push:
         return {"n_signals": len(sigs), "n_new": len(new), "n_unsent": 0,
-                "pushed": False, "retry": False}
+                "pushed": False, "retry": False, "brake": brake_summary}
 
     # 不能只推 ``new``：上一轮推送失败的行**已经在表里**，``_persist`` 会因
     # dedupe_key 冲突返回空 → 只推 new 的话它永远发不出去（详见 _load_unsent）。
@@ -767,7 +843,7 @@ def run_v5x_scan(session, *, now: datetime | None = None,
     if not unsent:
         logger.info(f"[v5x.live] 本轮 {len(sigs)} 条信号均已送达 → 不重复推送")
         return {"n_signals": len(sigs), "n_new": len(new), "n_unsent": 0,
-                "pushed": False, "retry": False}
+                "pushed": False, "retry": False, "brake": brake_summary}
 
     # 补推按**每行自己的状态**判（notify_ok IS FALSE），不是「队列条数 > 新增数」：
     # 后者在「本轮新增也被去重」时算不准（new=0 而队列=1，会误判成整批都是补发）。
@@ -796,11 +872,13 @@ def run_v5x_scan(session, *, now: datetime | None = None,
             f"如需双通道，在 config 里填企业微信/钉钉/飞书群机器人 URL。")
         _NO_FALLBACK_WARNED = True
 
-    title, content = format_message(unsent, retry=retry, batch=batch)
+    title, content = format_message(unsent, retry=retry, batch=batch,
+                                   brake_note=brake_note)
     ok, via = send_notify(title, content, fallback)
     _mark_notify(session, unsent, ok, via)
     session.commit()
     logger.info(f"[v5x.live] 推送 {len(unsent)} 条（{via}"
                 f"{'，含补发' if retry else ''}）：ok={ok}")
     return {"n_signals": len(sigs), "n_new": len(new), "n_unsent": len(unsent),
-            "pushed": bool(ok), "via": via, "retry": retry}
+            "pushed": bool(ok), "via": via, "retry": retry,
+            "brake": brake_summary}

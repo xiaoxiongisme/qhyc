@@ -274,6 +274,61 @@ def brake_scalar(equity: list[float], cfg: BrakeConfig) -> float:
     return 1.0
 
 
+@dataclass
+class BrakeState:
+    """一轮扫描应生效的组合熔断状态（CL-20261111-13 / A 接线 S1）。
+
+    刻意做成**值对象 + fail-open**：任何异常都返回 ``scalar=1.0``，
+    「熔断失效可以，误杀不行」（与 ``scheduler._apply_portfolio_brake`` 同纪律）。
+    ``idle=True`` = 开关开着却没真正保护，这是**必须被看见**的状态，不是正常降级。
+    """
+
+    scalar: float = 1.0
+    enabled: bool = False
+    idle: bool = False
+    reason: str = "not_called"
+    n_days: int = 0
+    need_days: int = EQUITY_MIN_DAYS
+
+
+def brake_state_for_session(session) -> BrakeState:
+    """读取开关 + 权益曲线，返回本轮应生效的熔断标量（V5X 消费点入口）。
+
+    ★ 为什么放在 ``app/risk`` 而不是 scheduler（CL-20261111-13 / A 接线）
+      原唯一消费点 ``scheduler._apply_portfolio_brake`` 位于 ``_fusion_scan_job``
+      里 ``fusion_v34`` 未启用时的 early return **之后**；生产
+      ``fusion_v34_live_enabled=f``（推送源唯一化为 V5X）⇒ 该分支永不可达，
+      组合熔断在投产链路上从未生效。修法不是把 V3.4 打开（那会造成双源冲突），
+      而是给 V5X 加独立消费点；放在 ``app/risk`` 可避免 live.py 反向 import
+      scheduler 造成循环依赖。
+
+    判据：开关关 → scalar=1.0（``enabled=False``，非 idle）；开关开但曲线不可用
+    → scalar=1.0 + ``idle=True``（空转，上层必须留痕）；曲线可用 → :func:`brake_scalar`。
+    """
+    try:
+        cfg = load_brake_config(env_fallback=True)
+        if not cfg.enabled:
+            return BrakeState(reason="disabled")
+        equity = load_equity_curve(session=session, lookback=cfg.lookback)
+        if not equity:
+            st = equity_curve_status()
+            return BrakeState(
+                enabled=True, idle=True,
+                reason=str(st.get("reason") or "no_equity"),
+                n_days=int(st.get("n_days") or 0),
+                need_days=int(st.get("need_days") or EQUITY_MIN_DAYS),
+            )
+        return BrakeState(
+            scalar=brake_scalar(equity, cfg), enabled=True, idle=False,
+            reason="ok", n_days=len(equity), need_days=EQUITY_MIN_DAYS,
+        )
+    except Exception as exc:  # noqa: BLE001 —— fail-open：熔断失效可以，误杀不行
+        logger.exception(
+            f"[portfolio_brake] brake_state_for_session 异常，恒等放行：{exc}")
+        return BrakeState(enabled=True, idle=True,
+                          reason=f"exception:{type(exc).__name__}")
+
+
 def apply(expected_lots: float, equity: list[float], cfg: BrakeConfig) -> float:
     """把刹车标量应用到期望手数。
 

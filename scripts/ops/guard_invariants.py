@@ -6375,6 +6375,91 @@ def _c_compress_effective(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+def _c_v5x_brake_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """V5X 必须**真消费**组合级回撤熔断（CL-20261111-13 / A 接线）。
+
+    背景：熔断模块 ``app/risk/portfolio_brake.py`` 早已齐备、开关
+    ``portfolio_brake_enabled=t``、代码审查也过关，但唯一生产消费点
+    ``scheduler._apply_portfolio_brake`` 位于 ``_fusion_scan_job`` 里
+    ``fusion_v34`` 关闭时的 early return 之后 —— 推送源唯一化为 V5X 后
+    **永不可达**，投产链路从未被保护。典型「什么都写了，就是没人读」。
+
+    本断言用 AST 锁四层「现在的行为」，防止再次退化成死代码：
+      ① risk 层有 ``brake_state_for_session`` 入口
+      ② live.py 有独立消费点且真调用该入口
+      ③ 消费点在 ``run_v5x_scan`` 里 ``_persist`` **之前**被调用（落库后再缩放无效）
+      ④ 消费点有 fail-open 异常兜底，且 ``format_message`` 收到 ``brake_note``
+    """
+    import ast  # noqa: PLC0415
+
+    label = "V5X 组合熔断真接线（独立消费点 + 落库前 + fail-open + 文案可见）"
+    root = Path(__file__).resolve().parents[2]
+    bad, obs = [], []
+    try:
+        risk = ast.parse((root / "app" / "risk" / "portfolio_brake.py").read_text(
+            encoding="utf-8", errors="ignore"))
+        if not any(isinstance(n, ast.FunctionDef)
+                   and n.name == "brake_state_for_session" for n in ast.walk(risk)):
+            bad.append("risk 层缺 brake_state_for_session 入口")
+        else:
+            obs.append("risk 层入口存在")
+
+        tree = ast.parse((root / "app" / "strategies" / "v5x" / "live.py").read_text(
+            encoding="utf-8", errors="ignore"))
+        fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                   and n.name == "_apply_v5x_portfolio_brake"), None)
+        if fn is None:
+            bad.append("live.py 缺 _apply_v5x_portfolio_brake 消费点")
+        else:
+            calls = {x.func.id for x in ast.walk(fn)
+                     if isinstance(x, ast.Call) and isinstance(x.func, ast.Name)}
+            if "brake_state_for_session" not in calls:
+                bad.append("消费点未真调用 brake_state_for_session")
+            else:
+                obs.append("消费点真调用 risk 层")
+            if not any(isinstance(x, ast.ExceptHandler) for x in ast.walk(fn)):
+                bad.append("消费点缺 fail-open 异常兜底（可能误杀信号链）")
+            else:
+                obs.append("fail-open 兜底")
+
+        run = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                    and n.name == "run_v5x_scan"), None)
+        if run is None:
+            bad.append("run_v5x_scan 不存在")
+        else:
+            brake_ln = [x.lineno for x in ast.walk(run)
+                        if isinstance(x, ast.Call) and isinstance(x.func, ast.Name)
+                        and x.func.id == "_apply_v5x_portfolio_brake"]
+            persist_ln = [x.lineno for x in ast.walk(run)
+                          if isinstance(x, ast.Call) and isinstance(x.func, ast.Name)
+                          and x.func.id == "_persist"]
+            if not brake_ln:
+                bad.append("run_v5x_scan 未调用熔断消费点")
+            elif persist_ln and brake_ln[0] > min(persist_ln):
+                bad.append("熔断在 _persist 之后（落库后再缩放无效）")
+            else:
+                obs.append("熔断在落库前生效")
+            fm = [x for x in ast.walk(run)
+                  if isinstance(x, ast.Call) and isinstance(x.func, ast.Name)
+                  and x.func.id == "format_message"]
+            if not fm or not any(k.arg == "brake_note" for k in fm[0].keywords):
+                bad.append("format_message 未传 brake_note（用户看不到熔断）")
+            else:
+                obs.append("文案带熔断警示")
+
+        row = c.rows("""
+            SELECT (SELECT enabled::text FROM cfg_feature_switch
+                    WHERE switch_key='portfolio_brake_enabled'),
+                   (SELECT count(*) FROM portfolio_equity)
+        """)
+        if row:
+            obs.append(f"开关={row[0][0]} 权益样本={int(row[0][1])} 行"
+                       "（门槛 20 交易日）")
+    except Exception as exc:  # noqa: BLE001
+        return False, label, f"检查失败 {type(exc).__name__}", str(exc)[:200]
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
@@ -6481,6 +6566,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # compression_enabled=f / 无策略 / 不在存量 SQL 里，作业却天天记 success。
     ("OPS-COMPRESS-EFFECTIVE", "6 张 bar hypertable 压缩真生效", "block",
      _c_compress_effective),
+    # CL-20261111-13 / A 接线 S1：熔断模块齐备 + 开关开着，但唯一消费点在
+    # fusion_v34 关闭时的 early return 之后（永不可达）→ 投产链路从无保护。
+    ("OPS-V5X-BRAKE-WIRED", "V5X 组合熔断真接线", "block",
+     _c_v5x_brake_wired),
     # CL-20261110-15：11-09 roll_yield 0 行假绿 + f_atr_pctile 逐日 0 行巡检盲区。
     ("OPS-ROLL-YIELD-ZERO-LOUD", "roll_yield 整交易日零写入必须非零退出且调度已接线",
      "block", _c_roll_yield_zero_loud),
