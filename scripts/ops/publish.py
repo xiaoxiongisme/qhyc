@@ -66,6 +66,10 @@ SCHED_SVC = "qhyc-scheduler"
 API_CONTAINER = "qhyc-api"
 API_IMAGE_FALLBACK = "qhyc:latest"
 DEPLOY_MARK = ".deployed_sha"  # 生产仓库根，untracked；守卫 C5 读它
+#: CL-20261113-02：fetch cron（宿主 crontab）用 flock -n /tmp/fetch_1min.lock
+#: 守护在途采集；重启 qhyc-api 前先抢同一把锁并持锁执行 restart，避免在途 fetch
+#: 被 docker restart 误杀成 exit 137（11-13 00:30 实证）。路径与 fetch cron 一致。
+FETCH_LOCK = "/tmp/fetch_1min.lock"
 
 #: compose 里 bind 到**单个文件**的挂载（源路径 basename 带扩展名）。
 #: 这些路径若被误建成目录，docker restart 会直接失败并把容器留在 Exited。
@@ -315,8 +319,16 @@ def main() -> int:
             print("  必须在 24h 内在 ops.change_log 补登记并安排重启；"
                   "次日 09:00 一致性守卫 C4 会报 DRIFT")
         else:
-            out = _ssh(f"docker restart {API_CONTAINER}", timeout=180).strip()
-            print(f"  {API_CONTAINER} restart -> {out}")
+            # ★ CL-20261113-02：重启前先抢 fetch 锁。flock -x 会阻塞到锁空闲
+            # （fetch 在途时），随后持锁执行 docker restart，保证重启期间无 fetch
+            # 在跑——避免在途 fetch 被误杀成 exit 137 的严重 jobfail 误报
+            # （11-13 00:30 实证）。fetch 单轮 ≤3min，故 600s 足够；持锁期间至多
+            # 一轮 fetch tick 因 flock -n 跳过（预期内、部署窗口内已降级）。
+            out = _ssh(
+                f"flock -x {FETCH_LOCK} -c 'docker restart {API_CONTAINER}'",
+                timeout=600,
+            ).strip()
+            print(f"  {API_CONTAINER} restart（已先等 fetch 锁）-> {out}")
             st = _ssh(f"docker ps --filter name={API_CONTAINER} --format "
                       "'{{.Status}}'", check=False).strip()
             if "Up" not in st:
