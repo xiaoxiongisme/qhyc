@@ -7260,6 +7260,83 @@ def _c_main_contract_follow(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+def _c_infer_after_map_refresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261113-03：反推推断作业必须排在 main_contract_map 上游刷新**之后**。
+
+    11-13 实证：``daily_futures_refresh``(18:10) 才把当日 50 行写进
+    ``main_contract_map``（created_at 18:10:19），而 ``infer_main_contract_daily``
+    (17:25) 早 45 分钟跑——脚本取「最近 5 个交易日」时当日行还不存在，日志只会
+    处理 11-06/09/10/11/12，于是字典永远停在 T-1，INFER-FRESH / FOLLOW 每交易日
+    18:10 后必 FAIL。旧 CL-20261112-11 收口时靠 22:23 手动补跑掩盖，**没有锁住
+    这条依赖**，一天之后就回归。
+
+    三段衡量的都是「此刻」，不靠历史窗口衰减：
+      1. DB 字典两作业均 enabled，且 infer 的 cron 时刻严格晚于 refresh；
+      2. 最近一次 infer **实际运行**的上海本地时刻也晚于 refresh —— 这条专抓
+         「字典改了、宿主 crontab 没改」：真正执行推断的是宿主 task_runner，
+         只改字典会照样假绿（skill 坑 #2/#9 的同款陷阱）；
+      3. 推断脚本仍在，防写入方再次被清理。
+    """
+    label = "主连反推推断排在上游 main_contract_map 刷新之后"
+    bad: list[str] = []
+    obs: list[str] = []
+
+    def _hhmm(sched: str) -> "int | None":
+        """5 段 cron 的前两段（分 时）→ 当日绝对分钟数。"""
+        p = (sched or "").split()
+        if len(p) < 2:
+            return None
+        try:
+            return int(p[1]) * 60 + int(p[0])
+        except ValueError:
+            return None
+
+    mr: "int | None" = None
+    try:
+        cfg = {r[0]: (r[1], r[2]) for r in c.rows(
+            "SELECT task_id, enabled, schedule FROM ops.scheduled_task "
+            "WHERE task_id IN ('infer_main_contract_daily','daily_futures_refresh')")}
+        inf, ref = cfg.get("infer_main_contract_daily"), cfg.get("daily_futures_refresh")
+        if not inf or not ref:
+            bad.append("ops.scheduled_task 缺 infer/daily_futures_refresh 字典行")
+        else:
+            if inf[0] is not True or ref[0] is not True:
+                bad.append("推断或上游刷新作业未 enabled")
+            mi, mr = _hhmm(inf[1]), _hhmm(ref[1])
+            obs.append(f"cron infer={inf[1]} refresh={ref[1]}")
+            if mi is None or mr is None:
+                bad.append("两作业 schedule 不是 5 段 cron，无法判时序")
+            elif mi <= mr:
+                bad.append(f"推断 cron 时刻不晚于上游刷新"
+                           f"（infer={mi}min / refresh={mr}min）")
+            else:
+                obs.append(f"字典时序 OK（+{mi - mr}min）")
+
+        # 2) 实际运行时刻（宿主 crontab 才是真执行者）
+        last = c.scalar(
+            "SELECT (max(started_at) AT TIME ZONE 'Asia/Shanghai') "
+            "FROM ops.scheduled_task_run "
+            "WHERE task_id='infer_main_contract_daily' AND status='success'")
+        if last is None:
+            bad.append("流水无 infer_main_contract_daily 成功记录")
+        else:
+            obs.append(f"最近实跑 {last:%m-%d %H:%M} CST")
+            if mr is not None and (last.hour * 60 + last.minute) <= mr:
+                bad.append(f"最近一次推断实跑 {last:%H:%M} 仍早于上游刷新 "
+                           "→ 宿主 crontab 漏改（只改字典不生效）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询失败 {type(exc).__name__}: {str(exc)[:160]}")
+
+    # 3) 写入方仍在
+    root = Path(__file__).resolve().parents[2]
+    if not (root / "scripts" / "ops" / "infer_main_contract.py").exists():
+        bad.append("scripts/ops/infer_main_contract.py 消失（写入方再次被清理）")
+    else:
+        obs.append("写入脚本在库")
+
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 def _c_l0_cross_src_quiet(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261112-09：改造后不得再新增跨源冲突留痕。
 
@@ -7445,6 +7522,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_main_contract_infer_fresh),
     ("DATA-MAIN-CONTRACT-FOLLOW", "888 主连实际跟随合约与反推字典一致",
      "block", _c_main_contract_follow),
+    # CL-20261113-03：上面两条在 11-13 回归。根因不是写入方坏了，是推断作业
+    # (17:25) 排在上游 main_contract_map 刷新 (18:10) 之前 45 分钟，每天只能
+    # 推断到 T-1。这条锁死「下游必须晚于上游」的依赖，防再次被挪回去。
+    ("OPS-INFER-AFTER-MAP-REFRESH", "主连反推推断排在上游 map 刷新之后",
+     "block", _c_infer_after_map_refresh),
     # CL-20261108-23：2026-11-06 单日 206 条运维告警击穿 pushplus 额度，
     # 把共用 token 的交易信号一起打成 60 小时静默。防「恢复逐条发送」与「休市误报」复发。
     ("OPS-PUSH-QUOTA", "告警日配额与单轮 digest（不挤爆信号通道）",

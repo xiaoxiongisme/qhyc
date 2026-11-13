@@ -98,7 +98,9 @@ INSERT INTO public.layer_migration_map (tab, target, layer, renamed_from) VALUES
   ('data_layer_catalog','l3_ref','L3',NULL),
   -- 运行时状态 (app_state)
   ('fusion_position','app_state','APP',NULL),
-  ('fusion_push_log','app_state','APP',NULL),
+  -- CL-20261113-04：fusion_push_log 已随 migrations/069 于 11-09 DROP 退役。
+  -- 目录里留着它会让重跑本脚本的人误以为该表仍应存在（11-13 实测库里被
+  -- 重建出一张 0 行空壳表，守卫 PUSH-RETIRED 转 FAIL）。故不再登记。
   ('fusion_signal_log','app_state','APP',NULL),
   ('pipeline_push_log','app_state','APP',NULL),
   ('pipeline_run','app_state','APP',NULL),
