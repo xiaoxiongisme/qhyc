@@ -5421,6 +5421,75 @@ def _c_push_log_retired(c: Ctx) -> tuple[bool, str, str, str]:
     return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
 
 
+def _c_push_log_revival_guard(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261113-05：退役表不得被「旧版 ensure_fusion_table」复活。
+
+    ``PUSH-LOG-RETIRED`` 只查「现在库里有没有对象 / 代码有没有 SQL 引用」，
+    它抓不到**复活机制**：11-13 15:10 研究影子引擎
+    （/tmp/shadow_engine，由 /home/ubuntu/wb_run/_shadow_run.sh 从分支
+    cb/entry-gate-candidate 组装）里那份 11-01 旧版 fusion_signal.py 仍把
+    ``FusionPushLog.__table__`` 列进 ``ensure_fusion_table`` 的 tables 元组；
+    影子脚本 sys.path.insert(0, _ENGINE) 命中它 → 069 DROP 掉的
+    public.fusion_push_log 被 create_all 重建为 0 行空壳表。
+
+    两段衡量的都是**现在的行为/状态**，不是历史流水：
+      A DB 门禁：migration 080 的 event trigger 存在且启用，函数体仍拒绝重建；
+      B 代码防线：所有可达的 fusion_signal.py 副本（生产 app / 容器影子镜像 /
+        宿主研究 worktree）里都不许再出现 FusionPushLog.__table__。
+
+    A 是兜底：/tmp 下还有多份退役前旧副本，任何一份被 sys.path 命中都能复活，
+    只有 DB 层能让「无论谁、用哪份旧代码都建不出来」。
+    """
+    label = "退役表无复活路径（DB 门禁启用 + 可达引擎副本无旧 ORM）"
+    bad: list[str] = []
+    observed: list[str] = []
+
+    # A. DB 门禁（migration 080）
+    n_trg = c.scalar(
+        "SELECT count(*) FROM pg_event_trigger "
+        " WHERE evtname = 'trg_forbid_fusion_push_log_revival' "
+        "   AND evtenabled <> 'D'") or 0
+    observed.append(f"ddl_gate={'on' if n_trg else 'off'}")
+    if not n_trg:
+        bad.append("080 的 event trigger 缺失或被禁用 → 任何旧版 create_all 都能重建退役表")
+    n_fn = c.scalar(
+        "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+        " WHERE n.nspname = 'ops' AND p.proname = 'forbid_fusion_push_log_revival' "
+        "   AND p.prosrc LIKE '%RAISE EXCEPTION%'") or 0
+    observed.append(f"gate_fn={'ok' if n_fn else 'missing'}")
+    if not n_fn:
+        bad.append("门禁函数缺失或不再抛异常（被改成空壳）")
+
+    # B. 代码防线：可达的引擎副本不许再带旧 ORM 建表项
+    root = Path(__file__).resolve().parents[2]      # 容器 /app；宿主 /Docker/qhyc
+    candidates = [
+        root / "app" / "strategies" / "fusion_signal.py",
+        Path("/tmp/shadow_engine/app/strategies/fusion_signal.py"),
+        Path("/Docker/qhyc-wt/eg/app/strategies/fusion_signal.py"),
+    ]
+    dirty: list[str] = []
+    checked = 0
+    for p in candidates:
+        if not p.exists():
+            continue
+        checked += 1
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError as exc:                                   # noqa: BLE001
+            bad.append(f"读不到 {p}：{type(exc).__name__}")
+            continue
+        if "FusionPushLog.__table__" in txt:
+            dirty.append(str(p))
+    observed.append(f"engine_copies_checked={checked}")
+    observed.append(f"engine_copies_stale={len(dirty)}")
+    if dirty:
+        bad.append(f"{len(dirty)} 份可达 fusion_signal.py 仍把退役的 "
+                   f"FusionPushLog.__table__ 列入 ensure_fusion_table 的 tables："
+                   f"{dirty[:3]} → 影子扫描会 create_all 复活空壳表")
+
+    return (not bad), label, " ".join(observed), ("" if not bad else "；".join(bad))
+
+
 def _c_mpr_exchange_coverage(c: Ctx) -> tuple[bool, str, str, str]:
     """会员持仓排名：每所品种覆盖不得相对**自身**近期中位数腰斩（CL-20261110-05）。
 
@@ -7536,6 +7605,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 「不许顺手把推送活性判据一起删掉」——两条后果都是沉默。
     ("PUSH-LOG-RETIRED", "已退役的 fusion_push_log 无残留（库/代码/监控判据）",
      "block", _c_push_log_retired),
+    # CL-20261113-05：只查「有没有对象」抓不到复活机制。研究影子引擎复用退役前
+    # 旧 ORM，ensure_fusion_table 会把 069 DROP 的表 create_all 回来（11-13 15:10 实证）。
+    ("PUSH-LOG-REVIVAL-GUARD", "退役表无复活路径（DB 门禁 + 引擎副本无旧 ORM）",
+     "block", _c_push_log_revival_guard),
     # CL-20261109-01：11-09 00:00 那条「日线滞后 3 天」是自然日差在周末被顶到阈值，
     # 数据实际零滞后。防「判据回退成自然日差」与「真源退回已死的 l3_ref.trade_calendar」。
     ("OPS-DATA-LAG-TRADE-DAY", "日线滞后按交易日计且真源为 futures_rule",
