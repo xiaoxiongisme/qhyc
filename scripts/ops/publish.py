@@ -347,9 +347,16 @@ def main() -> int:
                   f"python scripts/db_apply_migrations.py --only {Path(f).name} --apply")
 
     # 部署标记：C5 用它判断「这次发布是否走完整个通道」。untracked，不影响 C3。
-    _ssh(f"cd {PROD_REPO} && printf '%s %s\\n' {head} \"$(date -u +%FT%TZ)\" "
-         f"> {DEPLOY_MARK}")
-    print(f"部署标记 {DEPLOY_MARK} = {head}")
+    # ★ CL-20261113-02 修订（多行历史）：旧版用 `> ` 覆盖单值，导致后续部署会把
+    #   先前部署的时间戳抹掉——而部署窗口降级逻辑需要**历史**部署时间戳（例如
+    #   00:30 那次双重启误杀的在途 fetch，若被新部署覆盖就重新被判严重）。
+    #   现改为：当前部署写**首行**（C5 守卫读 `read_text().split()[0]` 取首 token
+    #   = 首行 sha = 当前 HEAD，兼容不变），旧内容（含更早历史）整体下沉为历史行。
+    #   `tail -n 40` 兜底长度，避免长年累积无限增长。
+    _ssh(f"cd {PROD_REPO} && {{ printf '%s %s\\n' {head} \"$(date -u +%FT%TZ)\"; "
+         f"cat {DEPLOY_MARK} 2>/dev/null; }} | tail -n 40 > {DEPLOY_MARK}.tmp "
+         f"&& mv {DEPLOY_MARK}.tmp {DEPLOY_MARK}")
+    print(f"部署标记 {DEPLOY_MARK} = {head}（首行；历史部署已下沉）")
     print(f"\n✓ 发布完成：本地 = 生产 = GitHub = {head}")
     return 0
 

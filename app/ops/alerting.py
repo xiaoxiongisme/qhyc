@@ -169,9 +169,9 @@ class AlertConfig:
     backup_max_total_gb: float = 25.0
     backup_min_free_gb: float = 20.0
     # ★ CL-20261113-02：部署窗口降级。publish.py 双重启会短暂杀掉在途 fetch，
-    #   若把这类失败当严重误报，每次发布都刷严重。读 .deployed_sha 部署时间戳，
-    #   落在 [deploy_ts - before, deploy_ts + after] 内的 cron 失败视为部署预期，
-    #   从严重计数剔除并降级为 INFO（不推送）。
+    #   若把这类失败当严重误报，每次发布都刷严重。读 .deployed_sha（多行历史）
+    #   全部部署时间戳，落在任一 [ts - before, ts + after] 宽窗内的 cron 失败
+    #   视为部署预期，从严重计数剔除并降级为 INFO（不推送）。
     deploy_mark_path: str = "/Docker/qhyc/.deployed_sha"   # 宿主路径；容器内回退 /app/.deployed_sha
     deploy_grace_before_min: int = 10
     deploy_grace_after_min: int = 45
@@ -755,26 +755,33 @@ def _check_job_heartbeat(session, cfg: AlertConfig) -> list[dict]:
 
 
 # ---------------------------------------------------------------- 作业失败 / 守卫自存活
-def _recent_deploy_ts(cfg: AlertConfig) -> "datetime | None":
-    """读部署标记 ``.deployed_sha``（publish.py 在 docker restart 前写入），返回部署 UTC 时刻。
+def _deploy_ts_list(cfg: AlertConfig) -> "list[datetime]":
+    """读部署标记 ``.deployed_sha`` 全部**历史**部署时刻（CL-20261113-02 修订）。
 
-    CL-20261113-02：用于把部署窗口内的 cron 失败降级为预期。标记形如
-    ``ac159ac 2026-11-12T16:30:20Z``，第二字段为部署时刻（UTC）。
-    宿主 ``qhyc-scheduler`` 直接读 ``/Docker/qhyc/.deployed_sha``；若运行在容器内则
-    回退 ``/app/.deployed_sha``。读不到 / 解析失败返回 ``None``（不降级）。
+    标记允许多行：首行=当前部署（供 C5 守卫 ``read_text().split()[0]`` 取 HEAD），
+    其后每行为更早的部署。每行形如 ``ac159ac 2026-11-12T16:30:20Z``，第二字段为
+    部署 UTC 时刻。返回所有可解析的部署时刻（升序）。读不到 / 无有效行返回空列表
+    （不降级）。多行历史让「被后续部署覆盖掉的早期部署窗口」仍能被降级逻辑匹配，
+    避免 00:30 那类由旧部署引发的预期失败被重新算成严重。
     """
+    out: list[datetime] = []
     for cand in (cfg.deploy_mark_path, "/app/.deployed_sha"):
+        p = Path(cand)
+        if not p.exists():
+            continue
         try:
-            p = Path(cand)
-            if not p.exists():
-                continue
-            txt = p.read_text(encoding="utf-8").strip()
-            parts = txt.split()
-            if len(parts) >= 2:
-                return datetime.fromisoformat(parts[1].replace("Z", "+00:00"))
+            txt = p.read_text(encoding="utf-8")
         except Exception:
             continue
-    return None
+        for ln in txt.splitlines():
+            parts = ln.split()
+            if len(parts) >= 2:
+                try:
+                    out.append(datetime.fromisoformat(parts[1].replace("Z", "+00:00")))
+                except Exception:
+                    continue
+        break  # 首个存在的候选即可，不再回退容器内
+    return sorted(out)
 
 
 def _check_job_failures(session, cfg: AlertConfig) -> list[dict]:
@@ -801,15 +808,21 @@ def _check_job_failures(session, cfg: AlertConfig) -> list[dict]:
     失败次数每轮变化不会触发重推，避免重蹈 11-10 刷爆 pushplus 额度的覆辙。
     """
     win = max(1, int(cfg.job_failure_window_hours))
-    # ★ CL-20261113-02：部署窗口降级。读最近部署时刻，把宽窗内的 cron 失败
-    #   视为发布双重启的预期副作用，从严重计数剔除。
-    deploy_ts = _recent_deploy_ts(cfg)
+    # ★ CL-20261113-02（修订）：部署窗口降级。读**全部历史**部署时刻，把落在
+    #   任一部署宽窗内的 cron 失败视为发布双重启的预期副作用，从严重计数剔除。
+    #   多行历史让被后续部署覆盖的早期部署窗口也能被匹配（如 00:30 那次误杀）。
+    deploy_ts_list = _deploy_ts_list(cfg)
     params: dict = {"win": win}
     deploy_filter = ""
-    if deploy_ts is not None:
-        params["dlo"] = deploy_ts - timedelta(minutes=cfg.deploy_grace_before_min)
-        params["dhi"] = deploy_ts + timedelta(minutes=cfg.deploy_grace_after_min)
-        deploy_filter = "AND NOT (started_at BETWEEN :dlo AND :dhi)"
+    if deploy_ts_list:
+        conds = []
+        for i, dt in enumerate(deploy_ts_list):
+            lo = dt - timedelta(minutes=cfg.deploy_grace_before_min)
+            hi = dt + timedelta(minutes=cfg.deploy_grace_after_min)
+            params[f"dlo{i}"] = lo
+            params[f"dhi{i}"] = hi
+            conds.append(f"(started_at BETWEEN :dlo{i} AND :dhi{i})")
+        deploy_filter = "AND NOT (" + " OR ".join(conds) + ")"
     try:
         rows = session.execute(text(f"""
             SELECT task_id, status, count(*) AS n
@@ -835,12 +848,12 @@ def _check_job_failures(session, cfg: AlertConfig) -> list[dict]:
                     AND g.finished_at <= r.started_at + interval '30 minutes'
               )
         """), params).scalar()
-        # 部署宽窗内的失败（预期）：单独计数，供降级 INFO 使用。
+        # 部署宽窗内的失败（预期）：跨所有历史部署窗口单独计数，供降级 INFO 使用。
         deploy_caused = 0
-        if deploy_ts is not None:
-            deploy_caused = int(session.execute(text("""
+        for i in range(len(deploy_ts_list)):
+            deploy_caused += int(session.execute(text(f"""
                 SELECT count(*) FROM ops.scheduled_task_run
-                WHERE started_at BETWEEN :dlo AND :dhi
+                WHERE started_at BETWEEN :dlo{i} AND :dhi{i}
                   AND status IN ('failed', 'aborted')
                   AND coalesce(message, '') NOT LIKE '%[reaped:%'
                   AND task_id <> 'cron_invariant_guard'
@@ -862,14 +875,17 @@ def _check_job_failures(session, cfg: AlertConfig) -> list[dict]:
                         win, total, top),
         })
     if deploy_caused > 0:
+        latest = deploy_ts_list[-1]
         out.append({
             "key": "jobfail_deploy",
             "level": "INFO",
-            "msg": ("近 {0}h 有 {1} 条 cron 失败落在部署窗口（部署于 {2}）内，"
-                    "为发布双重启的预期副作用，已降级不报严重").format(
+            "msg": ("近 {0}h 有 {1} 条 cron 失败落在部署窗口（最近部署于 {2}，"
+                    "已纳入 {3} 次历史部署宽窗）内，为发布双重启的预期副作用，"
+                    "已降级不报严重").format(
                         win, deploy_caused,
-                        ((deploy_ts + timedelta(hours=8)).strftime("%m-%d %H:%M")
-                         if deploy_ts else "?")),
+                        ((latest + timedelta(hours=8)).strftime("%m-%d %H:%M")
+                         if latest else "?"),
+                        len(deploy_ts_list)),
         })
     if int(guard_crash or 0) > 0:
         out.append({
