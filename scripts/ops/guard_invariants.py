@@ -585,6 +585,42 @@ def _c_bar_grid_valid(c: Ctx) -> tuple[bool, str, str, str]:
         "" if ok else f"网格污染：{obs}；V5X 直接读 BA，幽灵桶会占状态机的桶位")
 
 
+def _c_ba_orphan_guard_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261115-04：BA 孤儿清理必须真接在唯一的 BA 写入过程里。
+
+    为什么查 DB 而不是查源码文件：``migrations/081`` 写了 ≠ 现网过程体已经
+    换掉；065/066/063 三次「拿旧迁移当基线」事故都是**过程体被悄悄回退**，
+    而仓库里的文件依然正确。``pg_get_functiondef`` 读的是此刻现网定义，
+    是这类改动唯一可信的真源（skill 坑 #7「表建了没人读」的同型防护）。
+
+    BAR-GRID-VALID 只在污染**已经发生之后**报警；本断言锁的是防复发能力
+    是否真的在线，两者缺一不可。
+    """
+    label = "BA 孤儿清理真接在 sp_build_l2_back_adjusted（现网过程体）"
+    try:
+        ddl = c.scalar(
+            "SELECT pg_get_functiondef("
+            "'l2_adj.sp_build_l2_back_adjusted(text,text,boolean)'::regprocedure)"
+        ) or ""
+    except Exception as e:  # noqa: BLE001
+        return False, label, f"过程定义读取失败 {type(e).__name__}", str(e)[:200]
+    tokens = {
+        "CL-20261115-04": "081 清理段标记",
+        "NOT EXISTS (SELECT 1 FROM %s l": "精确匹配 L1 的 DELETE",
+        "interval ''14 days''": "与 BAR-GRID-VALID 对齐的 14 天窗口",
+        "v_purged": "清理计数（仅删到孤儿时才回落 meta）",
+        "back_adjusted_meta m": "meta.max_bucket 自愈修正",
+    }
+    miss = [desc for tok, desc in tokens.items() if tok not in ddl]
+    obs = (f"现网过程体 {len(ddl)} 字符，"
+           f"{len(tokens) - len(miss)}/{len(tokens)} 接线标记命中")
+    return (not miss), label, obs, (
+        "" if not miss else
+        "缺少：" + "、".join(miss)
+        + " → migrations/081 未应用或过程体被旧基线覆盖（同 065/066/063 事故）；"
+          "BA 孤儿会随每次 L1 purge 重新出现，BAR-GRID-VALID 只能事后报警")
+
+
 def _c_ba_nonpositive_guarded(c: Ctx) -> tuple[bool, str, str, str]:
     """非正价只能是加法后复权的产物，且必须可被 V5X 反解回真实价。
 
@@ -7739,6 +7775,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-02：跨周期对拍只查 L1，而 V5X 读 BA；非网格在途桶与
     # BA 孤儿桶两层都没人看。必须同时断言标签合法性与 BA ⊆ L1。
     ("BAR-GRID-VALID", "L1/L2 桶标签合法且 BA ⊆ L1", "block", _c_bar_grid_valid),
+    # CL-20261115-04：上一条只能事后报警；防复发能力必须锁在现网过程体上，
+    # 防「081 迁移写了没应用」或「过程体被旧基线覆盖」这两类静默失效。
+    ("DATA-BA-ORPHAN-GUARD-WIRED",
+     "BA 孤儿清理真接在唯一写入过程（现网过程体）", "block",
+     _c_ba_orphan_guard_wired),
     # CL-20261110-04：负价是加法后复权的数学必然，不该「修数据」；
     # 要锁的是 V5X 真实价反解别被改回去，以及负价不渗进主连原始层。
     ("BA-NONPOSITIVE-GUARDED", "非正价仅在复权层且 V5X 已反解", "block",
