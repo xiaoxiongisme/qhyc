@@ -2082,8 +2082,10 @@ def _build_scheduler() -> BlockingScheduler:
         coalesce=True,
         misfire_grace_time=120,
     )
+    # 2026-11-15（CL-20261115-03）：原文案写死 "prior-process zombies only"，
+    # 与新增的「超 2h 超时兜底」不符 —— 硬编码日志会骗人，同步更新。
     logger.info("[scheduler] registered reap_stale_running_periodic every 30min "
-                "(boot-time-keyed, prior-process zombies only)")
+                "(boot-time prior-process zombies + >2h timeout orphan runs)")
 
     # V5X 理论持仓快照（CL-20261109-08）：日盘收盘后推一份「按规则现在
     # 应该持有什么」。V5X 是无状态回放，只推事件不推持仓 —— V3.4 停用后
