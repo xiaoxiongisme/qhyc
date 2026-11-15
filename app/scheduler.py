@@ -3657,14 +3657,22 @@ _SCHEDULER_BOOT_AT = datetime.now(timezone.utc)
 
 
 def _reap_stale_running_periodic() -> None:
-    """周期自愈（CL-20261111-02）：补充仅启动跑一次的 ``_reap_stale_running``。
+    """周期自愈（CL-20261111-02 / CL-20261115-03）：收尾两类和尚 running 流水。
 
-    ``_reap_stale_running`` 只在启动时执行一次，依赖「启动瞬间本进程尚无活作业 ⇒ 库里
-    running 全是上一进程遗物」的不变式。若上一进程崩溃残留的 running 记录因极端竞态/异常
-    写回而逃过启动自愈，只能等下次重启才被收尾。周期 reaper 每 30 分钟再扫一遍：只动
-    ``started_at`` 早于本进程启动时刻的 running——这些必然是已被 kill 的上一进程的遗物，
-    绝不会是本进程的活作业，故零误伤。本进程内卡死的作业（finish 永不被调用）由
-    OPS-REAPED-ABORT-ONLY（running>2h 告警）发现，需重启清理；自动重跑需心跳，本期不做。
+    ① 启动前遗留：``_reap_stale_running`` 只在启动时跑一次，依赖「启动瞬间本进程
+    尚无活作业 ⇒ 库里 running 全是上一进程遗物」的不变式。周期 reaper 每 30 分钟
+    再扫一遍 ``started_at`` 早于本进程启动时刻的记录，零误伤活作业。
+
+    ② **超时兜底（2026-11-15 新增，CL-20261115-03）**：11-15 实测 20 条僵尸
+    running 全部始于本进程启动之后（scheduler 启于 11-13 19:58，僵尸始于
+    11-13 20:00），① 完全够不着。根因是 ``install_run_recorder`` 的进程内配对
+    字典偶发丢失，record_finish(None) 静默 return。故补一层**不依赖 EVENT 事件**
+    的收尾：running 超 2 小时即按 reaped 语义置 aborted（与
+    OPS-REAPED-ABORT-ONLY 的僵尸判据同阈值），message 明标疑似原因。
+
+    ★ 这只是**记账收尾**，不会杀作业：真卡死的作业仍由既有心跳断言
+    OPS-JOBHB-CRON-AWARE / OPS-REAPED-ABORT-ONLY 的「aborted 必须带 reaped」
+    判据发现，日志同时列出 task_id 供运维追溯，绝不静默掩盖。
     """
     from sqlalchemy import text as _text
 
@@ -3679,11 +3687,31 @@ def _reap_stale_running_periodic() -> None:
                 "WHERE status = 'running'"
                 "  AND started_at < :boot"
             ), {"boot": _SCHEDULER_BOOT_AT}).rowcount
+            stale_tasks = [str(r[0]) for r in s.execute(_text(
+                "SELECT DISTINCT task_id FROM ops.scheduled_task_run "
+                "WHERE status = 'running'"
+                "  AND started_at < now() - interval '2 hours' "
+                "ORDER BY task_id"
+            )).fetchall()]
+            m = s.execute(_text(
+                "UPDATE ops.scheduled_task_run SET "
+                "  status = 'aborted', "
+                "  finished_at = COALESCE(finished_at, now()), "
+                "  message = COALESCE(message, '') || "
+                "    ' [reaped: 周期自愈-超时未收尾，疑似 EVENT 配对丢失或作业卡死]' "
+                "WHERE status = 'running'"
+                "  AND started_at < now() - interval '2 hours'"
+            )).rowcount
             s.commit()
         if n:
             logger.warning(
                 f"[scheduler] 周期自愈：{n} 条启动前遗留 running 记录已置 aborted"
                 f"（上一进程崩溃残留，非任务故障）")
+        if m:
+            logger.warning(
+                f"[scheduler] 周期自愈：{m} 条超时 running 已按 reaped 收尾 "
+                f"task_id={stale_tasks}（仅记账收尾，不杀作业；"
+                f"真卡死由作业心跳与 aborted 归因断言发现）")
     except Exception as e:  # noqa: BLE001 —— 记账清理失败绝不阻断调度
         logger.warning(f"[scheduler] 周期自愈清理 running 记录失败（忽略）: {e}")
 

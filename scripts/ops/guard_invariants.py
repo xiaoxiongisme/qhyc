@@ -1622,13 +1622,20 @@ def _c_bt_run_complete(c: Ctx) -> tuple[bool, str, str, str]:
     16 个品种的半成品足以冒充整批，直接污染模型权重月更。
 
     判据只衡量此刻，不看历史流水：
-      · 参考规模 = 近 90 天所有 run 的最大 symbol 数（自适应，不硬编码 50）；
+      · 参考规模 = **当前有效白名单品种数**（口径真源，ctx.whitelist）；
       · 最新 run 的 n_sym >= 0.8 × 参考规模 → 完整，PASS；
       · 否则若最后一笔写入距今 < 2 小时 → 仍在跑，PASS（不打扰进行中的回测）；
       · 否则 → 停滞的半成品，FAIL。
     代价：手工单品种验证 run 若成为最新 run 且超过 2 小时，会报 warn。
     这是刻意保留的——它同样会让权重月更取错 run，属于真实风险。
     只查 backtest_result（小表），不触碰 l0_raw 全表。
+
+    ★ 2026-11-15（CL-20261115-01）：原参考规模取「近 90 天所有 run 的最大
+    n_sym」，该窗口跨了 11-07 的品种口径收窄（53 → 38）。于是口径收窄后
+    **唯一正确**的 38 品种整批被判成 71.7% 半成品，告警还建议「清理半成品
+    批次」—— 照做会删掉唯一正确的回测结果。改以 ctx.whitelist（带
+    effective_from/to 过滤）为真源；白名单不可用时退回旧判据，且由
+    VAR-WHITELIST-NONEMPTY 单独报红，绝不静默放行。
     """
     rows = c.rows("""
         WITH runs AS (
@@ -1649,15 +1656,21 @@ def _c_bt_run_complete(c: Ctx) -> tuple[bool, str, str, str]:
             "周度回测链路从未产出结果，检查 _backtest_weekly_job")
     run_id, n_sym, last_at, n_max, idle_h = rows[0]
     n_sym = int(n_sym or 0)
-    threshold = int((n_max or 0) * 0.8)
+    n_ref = len(c.whitelist)
+    if n_ref > 0:
+        threshold = int(n_ref * 0.8)
+        ref_desc = f"当前白名单 {n_ref}"
+    else:
+        threshold = int((n_max or 0) * 0.8)
+        ref_desc = f"历史最大 {n_max}（白名单不可用，退回旧判据）"
     idle_h = float(idle_h or 0)
     complete = threshold > 0 and n_sym >= threshold
     active = idle_h < 2.0
     ok = complete or active
     state = "完整整批" if complete else ("写入中" if active else "停滞半成品")
     return ok, expected, (
-        f"run={run_id} n_sym={n_sym}/{n_max} (门槛{threshold}) "
-        f"last={last_at} idle={idle_h:.2f}h state={state}"), (
+        f"run={run_id} n_sym={n_sym} 参考={ref_desc} 历史最大={n_max} "
+        f"(门槛{threshold}) last={last_at} idle={idle_h:.2f}h state={state}"), (
         "" if ok else
         "最新 run 是停滞的半成品 → update_model_weights 会把它当整批用于权重月更；"
         "确认回测进程是否被中断，必要时整批重跑并清理半成品批次")
@@ -6070,37 +6083,48 @@ def _c_reaped_abort_only(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_reaper_periodic_wired(c: Ctx) -> tuple[bool, str, str, str]:
-    """CL-20261111-02：周期 reaper 必须真接线（函数定义 + scheduler 注册齐全）。
+    """CL-20261111-02 / CL-20261115-03：周期 reaper 真接线且双层兜底齐全。
 
-    防「_reap_stale_running 仅启动跑一次的设计缺陷」复发：周期 reaper 每 30 分钟收尾
-    启动前遗留的 running 僵尸。若函数写了却没注册作业，僵尸只能等重启才清，缺陷重现。
-    同时要求函数体含 ``started_at <`` 判定——确保它只清「启动前遗留」（零误伤活作业），
-    而非无差别把全部 running 置 aborted（那会污染监控，正是 OPS-REAPED-ABORT-ONLY 防的）。
+    防「_reap_stale_running 仅启动跑一次」复发：必须同时具备
+    ① 函数定义 + sched.add_job 注册；② 启动前遗留判定；③ 超时兜底判定。
+
+    ★ 2026-11-15 修正：原断言在**全文** src 里搜 ``"started_at <"``，
+    既会被别处同名字符串命中（假绿），其 docstring 又声称「不许无差别收尾」
+    与新增的超时兜底自相矛盾。改为在**函数体切片**内锁三个具体标记。
     """
-    label = "周期 reaper 真接线（函数 + scheduler 注册 + 启动前判定）"
+    label = "周期 reaper 真接线（函数 + 注册 + 启动前判定 + 超时兜底）"
     root = Path(__file__).resolve().parents[2]
     bad, obs = [], []
     try:
         src = (root / "app" / "scheduler.py").read_text(
             encoding="utf-8", errors="ignore")
-        if "_reap_stale_running_periodic" not in src:
+        start = src.find("def _reap_stale_running_periodic")
+        if start < 0:
             bad.append("scheduler.py 未定义 _reap_stale_running_periodic")
+            body = ""
         else:
             obs.append("函数已定义")
+            nxt = src.find("\ndef ", start + 10)
+            body = src[start:(nxt if nxt > 0 else len(src))]
         if 'id="reap_stale_running_periodic"' not in src \
                 and "id='reap_stale_running_periodic'" not in src:
             bad.append("sched.add_job 未注册 id=reap_stale_running_periodic")
         else:
             obs.append("作业已注册")
-        if "started_at <" not in src:
-            bad.append("_reap_stale_running_periodic 未含 started_at 启动前判定"
-                       "（会误伤活作业）")
-        else:
-            obs.append("含 started_at 启动前判定")
-    except Exception as e:  # noqa: BLE001
+        markers = {
+            "启动前遗留判定": "started_at < :boot",
+            "超 2h 兜底阈值": "interval '2 hours'",
+            "兜底 reaped 标记": "reaped: 周期自愈-超时未收尾",
+        }
+        for desc, token in markers.items():
+            if token not in body:
+                bad.append(f"周期 reaper 函数体缺{desc}（{token}）")
+            else:
+                obs.append(desc)
+    except Exception as e:  # noqa: BLE001 —— 读源码失败必须显式报红
         return False, label, f"源码读取失败 {type(e).__name__}", str(e)[:200]
     return (not bad), label, "；".join(obs) or "—", (
-        "" if not bad else "；".join(bad) + " → 见 CL-20261111-02")
+        "" if not bad else "；".join(bad) + " → 见 CL-20261111-02 / CL-20261115-03")
 
 
 def _c_alert_digest_dedup(c: Ctx) -> tuple[bool, str, str, str]:
@@ -7406,6 +7430,43 @@ def _c_infer_after_map_refresh(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+_L0_SESSION_DAY_SQL = (
+    "CASE WHEN extract(hour FROM (run_at AT TIME ZONE 'Asia/Shanghai')) < 3 "
+    "THEN ((run_at AT TIME ZONE 'Asia/Shanghai') - interval '1 day')::date "
+    "ELSE (run_at AT TIME ZONE 'Asia/Shanghai')::date END"
+)
+
+
+def _l0_session_day(c: Ctx) -> tuple[date | None, str]:
+    """返回「最近一个应有 continuous 采集的交易日」及日历诊断。
+
+    CL-20261115-01：两条 L0 断言原用 ``run_at > now() - interval '24 hours'``
+    的硬窗 —— 周末/长假必然零轮次，把「今天休市」误判成「采集停摆」。
+    本函数改以 ``futures_rule`` 交易日历（含节假日排除）定目标交易日；
+    夜盘跨零点由调用方用 :data:`_L0_SESSION_DAY_SQL` 归属到前一交易日。
+
+    ★ 防「守卫骗人」：日历若长期未播种，d 会永远停在旧日期，窗口里的历史
+    审计仍存在 → 断言永远 PASS、检测能力归零。故 lag > 10 天返回诊断串，
+    由调用方计入 bad（催办补播种），绝不静默退化成永远绿。
+    """
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    rows = c.rows(
+        "SELECT max(trade_date) FROM futures_rule "
+        "WHERE trade_date <= (now() AT TIME ZONE 'Asia/Shanghai')::date"
+    )
+    d = rows[0][0] if rows else None
+    if d is None:
+        return None, "futures_rule 交易日历为空：无法判定应有采集的交易日"
+    lag = (today - d).days
+    if lag > 10:
+        return d, (
+            f"交易日历最后播种 {d}，距今 {lag} 天，需补播种"
+            f"（否则断言窗口永远停在旧日期，检测能力归零）")
+    return d, ""
+
+
 def _c_l0_cross_src_quiet(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261112-09：改造后不得再新增跨源冲突留痕。
 
@@ -7413,8 +7474,11 @@ def _c_l0_cross_src_quiet(c: Ctx) -> tuple[bool, str, str, str]:
     ``max(last_seen)`` / ``sum(n_attempts)`` 钉成基线。本断言衡量「此刻」：
     只要冲突表比基线更新/累加，就说明实时链路又去重写了已被其它 src 占据的键。
 
-    同时要求近 24h 有 continuous 采集审计且 guard_failed=false —— 否则
-    「采集停了」也会让冲突表安静，那是最典型的假绿。
+    同时要求**目标交易日内**有 continuous 采集审计且 guard_failed=false ——
+    否则「采集停了」也会让冲突表安静，那是最典型的假绿。
+
+    ★ 2026-11-15（CL-20261115-01）：原用「近 24h」硬窗，周末/长假必然零轮次
+    而误报。改按 futures_rule 交易日归属，并保留日历新鲜度硬判据。
     """
     label = "实时采集不再反复重写跨源占位键（CL-20261112-09）"
     bad: list[str] = []
@@ -7442,20 +7506,27 @@ def _c_l0_cross_src_quiet(c: Ctx) -> tuple[bool, str, str, str]:
                 )
             if base_num is not None and int(cur_num or 0) > int(base_num) + 2:
                 bad.append(f"n_attempts 仍在累加：{cur_num} > 基线 {base_num}")
-        n_audit = c.scalar(
-            "SELECT count(*) FROM ops.l0_ingest_audit "
-            "WHERE chain='continuous' AND run_at > now() - interval '24 hours'"
-        )
-        n_failed = c.scalar(
-            "SELECT count(*) FROM ops.l0_ingest_audit "
-            "WHERE chain='continuous' AND run_at > now() - interval '24 hours' "
-            "  AND extra->>'guard_failed' = 'true'"
-        )
-        obs.append(f"近24h continuous 审计={n_audit} guard_failed={n_failed}")
-        if int(n_audit or 0) == 0:
-            bad.append("近 24h 无 continuous 采集审计：无法排除「采集停了所以没冲突」")
-        if int(n_failed or 0) > 0:
-            bad.append(f"{n_failed} 轮跨源占位查询降级（guard_failed=true）")
+        d, cal_note = _l0_session_day(c)
+        if cal_note:
+            bad.append(cal_note)
+        if d is None:
+            obs.append("交易日窗口=不可用")
+        else:
+            win = f"({_L0_SESSION_DAY_SQL}) = :d"
+            n_audit = c.scalar(
+                "SELECT count(*) FROM ops.l0_ingest_audit "
+                f"WHERE chain='continuous' AND {win}", d=d)
+            n_failed = c.scalar(
+                "SELECT count(*) FROM ops.l0_ingest_audit "
+                f"WHERE chain='continuous' AND {win} "
+                "  AND extra->>'guard_failed' = 'true'", d=d)
+            obs.append(
+                f"目标交易日={d} continuous 审计={n_audit} guard_failed={n_failed}")
+            if int(n_audit or 0) == 0:
+                bad.append(
+                    f"交易日 {d} 无 continuous 采集审计：无法排除「采集停了所以没冲突」")
+            if int(n_failed or 0) > 0:
+                bad.append(f"交易日 {d} 有 {n_failed} 轮跨源占位查询降级（guard_failed=true）")
     except Exception as exc:  # noqa: BLE001
         bad.append(f"查询失败 {type(exc).__name__}: {str(exc)[:160]}")
     return not bad, label, " / ".join(obs), "；".join(bad)
@@ -7478,19 +7549,30 @@ def _c_l0_replay_bounded(c: Ctx) -> tuple[bool, str, str, str]:
             limit = int(os.getenv("QHYC_L0_REALTIME_BARS", "120") or 120)
         except ValueError:
             limit = 120
-        r = c.rows(
-            "SELECT coalesce(max(max_lookback_bars), 0), "
-            "       coalesce(sum(n_candidates), 0), count(*) "
-            "FROM ops.l0_ingest_audit "
-            "WHERE chain='continuous' AND run_at > now() - interval '24 hours'"
-        )
-        mx, n_cand, n_runs = (tuple(r[0]) if r else (0, 0, 0))
-        obs.append(f"近24h 最大单品种候选={mx} 候选总数={n_cand} 轮次={n_runs}")
+        # 2026-11-15（CL-20261115-01）：周末/长假「近 24h 零轮次」是休市而非
+        # 护栏停摆，按交易日归属取窗口；日历未播种超过 10 天则显式报出。
+        d, cal_note = _l0_session_day(c)
+        if cal_note:
+            bad.append(cal_note)
+        if d is None:
+            mx = n_cand = n_runs = 0
+            obs.append("交易日窗口=不可用")
+        else:
+            r = c.rows(
+                "SELECT coalesce(max(max_lookback_bars), 0), "
+                "       coalesce(sum(n_candidates), 0), count(*) "
+                "FROM ops.l0_ingest_audit "
+                f"WHERE chain='continuous' AND ({_L0_SESSION_DAY_SQL}) = :d",
+                d=d,
+            )
+            mx, n_cand, n_runs = (tuple(r[0]) if r else (0, 0, 0))
+            obs.append(
+                f"目标交易日={d} 最大单品种候选={mx} 候选总数={n_cand} 轮次={n_runs}")
         obs.append(f"配置上限={limit}")
         if int(n_runs or 0) == 0:
-            bad.append("近 24h 无 continuous 采集审计（护栏可能从未运行）")
+            bad.append("目标交易日无 continuous 采集审计（护栏可能从未运行）")
         if int(n_cand or 0) == 0:
-            bad.append("审计里候选行数恒为 0（采集空转）")
+            bad.append("目标交易日候选行数恒为 0（采集空转）")
         if int(mx or 0) > limit + 5:
             bad.append(f"实时窗口未被裁切：实测 {mx} 根 > 上限 {limit}+5")
 

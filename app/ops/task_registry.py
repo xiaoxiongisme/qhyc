@@ -560,11 +560,41 @@ def apply_registry_to_scheduler(sched: Any) -> None:
     install_run_recorder(sched)
 
 
+def _find_open_run(task_id: str) -> int | None:
+    """EVENT 配对丢失时的 DB 兜底：取该作业最近一条仍在 running 的流水。
+
+    CL-20261115-03：install_run_recorder 用进程内字典把 SUBMITTED 与 EXECUTED
+    配对，字典条目一旦丢失（进程重启 / 同名覆盖 / 线程竞态），_on_done 拿到
+    None，record_finish 直接 return，那条 running 就永久不收尾。这里按 task_id
+    反查，只认近 6 小时，避免把几天前的老僵尸误配给刚结束的这次执行；
+    查不到返回 None，交由周期 reaper 按超时语义收尾。
+    """
+    from app.core.db import get_session_factory
+
+    try:
+        with get_session_factory()() as s:
+            rid = s.execute(text(
+                "SELECT id FROM ops.scheduled_task_run "
+                "WHERE task_id = :t AND status = 'running' "
+                "  AND started_at > now() - interval '6 hours' "
+                "ORDER BY started_at DESC LIMIT 1"
+            ), {"t": task_id}).scalar()
+        return int(rid) if rid is not None else None
+    except Exception as exc:  # noqa: BLE001 —— 记账兜底失败绝不拖垮作业
+        logger.warning(
+            f"[task_registry] DB 兜底查找 running 失败 task={task_id}: {exc}")
+        return None
+
+
 def install_run_recorder(sched: Any) -> bool:
     """挂 APScheduler 事件监听：全部作业的成败落 ops.scheduled_task_run。
 
     事件配对：SUBMITTED 插 running 行 → EXECUTED/ERROR 更新为终态；
     MISSED 直接插一条 missed 行（无 SUBMITTED）。绝不外抛。
+
+    ★ 2026-11-15（CL-20261115-03）：配对字典由 dict[str,int] 改为带锁的
+    FIFO 队列，并在配对丢失时走 :func:`_find_open_run` 的 DB 兜底；
+    周期 reaper 另加超时收尾，形成不依赖事件的两层保险。
     """
     try:
         from apscheduler.events import (
@@ -577,8 +607,12 @@ def install_run_recorder(sched: Any) -> bool:
         logger.warning(f"[task_registry] apscheduler 事件导入失败，运行流水监听未安装: {exc}")
         return False
 
-    # job_id -> run_id（SUBMITTED 与 EXECUTED/ERROR 配对）
-    pending: dict[str, int] = {}
+    # job_id -> 该作业待收尾的 run_id 队列（FIFO，带锁）。
+    # CL-20261115-03：原 dict[str,int] 会被同名作业的下一次 SUBMITTED 覆盖，
+    # 且事件回调在 executor 线程并发到达、字典无锁有竞态。配对一丢，
+    # record_finish(None) 静默 return → 永久 running 僵尸。
+    pending: dict[str, list[int]] = {}
+    pending_lock = threading.Lock()
 
     def _on_submitted(event: Any) -> None:
         job_id = str(getattr(event, "job_id", ""))
@@ -593,11 +627,23 @@ def install_run_recorder(sched: Any) -> bool:
                 logger.opt(exception=True).warning(f"[silent-swallow] 异常被静默忽略（此处原本为 pass）: {exc}")
         run_id = record_start(job_id, trigger="auto", payload=payload)
         if run_id is not None:
-            pending[job_id] = run_id
+            with pending_lock:
+                pending.setdefault(job_id, []).append(run_id)
 
     def _on_done(event: Any, status: str) -> None:
         job_id = str(getattr(event, "job_id", ""))
-        run_id = pending.pop(job_id, None)
+        with pending_lock:
+            q = pending.get(job_id)
+            run_id = q.pop(0) if q else None
+            if q is not None and not q:
+                pending.pop(job_id, None)
+        if run_id is None:
+            # 事件配对丢失 → 按 task_id 反查最近一条 running 收尾，
+            # 不让记账缺口变成永久僵尸；查不到则由周期 reaper 超时兜底。
+            run_id = _find_open_run(job_id)
+            if run_id is not None:
+                logger.warning(
+                    f"[task_registry] EVENT 配对丢失，DB 兜底收尾 job={job_id} run={run_id}")
         if status == "success":
             retval = getattr(event, "retval", None)
             message = _truncate(repr(retval))
