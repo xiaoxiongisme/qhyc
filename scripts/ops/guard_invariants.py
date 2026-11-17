@@ -2425,6 +2425,70 @@ def _c_bt_v5x_endpoint_live(c: Ctx) -> tuple[bool, str, str, str]:
         + "。Web V5X 回测口径与实盘分叉或可被覆盖（CL-20261117-03）")
 
 
+def _c_fusion_lazy_import(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261117-06：V3.4 fusion 不得是 backtest 路由的模块级加载前置条件。
+
+    ``app/api/routers/backtest.py`` 顶层的 ``from app.backtest.fusion_backtest import ...``
+    会让 fusion 模块的任何加载问题连带打挂本文件全部端点（含 V5X 的
+    /v5x/profile、/v5x/live-like）。解耦后 fusion import 只允许出现在函数体内。
+    本断言用 AST 检查：模块顶层零 fusion_backtest import，且 V5X profile 端点
+    函数体不引用 fusion。
+    """
+    label = "V3.4 fusion 从 backtest 路由解耦（惰性 import，V5X 端点不被拖垮）"
+    import ast
+
+    repo = Path(__file__).resolve().parents[2]
+    src = (repo / "app" / "api" / "routers" / "backtest.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    bad: list[str] = []
+
+    def _mentions_fusion(node: ast.AST) -> bool:
+        for n in ast.walk(node):
+            if isinstance(n, ast.ImportFrom) and n.module and "fusion_backtest" in n.module:
+                return True
+            if isinstance(n, ast.Import):
+                if any("fusion_backtest" in a.name for a in n.names):
+                    return True
+        return False
+
+    # 顶层（模块级）不得有 fusion_backtest import
+    top_fusion = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom)) and _mentions_fusion(n)]
+    if top_fusion:
+        bad.append(f"backtest.py 模块顶层仍有 fusion_backtest import（{len(top_fusion)} 处）")
+
+    # fusion import 必须确实存在于某些函数体内（解耦≠删功能）
+    lazy_fns: list[str] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _mentions_fusion(node):
+            lazy_fns.append(node.name)
+    if not lazy_fns:
+        bad.append("未找到任何函数内的 fusion_backtest 惰性 import（V3.4 回测功能可能被误删）")
+
+    # V5X profile / live-like 端点函数体不得引用 fusion
+    for fn_name in ("v5x_live_like_profile", "run_v5x_live_like"):
+        fn = next((n for n in tree.body
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name), None)
+        if fn is None:
+            bad.append(f"{fn_name} 端点不存在")
+        elif _mentions_fusion(fn):
+            bad.append(f"{fn_name} 函数体引用了 fusion_backtest")
+
+    # strategies/__init__.py 顶层不得 re-export fusion_signal（避免 import 任意
+    # strategies 子模块都强制加载 V3.4 实盘引擎）
+    init_src = (repo / "app" / "strategies" / "__init__.py").read_text(encoding="utf-8")
+    init_tree = ast.parse(init_src)
+    init_top_imports = [n for n in init_tree.body
+                        if isinstance(n, (ast.Import, ast.ImportFrom))
+                        and ("fusion_signal" in ast.unparse(n))]
+    if init_top_imports:
+        bad.append(f"strategies/__init__.py 顶层重新加载 fusion_signal（{len(init_top_imports)} 处）")
+
+    obs = f"top_fusion={len(top_fusion)} lazy_fns={lazy_fns} init_top_fusion={len(init_top_imports)}"
+    return not bad, label, obs, (
+        "" if not bad else "；".join(bad)
+        + "。V3.4 fusion 与 V5X 端点重新硬耦合（CL-20261117-06）")
+
+
 def _c_v5x_p6_sessions(c: Ctx) -> tuple[bool, str, str, str]:
     """P6 会话末根集合必须是「常态末根」，不能被残缺历史污染（CL-20261109-10）。
 
@@ -8103,6 +8167,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 且请求模型不接受口径覆盖——防网页又变回「拿另一套策略对比实盘」。
     ("BT-V5X-ENDPOINT-LIVE", "Web V5X live-like 端点口径取自 live 常量（不可覆盖）",
      "block", _c_bt_v5x_endpoint_live),
+    # CL-20261117-06：V3.4 fusion 改为端点内惰性 import，不得再是 backtest 路由
+    # 模块级加载前置条件（否则 fusion 一坏，V5X 端点跟着挂）。
+    ("BT-FUSION-LAZY-IMPORT", "V3.4 fusion 从 backtest 路由解耦（惰性 import）",
+     "block", _c_fusion_lazy_import),
     # CL-20261109-10：P6 会话末根集合被历史并集污染，9:00/13:00 被当成末根，
     # SF/SM 十年零成交，且实盘/回测随载入窗口长度分叉。
     ("V5X-P6-SESSIONS", "P6 会话末根取常态末根（非历史并集）", "block",

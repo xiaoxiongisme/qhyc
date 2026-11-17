@@ -9,12 +9,10 @@ from pydantic import BaseModel, Field
 from app.api.routers.health import _readiness
 from app.backtest.engine import BacktestParams, backtest_symbols
 from app.backtest.robustness import run_six_checks
-from app.backtest.fusion_backtest import (
-    FusionBacktestParams,
-    fusion_params_from_config,
-    run_fusion_backtest,
-    run_fusion_matrix,
-)
+# CL-20261117-06：V3.4 fusion 依赖改为端点内惰性 import。
+# 顶层 import 会让 fusion_backtest 的任何加载问题连带打挂本模块全部端点
+# （含与 V3.4 无关的 /v5x/profile、/v5x/live-like）。fusion 模块仍保留可回切
+# （CL-20261108-27），只是不再成为本路由的模块级加载前置条件。
 from app.core.db import session_scope
 from app.core.logging import logger
 from app.repositories.task_repo import TaskRepository
@@ -162,6 +160,12 @@ def run_fusion(req: FusionBacktestRequest, bg: BackgroundTasks):
 
     返回：组合层指标（笔数/胜率/总收益%/最大回撤%/夏普）+ 逐品种明细 + 净值曲线。
     """
+    # CL-20261117-06：惰性 import，避免 V3.4 模块拖垮本路由其他端点。
+    from app.backtest.fusion_backtest import (
+        fusion_params_from_config,
+        run_fusion_backtest,
+    )
+
     rd = _readiness()
     if not rd.get("ready"):
         raise HTTPException(503, detail={"message": "数据未就绪，拒绝回测", "readiness": rd})
@@ -355,6 +359,9 @@ class FusionMatrixRequest(BaseModel):
 @router.post("/fusion/matrix")
 def run_fusion_matrix_api(req: FusionMatrixRequest, bg: BackgroundTasks):
     """四维测试矩阵（§8.3 简化版）：src × sl_atr × trail_atr 网格扫描，汇总净收益/胜率。"""
+    # CL-20261117-06：惰性 import，避免 V3.4 模块拖垮本路由其他端点。
+    from app.backtest.fusion_backtest import run_fusion_matrix
+
     rd = _readiness()
     if not rd.get("ready"):
         raise HTTPException(503, detail={"message": "数据未就绪，拒绝回测", "readiness": rd})

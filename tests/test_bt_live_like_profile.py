@@ -41,3 +41,39 @@ def test_web_endpoint_forbids_caliber_override():
     fields = set(getattr(V5XBacktestRequest, "model_fields", {}) or {})
     assert not ({"src", "gate_lag", "regime_mode", "fill_mode"} & fields), (
         f"请求模型不应暴露口径覆盖字段，实际有 {sorted(fields)}")
+
+
+def test_fusion_is_lazy_imported_in_backtest_router():
+    """CL-20261117-06：fusion 不得是 backtest 路由模块级加载前置条件。"""
+    from scripts.ops.guard_invariants import _c_fusion_lazy_import
+
+    ok, label, observed, detail = _c_fusion_lazy_import(Ctx(session=_NoDB()))
+    assert ok, f"{label}: {observed} / {detail}"
+    assert "top_fusion=0" in observed and "lazy_fns=" in observed
+    assert "init_top_fusion=0" in observed
+
+
+def test_v5x_endpoint_module_importable_without_fusion():
+    """解耦实证：屏蔽 fusion_backtest 后，backtest 路由模块仍可独立 import。"""
+    import builtins
+    import importlib
+    import sys
+
+    real_import = builtins.__import__
+
+    def blocking_import(name, *args, **kwargs):
+        if name == "app.backtest.fusion_backtest" or name.startswith("app.backtest.fusion_backtest."):
+            raise ImportError("simulated fusion_backtest outage")
+        return real_import(name, *args, **kwargs)
+
+    saved = sys.modules.pop("app.api.routers.backtest", None)
+    builtins.__import__ = blocking_import
+    try:
+        mod = importlib.import_module("app.api.routers.backtest")
+        assert hasattr(mod, "run_v5x_live_like"), "V5X 端点应仍可加载"
+        assert hasattr(mod, "V5X_LIVE_LIKE_PROFILE"), "V5X profile 应仍可加载"
+    finally:
+        builtins.__import__ = real_import
+        sys.modules.pop("app.api.routers.backtest", None)
+        if saved is not None:
+            sys.modules["app.api.routers.backtest"] = saved
