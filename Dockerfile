@@ -54,9 +54,18 @@ ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 COPY requirements.txt .
 RUN pip install -r requirements.txt -i ${PIP_INDEX_URL}
 
-# LSTM（torch CPU 版，可选层）：拉取失败不阻塞构建（LSTM 模型自动跳过）
-RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
-    || echo "[build] torch install failed, LSTM disabled"
+# LSTM（torch CPU 版，可选层）：拉取失败/卡住都不阻塞构建（LSTM 模型自动跳过）
+# ★ 2026-11-17 修复（CL-20261117-01）：原 `|| echo` 只捕获 pip 的**非 0 退出**，
+#   但 pip 连 download.pytorch.org 下载 whl 时会**挂起不退出**（实测 13 分钟无
+#   socket、既不成功也不报错），导致整镜像 build 永远卡在此层，两次并行 build
+#   争 buildkit lock 加剧。改用 `timeout` 外层熔断（总时长上限，非连接级）+ pip
+#   自身 --timeout/--retries 下限，并开放 TORCH_INDEX_URL build-arg 供国内加速。
+#   注意：CPU 版 whl 官方 cpu 源独有；国内 PyPI 的 torch 带 CUDA 依赖（体积大），
+#   故默认仍走 cpu 源，仅在显式传参时切换。torch 非必需，装不上则 LSTM 自动跳过。
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+RUN timeout 180 pip install torch --index-url ${TORCH_INDEX_URL} \
+        --timeout 20 --retries 2 \
+    || echo "[build] torch install failed/timed out, LSTM disabled"
 
 # DCE 龙虎榜（可选层）：大商所官网套了瑞数动态防护，纯 HTTP 一律 412，
 # 必须真浏览器执行 JS → 用 Scrapling（app/ingest/dce_scrapling.py）。

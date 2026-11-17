@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from app.api.routers import (
     anomalies,
     backtest,
+    blindspot,   # 少数面发现（L0 阅读线索，独立只读 schema；CL-20261116-01）
     bars,
     calendar,
     dashboard,
@@ -53,5 +54,7 @@ api_router.include_router(scheduled_tasks.router, prefix="/ops/tasks", tags=["op
 # 风控外壳（migrations/044；2026-10-26 甲醇提保事故后落地）
 #   P0 盘前作战门 / P1 离场自动化 / P2 品种减法
 api_router.include_router(risk_gate.router, prefix="/risk", tags=["risk-gate"], dependencies=_auth)
+# 少数面发现：独立只读 schema，L0 阅读线索；不接交易链路（CL-20261116-01）
+api_router.include_router(blindspot.router, prefix="/blindspot", tags=["blindspot"], dependencies=_auth)
 
 __all__ = ["api_router"]

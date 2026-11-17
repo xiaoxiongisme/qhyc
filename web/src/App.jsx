@@ -8,6 +8,7 @@ import Volatility from "./pages/Volatility.jsx";
 import Fusion from "./pages/Fusion.jsx";
 import FusionBacktest from "./pages/FusionBacktest.jsx";
 import Anomalies from "./pages/Anomalies.jsx";
+import Blindspot from "./pages/Blindspot.jsx";   // 少数面发现（L0 阅读线索；CL-20261116-01）
 
 const TABS = [
   { key: "overview", label: "品种总览", comp: Overview },
@@ -19,6 +20,7 @@ const TABS = [
   { key: "anomalies", label: "异常工单", comp: Anomalies },
   { key: "fusion", label: "融合信号", comp: Fusion },
   { key: "fusion_bt", label: "融合回测", comp: FusionBacktest },
+  { key: "blindspot", label: "少数面发现", comp: Blindspot },
 ];
 
 export default function App() {

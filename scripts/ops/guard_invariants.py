@@ -7693,6 +7693,97 @@ def _c_l0_eod_reconcile(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+def _c_bs_schema_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261116-01：blindspot 独立分区必须「表存在 + 有数据 + API 注册 + 视图存在」。
+
+    专治「表建了没人读」——光有 schema 不算落地，必须证明数据进来了、
+    API 路由在读、视图在聚合。任一环断裂即 block。
+    """
+    label = "少数面分区真实接线（表+数据+API+视图）"
+    bad: list[str] = []
+    obs: list[str] = []
+    try:
+        ns = c.scalar("SELECT to_regnamespace('blindspot') IS NOT NULL")
+        if not ns:
+            return False, label, "schema 不存在", "blindspot schema 缺失（082 未应用或被 DROP）"
+        obs.append("schema 在")
+
+        ntab = c.scalar(
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='blindspot' AND table_type='BASE TABLE'")
+        if (ntab or 0) < 7:
+            bad.append(f"基表仅 {ntab} 张（应 >=7）")
+        else:
+            obs.append(f"基表 {ntab}")
+
+        nitems = c.scalar("SELECT count(*) FROM blindspot.items")
+        if not nitems or nitems < 1:
+            bad.append("items 无数据（同步脚本没跑过）")
+        else:
+            obs.append(f"items {nitems} 行")
+
+        nview = c.scalar(
+            "SELECT count(*) FROM information_schema.views WHERE table_schema='blindspot'")
+        if not nview or nview < 1:
+            bad.append("展示视图缺失")
+        else:
+            obs.append(f"视图 {nview}")
+
+        # 真实引用：API 路由源码必须显式读 blindspot schema
+        api_src = Path(__file__).resolve().parents[2] / "app" / "api" / "routers" / "blindspot.py"
+        if not api_src.exists():
+            bad.append("API 路由文件缺失")
+        else:
+            body = api_src.read_text(encoding="utf-8", errors="replace")
+            if "blindspot." not in body:
+                bad.append("API 路由未引用 blindspot schema")
+            else:
+                obs.append("API 在读")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询/读源码失败 {type(exc).__name__}: {str(exc)[:160]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
+def _c_bs_isolated_from_trading(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261116-01：blindspot（L0 阅读线索）不得渗入任何交易链路。
+
+    检查两侧：① 交易 schema 的函数/视图定义不得引用 blindspot.*；
+    ② blindspot API 路由不得写交易表（只读护栏）。避免「研究数据被当交易信号」。
+    """
+    label = "少数面分区与交易链路硬隔离"
+    bad: list[str] = []
+    obs: list[str] = []
+    try:
+        # ① 交易 schema 的函数/视图里不得出现 blindspot 引用
+        hits = c.rows("""
+            SELECT n.nspname, p.proname FROM pg_proc p
+            JOIN pg_namespace n ON p.pronamespace=n.oid
+            WHERE n.nspname IN ('l1_mkt','l2_adj','l3_ref','public')
+              AND p.prokind IN ('f','p')
+              AND pg_get_functiondef(p.oid) ILIKE '%blindspot.%'
+            UNION ALL
+            SELECT n.nspname, c.relname FROM pg_class c
+            JOIN pg_namespace n ON c.relnamespace=n.oid
+            WHERE c.relkind='v' AND n.nspname IN ('l1_mkt','l2_adj','l3_ref','public')
+              AND pg_get_viewdef(c.oid) ILIKE '%blindspot.%'
+        """)
+        if hits:
+            bad.append(f"交易对象引用 blindspot: {[tuple(r) for r in hits][:3]}")
+        else:
+            obs.append("交易对象零引用")
+
+        # ② blindspot API 路由只读：不得出现 INSERT/UPDATE/DELETE 到交易表
+        api_src = Path(__file__).resolve().parents[2] / "app" / "api" / "routers" / "blindspot.py"
+        if api_src.exists():
+            body = api_src.read_text(encoding="utf-8", errors="replace").upper()
+            if any(kw in body for kw in ("INSERT INTO", "UPDATE ", "DELETE FROM", "L0_RAW.", "L1_MKT.", "L2_ADJ.", "L3_REF.")):
+                bad.append("API 路由含写操作或交易表引用")
+            else:
+                obs.append("API 只读")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询失败 {type(exc).__name__}: {str(exc)[:160]}")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261112-09：实时重放 1024 根历史窗口造成 337 行跨源冲突留痕。
     # 三条分别锁「不再新增冲突」「窗口真被裁切」「日终补缺真跑」，全部 block。
@@ -8067,6 +8158,12 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      _c_backup_capacity_safe),
     ("OPS-PUSH-GUARD-R3", "推送额度 DB 持久化 + 备用通道真接线", "block",
      _c_push_guard_r3),
+    # CL-20261116-01：少数面发现独立分区。两条 block 级防漂移——
+    # 一条防「表建了没人读」（真实引用），一条防「研究数据渗进交易链路」（硬隔离）。
+    ("BS-SCHEMA-WIRED", "少数面分区真实接线（表+数据+API+视图）", "block",
+     _c_bs_schema_wired),
+    ("BS-ISOLATED-FROM-TRADING", "少数面分区与交易链路硬隔离", "block",
+     _c_bs_isolated_from_trading),
 ]
 
 
