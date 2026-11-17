@@ -62,9 +62,13 @@ RUN pip install -r requirements.txt -i ${PIP_INDEX_URL}
 #   自身 --timeout/--retries 下限，并开放 TORCH_INDEX_URL build-arg 供国内加速。
 #   注意：CPU 版 whl 官方 cpu 源独有；国内 PyPI 的 torch 带 CUDA 依赖（体积大），
 #   故默认仍走 cpu 源，仅在显式传参时切换。torch 非必需，装不上则 LSTM 自动跳过。
+#   ★ 二调：torch 2.15.0+cpu whl 209MB 实测下载 0.31MB/s ≈ 673s，180s/600s
+#   都会误伤。设 900s：给足下载时间（保住启用的 lstm_weekly_retrain），同时对真
+#   挂起设硬上限（旧版会永久卡死，这是本次修复的核心）。国内 PyPI 无 +cpu 版
+#   （只有带 CUDA 通用版），CPU 源仅 pytorch.org 独有，故默认值不可随意替换。
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
-RUN timeout 180 pip install torch --index-url ${TORCH_INDEX_URL} \
-        --timeout 20 --retries 2 \
+RUN timeout 900 pip install torch --index-url ${TORCH_INDEX_URL} \
+        --timeout 30 --retries 2 \
     || echo "[build] torch install failed/timed out, LSTM disabled"
 
 # DCE 龙虎榜（可选层）：大商所官网套了瑞数动态防护，纯 HTTP 一律 412，
