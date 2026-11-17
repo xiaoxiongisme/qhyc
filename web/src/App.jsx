@@ -9,6 +9,7 @@ import Fusion from "./pages/Fusion.jsx";
 import FusionBacktest from "./pages/FusionBacktest.jsx";
 import Anomalies from "./pages/Anomalies.jsx";
 import Blindspot from "./pages/Blindspot.jsx";   // 少数面发现（L0 阅读线索；CL-20261116-01）
+import V5xLiveBacktest from "./pages/V5xLiveBacktest.jsx";  // V5X live-like 回测（CL-20261117-03）
 
 const TABS = [
   { key: "overview", label: "品种总览", comp: Overview },
@@ -20,6 +21,7 @@ const TABS = [
   { key: "anomalies", label: "异常工单", comp: Anomalies },
   { key: "fusion", label: "融合信号", comp: Fusion },
   { key: "fusion_bt", label: "融合回测", comp: FusionBacktest },
+  { key: "v5x_live_bt", label: "V5X实盘回测", comp: V5xLiveBacktest },
   { key: "blindspot", label: "少数面发现", comp: Blindspot },
 ];
 

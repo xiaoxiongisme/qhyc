@@ -2301,6 +2301,130 @@ def _c_bt_v5x_fill_mode(c: Ctx) -> tuple[bool, str, str, str]:
         + "。V5X 与 fusion 成交口径分叉，两份回测不可比（CL-20261109-05）")
 
 
+def _c_bt_live_like_profile(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261117-02：live-like 回测入口的默认口径必须与生产 V5X 常量逐位一致。
+
+    为什么值得单独一条 block
+    ======================
+    ``V5XBacktestParams()`` 类是**历史归档口径**（gate_lag=0 / regime_mode=frozen，
+    含前视），生产 V5X 实盘却是 ``SRC=bar_60m_ba / GATE_LAG=1 / REGIME_MODE=strict``。
+    全仓库唯一「live-like 回测入口」是 ``scripts/ops/ab_v5x_backtest.py``——它在
+    argparse 默认值上显式钉住 1/strict、在 run() 里写死 src=bar_60m_ba +
+    next_open + 1tick + 0.5ATR。任何人只要把某个默认值改回 0/frozen，或把 src
+    换成复现口径，报告数字就悄悄回到「含前视、与实盘不可比」，而没有任何断言
+    会拦——这正是 qhyc 反复出现的「口径只存在文字里」失效模式。
+
+    本断言量三件事（零 DB、零时间衰减、纯当前磁盘代码）：
+      1. **默认值对齐**：ab 脚本 argparse 的 --gate-lag / --regime-mode 默认值
+         必须等于 live.py 的 GATE_LAG / REGIME_MODE；
+      2. **构造写死**：run() 里 V5XBacktestParams(...) 的 src / fill_mode 必须是
+         live.SRC 与 "next_open"（不是复现口径 bar_60m / close）；
+      3. **真实接线**：run() 确实把 params 传给 run_v5x_backtest（防「常量写了没人读」）。
+    """
+    label = "live-like 回测入口默认口径钉死生产 V5X（lag/regime/src/fill）"
+    try:
+        import ast as _ast
+
+        from app.strategies.v5x import live as _live
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "无法读取 live V5X 常量 → live-like 口径不可验证（CL-20261117-02）")
+
+    path = Path(__file__).with_name("ab_v5x_backtest.py")
+    try:
+        src = path.read_text(encoding="utf-8")
+        tree = _ast.parse(src)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"读取/解析 ab_v5x_backtest.py 失败 {type(exc).__name__}: {exc}", (
+            "live-like 入口源码不可解析（CL-20261117-02）")
+
+    cli: dict[str, object] = {}
+    ctor: dict[str, object] = {}
+    params_wired = False
+
+    def _val(node):
+        if isinstance(node, _ast.Constant):
+            return node.value
+        return _ast.get_source_segment(src, node)
+
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        f = node.func
+        if (isinstance(f, _ast.Attribute) and f.attr == "add_argument" and node.args
+                and isinstance(node.args[0], _ast.Constant)
+                and node.args[0].value in ("--gate-lag", "--regime-mode")):
+            for kw in node.keywords:
+                if kw.arg == "default":
+                    cli[node.args[0].value] = _val(kw.value)
+        if isinstance(f, _ast.Name) and f.id == "V5XBacktestParams":
+            for kw in node.keywords:
+                ctor[kw.arg] = _val(kw.value)
+        if isinstance(f, _ast.Name) and f.id == "run_v5x_backtest":
+            if any(kw.arg == "params" for kw in node.keywords):
+                params_wired = True
+
+    bad: list[str] = []
+    obs = [f"live={_live.SRC}/{_live.GATE_LAG}/{_live.REGIME_MODE}"]
+    if cli.get("--gate-lag") != _live.GATE_LAG:
+        bad.append(f"--gate-lag 默认 {cli.get('--gate-lag')!r} != 实盘 GATE_LAG={_live.GATE_LAG!r}")
+    if cli.get("--regime-mode") != _live.REGIME_MODE:
+        bad.append(f"--regime-mode 默认 {cli.get('--regime-mode')!r} != 实盘 REGIME_MODE={_live.REGIME_MODE!r}")
+    if ctor.get("src") != _live.SRC:
+        bad.append(f"回测 src={ctor.get('src')!r} != 实盘 SRC={_live.SRC!r}")
+    if ctor.get("fill_mode") != "next_open":
+        bad.append(f"回测 fill_mode={ctor.get('fill_mode')!r}，live-like 必须 next_open")
+    if not params_wired:
+        bad.append("run() 未把 params 传给 run_v5x_backtest（常量写了没人读）")
+    obs.append(f"ab-cli={cli} ctor(src={ctor.get('src')!r},fill={ctor.get('fill_mode')!r}) wired={params_wired}")
+
+    return not bad, label, " ".join(obs), (
+        "" if not bad else "；".join(bad)
+        + "。live-like 回测与实盘口径已分叉，报告数字不可与实盘对比（CL-20261117-02）")
+
+
+def _c_bt_v5x_endpoint_live(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261117-03：Web 的 V5X live-like 端点口径必须取自 live 常量。
+
+    ``/backtest/v5x/live-like`` 的 ``V5X_LIVE_LIKE_PROFILE`` 一旦有人改成
+    复现口径（lag=0/frozen/src=bar_60m）或接受用户覆盖，网页就又变回
+    「拿另一套策略的回测数字对比实盘」。本断言直接 import 路由模块，
+    逐位比对其 profile 与 live.py 常量，并确认端点确实存在且 registered。
+    """
+    label = "Web V5X live-like 端点口径取自 live 常量（不可覆盖）"
+    try:
+        from app.api.routers import backtest as _bt
+        from app.strategies.v5x import live as _live
+        prof = _bt.V5X_LIVE_LIKE_PROFILE
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "无法读取 Web V5X 回测端点 profile（CL-20261117-03）")
+
+    bad: list[str] = []
+    checks = {
+        "src": (_live.SRC, prof.get("src")),
+        "gate_lag": (_live.GATE_LAG, prof.get("gate_lag")),
+        "regime_mode": (_live.REGIME_MODE, prof.get("regime_mode")),
+        "fill_mode": ("next_open", prof.get("fill_mode")),
+    }
+    for k, (want, got) in checks.items():
+        if got != want:
+            bad.append(f"{k}={got!r} != live {want!r}")
+    # 端点函数必须存在且请求模型不含口径覆盖字段
+    req_fields = set(getattr(_bt.V5XBacktestRequest, "model_fields", {}) or {})
+    forbidden = {"src", "gate_lag", "regime_mode", "fill_mode"}
+    leaked = req_fields & forbidden
+    if leaked:
+        bad.append(f"请求模型暴露口径覆盖字段 {sorted(leaked)}")
+    if not hasattr(_bt, "run_v5x_live_like"):
+        bad.append("run_v5x_live_like 端点不存在")
+
+    obs = " ".join(f"{k}={g!r}" for k, (_, g) in checks.items()) + f" req_fields={sorted(req_fields)}"
+    return not bad, label, obs, (
+        "" if not bad else "；".join(bad)
+        + "。Web V5X 回测口径与实盘分叉或可被覆盖（CL-20261117-03）")
+
+
 def _c_v5x_p6_sessions(c: Ctx) -> tuple[bool, str, str, str]:
     """P6 会话末根集合必须是「常态末根」，不能被残缺历史污染（CL-20261109-10）。
 
@@ -7970,6 +8094,15 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 「默认口径」「真实接线」「close 零回归」「next_open 确实落在下一根开盘」。
     ("BT-V5X-FILL-MODE-WIRED", "V5X 回测成交口径接 E1-C（默认 next_open / close 零回归）",
      "block", _c_bt_v5x_fill_mode),
+    # CL-20261117-02：类默认 gate_lag=0/frozen 是历史归档口径（含前视），
+    # 只有 ab_v5x_backtest.py 是 live-like 入口。钉死它的默认值=实盘常量，
+    # 防「改一个默认值就悄悄回到含前视、与实盘不可比」。
+    ("BT-LIVE-LIKE-PINNED", "live-like 回测默认口径钉死生产 V5X（lag/regime/src/fill）",
+     "block", _c_bt_live_like_profile),
+    # CL-20261117-03：Web 的 /backtest/v5x/live-like 端点口径取自 live 常量，
+    # 且请求模型不接受口径覆盖——防网页又变回「拿另一套策略对比实盘」。
+    ("BT-V5X-ENDPOINT-LIVE", "Web V5X live-like 端点口径取自 live 常量（不可覆盖）",
+     "block", _c_bt_v5x_endpoint_live),
     # CL-20261109-10：P6 会话末根集合被历史并集污染，9:00/13:00 被当成末根，
     # SF/SM 十年零成交，且实盘/回测随载入窗口长度分叉。
     ("V5X-P6-SESSIONS", "P6 会话末根取常态末根（非历史并集）", "block",

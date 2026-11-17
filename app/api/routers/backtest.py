@@ -201,6 +201,85 @@ def run_fusion(req: FusionBacktestRequest, bg: BackgroundTasks):
 
 
 # ----------------------------------------------------------
+# V5X live-like 回测（CL-20261117-03）
+# ----------------------------------------------------------
+#: 唯一 live-like 回测口径。刻意不接受 src/gate_lag/regime_mode/fill_mode 覆盖：
+#: 这些值必须等于生产 V5X 实盘常量，用户一旦能改就又回到「三套口径并存」。
+#: 守卫 BT-LIVE-LIKE-PINNED 钉住 ab_v5x_backtest.py 的默认值与本口径一致。
+from app.strategies.v5x import live as _v5x_live  # noqa: E402
+
+V5X_LIVE_LIKE_PROFILE = {
+    "src": _v5x_live.SRC,
+    "gate_lag": _v5x_live.GATE_LAG,
+    "regime_mode": _v5x_live.REGIME_MODE,
+    "fill_mode": "next_open",
+    "fill_slip_ticks": 1.0,
+    "max_adverse_gap_atr": 0.5,
+}
+
+
+class V5XBacktestRequest(BaseModel):
+    symbols: Optional[list[str]] = Field(None, description="缺省=38 白名单全部主连")
+    start: Optional[str] = Field(None, description="起始日 YYYY-MM-DD（默认 2015-01-01）")
+    end: Optional[str] = Field(None, description="结束日 YYYY-MM-DD（默认今日）")
+    async_run: bool = False
+
+
+@router.get("/v5x/profile")
+def v5x_live_like_profile():
+    """返回 live-like 回测口径（纯常量，零计算），供前端展示/对账。"""
+    return {"strategy": "V5X.3", "profile": V5X_LIVE_LIKE_PROFILE}
+
+
+@router.post("/v5x/live-like")
+def run_v5x_live_like(req: V5XBacktestRequest):
+    """V5X live-like 回测：口径与生产唯一推送源 V5X **逐位一致**。
+
+    ★ 与 ``/backtest``（预测模型评估）和 ``/backtest/fusion``（已停用的 V3.4）
+      是**不同的策略**。本端点跑的是当前生产在推的 V5X.3，参数全部取
+      ``live.py`` 常量 + E1-C 成交口径，调用方无法覆盖——这是防止「拿另一套
+      策略的回测数字对比实盘」的硬约束（CL-20261117-03）。
+    """
+    from app.backtest.v5x_backtest import V5XBacktestParams, run_v5x_backtest
+
+    rd = _readiness()
+    if not rd.get("ready"):
+        raise HTTPException(503, detail={"message": "数据未就绪，拒绝回测", "readiness": rd})
+
+    def _task():
+        try:
+            p = V5XBacktestParams(
+                src=V5X_LIVE_LIKE_PROFILE["src"],
+                gate_lag=V5X_LIVE_LIKE_PROFILE["gate_lag"],
+                regime_mode=V5X_LIVE_LIKE_PROFILE["regime_mode"],
+                fill_mode=V5X_LIVE_LIKE_PROFILE["fill_mode"],
+                fill_slip_ticks=V5X_LIVE_LIKE_PROFILE["fill_slip_ticks"],
+                max_adverse_gap_atr=V5X_LIVE_LIKE_PROFILE["max_adverse_gap_atr"],
+                use_hvol=True, use_blocked=True, use_regime=True, use_p6=True,
+                note="api:live-like",
+            )
+            with session_scope() as s:
+                return run_v5x_backtest(
+                    s, symbols=req.symbols, params=p,
+                    start=_parse_date(req.start), end=_parse_date(req.end),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"[v5x_live_like_backtest] failed: {e}")
+            return {"error": str(e)}
+
+    def _wrap(result):
+        if isinstance(result, dict) and "error" not in result:
+            result = {**result, "profile": V5X_LIVE_LIKE_PROFILE,
+                      "strategy": "V5X.3", "disclaimer": "回测为下一根开盘成交假设，非实盘成交；口径与 V5X 实盘信号生成同源"}
+        return result
+
+    if req.async_run:
+        bg.add_task(lambda: _wrap(_task()))
+        return {"status": "scheduled", "profile": V5X_LIVE_LIKE_PROFILE}
+    return _wrap(_task())
+
+
+# ----------------------------------------------------------
 # 稳健性闸门（把 futures-backtest-merge 的纪律固化成可调用接口）
 # ----------------------------------------------------------
 #: run_six_checks 的逐笔口径（与 app/strategies/magic_axis.run_magic 输出一致）。
