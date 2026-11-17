@@ -2,11 +2,9 @@ import React, { useState } from "react";
 import Overview from "./pages/Overview.jsx";
 import Predictions from "./pages/Predictions.jsx";
 import Sectors from "./pages/Sectors.jsx";
-import Backtest from "./pages/Backtest.jsx";
 import Quality from "./pages/Quality.jsx";
 import Volatility from "./pages/Volatility.jsx";
 import Fusion from "./pages/Fusion.jsx";
-import FusionBacktest from "./pages/FusionBacktest.jsx";
 import Anomalies from "./pages/Anomalies.jsx";
 import Blindspot from "./pages/Blindspot.jsx";   // 少数面发现（L0 阅读线索；CL-20261116-01）
 import V5xLiveBacktest from "./pages/V5xLiveBacktest.jsx";  // V5X live-like 回测（CL-20261117-03）
@@ -16,11 +14,9 @@ const TABS = [
   { key: "predictions", label: "预测详情", comp: Predictions },
   { key: "sectors", label: "大类热力图", comp: Sectors },
   { key: "volatility", label: "波动率", comp: Volatility },
-  { key: "backtest", label: "回测面板", comp: Backtest },
   { key: "quality", label: "数据质量", comp: Quality },
   { key: "anomalies", label: "异常工单", comp: Anomalies },
   { key: "fusion", label: "融合信号", comp: Fusion },
-  { key: "fusion_bt", label: "融合回测", comp: FusionBacktest },
   { key: "v5x_live_bt", label: "V5X实盘回测", comp: V5xLiveBacktest },
   { key: "blindspot", label: "少数面发现", comp: Blindspot },
 ];

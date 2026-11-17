@@ -50,7 +50,7 @@ export default function V5xLiveBacktest() {
         <div className="small" style={{ marginBottom: 8 }}>
           <span className="badge caliber">V5X.3 · live-like</span>{" "}
           与生产唯一推送源 V5X <b>同源</b>：参数取 live.py 常量，下一根开盘成交（E1-C）。
-          与「回测面板」（预测模型）和「融合回测」（已停用的 V3.4）<b>不是同一策略</b>。
+          这是本页唯一的回测口径，与预测模型评估、已停用的 V3.4 <b>不是同一策略</b>。
         </div>
         {pf && (
           <div className="small">
