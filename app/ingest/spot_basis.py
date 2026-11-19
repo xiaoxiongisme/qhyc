@@ -173,14 +173,41 @@ def collect_spot_basis(
     start_day: date,
     end_day: date,
     products: list[str] | None = None,
+    *,
+    require_today: bool = False,
+    min_today_rows: int = 1,
 ) -> dict[str, Any]:
-    """采集区间内基差数据并入库"""
+    """采集区间内基差数据并入库。
+
+    ★ CL-20261118-01：新增 ``today_rows`` 与 ``require_today``。
+
+    背景（2026-11-18 实证）：akshare ``futures_spot_price_daily`` 当日数据
+    **可能晚于 17:10 才发布**。当天 17:10 作业返回 ``rows=150``（3 个交易日×50
+    品种）却完全没有当日行，但 ``fetch_spot_basis`` 对空返回只 warning +
+    ``return []``，``_spot_basis_job`` 以「函数没抛异常」记 success，于是
+    ``main_contract_map``(18:10) 与 ``dim_main_contract_inferred``(18:30)
+    整条派生链静默停在 T-1，21:00 才由新鲜度告警发现。
+
+    ``require_today=True`` 时（供收盘后收敛作业使用），若 ``end_day`` 当日
+    去重行数 < ``min_today_rows``，抛 ``RuntimeError`` —— 禁止把「部分写入」
+    记成成功。默认 False 保持 17:10 主作业与手动触发接口的行为不变。
+    """
     rows = fetch_spot_basis(start_day, end_day, products=products)
+    # 与 upsert_spot_basis 的 (report_date, symbol, version) 去重口径一致
+    today_rows = len({(r["report_date"], r["symbol"], r["version"])
+                      for r in rows if r["report_date"] == end_day})
     n = upsert_spot_basis(session, rows)
     session.commit()
-    return {
+    stats = {
         "start": start_day.isoformat(),
         "end": end_day.isoformat(),
         "products_requested": len(products) if products else "default",
         "rows": n,
+        "today_rows": today_rows,
     }
+    if require_today and today_rows < min_today_rows:
+        raise RuntimeError(
+            f"[spot_basis] {end_day} 当日仅 {today_rows} 行"
+            f"（阈值 {min_today_rows}），akshare 当日现货数据可能尚未发布；"
+            "禁止记为 success（CL-20261118-01）")
+    return stats

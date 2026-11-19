@@ -3582,8 +3582,25 @@ def _spot_basis_job() -> None:
             repo = TaskRepository(s)
             run = repo.start("spot_basis", label="daily")
             try:
+                # ★ CL-20261118-01：17:10 时 akshare 当日数据可能尚未发布。
+                # 主作业不 fail-loud（否则每个发布偏晚的交易日都误报），但必须把
+                # 「当日 0 行」显式写进流水 message，不许再以静默 success 掩盖。
+                # 真正的兜底与硬失败判据在 20:30 的 daily_derived_reconcile。
                 stats = SB.collect_spot_basis(s, start, end, products=None)
-                repo.finish(run, "success", str(stats))
+                today_rows = int(stats.get("today_rows", 0))
+                # 周末/节假日「当日 0 行」是合法的，不许记 WARN 制造噪音。
+                # 交易日真源 futures_rule（禁止 weekday 猜测，CL-20261107-18）。
+                is_trade_day = bool(s.execute(
+                    text("SELECT EXISTS(SELECT 1 FROM futures_rule "
+                         "WHERE trade_date = :d)"), {"d": end}).scalar())
+                if today_rows == 0 and is_trade_day:
+                    repo.finish(run, "success",
+                                f"{stats} | WARN 当日 0 行，待 20:30 "
+                                "daily_derived_reconcile 收敛（CL-20261118-01）")
+                    logger.warning("[scheduler] spot_basis 当日 0 行（上游晚发布），"
+                                   "由 20:30 收敛作业兜底: %s", stats)
+                else:
+                    repo.finish(run, "success", str(stats))
                 logger.info(f"[scheduler] spot_basis done: {stats}")
             except Exception as e:  # noqa: BLE001
                 repo.finish(run, "failed", str(e))

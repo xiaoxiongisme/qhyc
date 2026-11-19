@@ -7459,6 +7459,119 @@ def _load_main_contract_infer():
     return mod
 
 
+def _c_daily_derived_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261118-01：日频派生链必须**绝对**新鲜，且收敛链路真实存在。
+
+    11-18 实证：``spot_basis``(17:10) 因 akshare 当日现货数据晚发布而只写了
+    3 个交易日，``main_contract_map``(18:10) 与 ``dim_main_contract_inferred``
+    (18:30) 由它派生，三表一起停在 11-17。既有 ``DATA-MAIN-CONTRACT-INFER-FRESH``
+    只比较 inferred 相对 map 的日期，**两表同步落后时仍 PASS**（09:10 实测全绿）——
+    与 ``_c_calendar_fresh`` 记录的「相对比较会一起瞎」是同一失效模式。
+
+    本断言三条都衡量「此刻」，不靠历史流水衰减：
+      1. 以 ``futures_rule`` 交易日真源 + ``settle_cutoff_hour`` 算出应就绪交易日，
+         三张派生表各自的最新日与当日有效行数都必须达标（绝对基准，不互相比）；
+      2. 日历播种 ``cfg_calendar_seed_meta`` 近 30h 内更新，防真源与数据同步落后；
+      3. 收敛脚本 / ``require_today`` / 主作业留痕 / DB 作业字典全部真实接线
+         （坑 #7：表建了没人读、字典改了宿主没改，都会让「已生效」只是一句话）。
+    """
+    label = "日频派生链绝对新鲜且收敛链路真实存在"
+    bad: list[str] = []
+    obs: list[str] = []
+    root = Path(__file__).resolve().parents[2]
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from app.ops.alerting import AlertConfig, _expected_trade_day, _trading_days
+
+        cfg = AlertConfig()
+        days = _trading_days(c.session)
+        if not days:
+            return False, label, "futures_rule 无交易日", (
+                "交易日真源不可用，无法选定期望日；先跑 seed_futures_rule.py")
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        expected = _expected_trade_day(days, now, cfg.settle_cutoff_hour)
+        obs.append(f"expected={expected} now={now:%H:%M} cutoff={cfg.settle_cutoff_hour}")
+
+        # 绝对闸门：真源本身停更时，相对比较会与三表一起落后
+        seed_fresh = bool(c.scalar(
+            "SELECT updated_at >= now() - interval '30 hours' "
+            "FROM cfg_calendar_seed_meta WHERE key='seeded_through'"))
+        obs.append(f"seed_fresh={seed_fresh}")
+        if not seed_fresh:
+            bad.append("日历播种超 30h 未更新 → 绝对基准可能与数据同步落后"
+                       "（CL-20261112-04 B-3）")
+
+        tables = (
+            ("spot_basis", "l0_raw.spot_basis", "report_date", None),
+            ("main_contract_map", "l3_ref.main_contract_map", "trade_date", None),
+            ("inferred", "l3_ref.dim_main_contract_inferred", "trade_date",
+             "inferred_symbol IS NOT NULL"),
+        )
+        for name, tbl, col, extra in tables:
+            where = f" WHERE {extra}" if extra else ""
+            mx = c.scalar(f"SELECT max({col}) FROM {tbl}{where}")
+            n = int(c.scalar(
+                f"SELECT count(*) FROM {tbl} WHERE {col} = :d"
+                + (f" AND {extra}" if extra else ""), d=expected) or 0)
+            obs.append(f"{name}={mx}/{n}行")
+            if mx is None or mx < expected:
+                bad.append(f"{name} 最新 {mx} 落后于应就绪交易日 {expected}")
+            elif n < 30:
+                bad.append(f"{name} 在 {expected} 仅 {n} 行（应 >=30）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"查询/真源失败 {type(exc).__name__}: {str(exc)[:160]}")
+
+    # 真实引用：防「脚本没挂调度 / fail-loud 被移除 / 表建了没人读」
+    srcs = {
+        "scripts/ops/reconcile_daily_derived.py": (
+            "require_today=True", "collect_spot_basis",
+            "infer_main_contract.py", "--apply", "MIN_ROWS"),
+        "app/ingest/spot_basis.py": ("require_today", "today_rows"),
+        "app/scheduler.py": ("daily_derived_reconcile", "当日 0 行"),
+    }
+    for rel, needles in srcs.items():
+        p = root / rel
+        if not p.is_file():
+            bad.append(f"缺 {rel}")
+            continue
+        src = p.read_text(encoding="utf-8", errors="ignore")
+        miss = [n for n in needles if n not in src]
+        if miss:
+            bad.append(f"{rel} 缺关键接线 {miss}")
+    rows = c.rows(
+        "SELECT enabled, schedule FROM ops.scheduled_task "
+        "WHERE task_id='daily_derived_reconcile'")
+    if not rows:
+        bad.append("ops.scheduled_task 缺 daily_derived_reconcile 字典行")
+    else:
+        enabled, sched = rows[0][0], str(rows[0][1] or "")
+        obs.append(f"字典 enabled={enabled} cron={sched}")
+        if enabled is not True:
+            bad.append("收敛作业未 enabled")
+        parts = sched.split()
+        try:
+            hhmm = int(parts[1]) * 60 + int(parts[0])
+        except (ValueError, IndexError):
+            hhmm = -1
+            bad.append("收敛作业 schedule 不是 5 段 cron")
+        # 必须晚于 18:30 反推、早于 21:00 告警阈值
+        if hhmm >= 0 and not (18 * 60 + 30 < hhmm < 21 * 60):
+            bad.append(f"收敛作业 {sched} 不在 (18:30, 21:00) 窗口内")
+        inf = c.scalar(
+            "SELECT schedule FROM ops.scheduled_task "
+            "WHERE task_id='infer_main_contract_daily'")
+        try:
+            pi = str(inf or "").split()
+            inf_hhmm = int(pi[1]) * 60 + int(pi[0])
+            if hhmm >= 0 and hhmm <= inf_hhmm:
+                bad.append("收敛作业未晚于 infer_main_contract_daily（依赖链倒挂）")
+        except (ValueError, IndexError):
+            bad.append("infer_main_contract_daily 的 schedule 无法解析")
+    return not bad, label, " / ".join(obs), "；".join(bad)
+
+
 def _c_main_contract_infer_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261112-11：反推字典必须跟上交易日，且**写入链路真实存在**。
 
@@ -7988,6 +8101,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      "block", _c_main_contract_infer_fresh),
     ("DATA-MAIN-CONTRACT-FOLLOW", "888 主连实际跟随合约与反推字典一致",
      "block", _c_main_contract_follow),
+    # CL-20261118-01：上面两条都是「相对比较」，spot_basis / map / inferred 三表
+    # 同步落后时全绿（11-18 09:10 实证）。这条以 futures_rule 真源做绝对基准，
+    # 并锁住 20:30 收敛脚本的真实接线（fail-loud + 字典 + 依赖链时序）。
+    ("DATA-DAILY-DERIVED-FRESH", "日频派生链绝对新鲜且收敛链路真实存在",
+     "block", _c_daily_derived_fresh),
     # CL-20261113-03：上面两条在 11-13 回归。根因不是写入方坏了，是推断作业
     # (17:25) 排在上游 main_contract_map 刷新 (18:10) 之前 45 分钟，每天只能
     # 推断到 T-1。这条锁死「下游必须晚于上游」的依赖，防再次被挪回去。
