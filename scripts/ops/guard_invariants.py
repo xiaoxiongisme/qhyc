@@ -3747,9 +3747,10 @@ def _c_bt_pool_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
       · AST 真实引用：run_fusion_backtest 必须调用 load_tradable_pool +
         _validate_backtest_symbols，且不得再读 settings.main_contracts
         （防「表建了没人读」——qhyc 最隐蔽的失效模式）；
-      · 生产口径：有效白名单 30~45 个且不含持仓豁免品种；同时
-        v_tradable_scope 必须仍含 B888/J888/LH888/NI888 四个持仓豁免，
-        防有人为「严格不放行」把存量持仓的 bar 与止损价一起停掉。
+      · 生产口径：有效白名单 30~45 个且不含持仓豁免品种；持仓豁免按
+        fusion_position 当前「非白名单且非 FLAT」的持仓动态判定——此类仓
+        必须在 v_tradable_scope 内（保住存量持仓的 bar 与止损价）；已清退的
+        僵尸仓（CL-20261119-01 的 B/J/LH/NI）不再强制要求（CL-20261119-02）。
     """
     label = "回测品种池严格 38 白名单（持仓豁免只留数据链路）"
     try:
@@ -3812,13 +3813,33 @@ def _c_bt_pool_in_whitelist(c: Ctx) -> tuple[bool, str, str, str]:
         leaked = sorted({"B", "CS", "J", "LH", "NI"} & set(live))
         if leaked:
             bad.append(f"封禁/持仓豁免品种混入白名单池：{leaked}")
-        rows = c.rows(
-            "SELECT symbol FROM l3_ref.v_tradable_scope "
-            "WHERE symbol IN ('B888','J888','LH888','NI888')")
-        exempt = {r[0] for r in rows}
-        observed.append(f"scope_exempt={len(exempt)}")
-        if len(exempt) < 4:
-            bad.append("持仓豁免被一刀切停派生 → 存量持仓拿不到 bar 与止损价")
+        # CL-20261119-02：持仓豁免改为动态判定。原硬编码要求 scope 必含
+        # B/J/LH/NI 四仓，是防「严格不放行把存量持仓 bar 与止损价停掉」；
+        # 但 11-19 已按用户拍板清退这 4 个僵尸仓（CL-20261119-01），且实测
+        # fusion_v34_live_enabled=f、execution_position 无其真实持仓。
+        # 新语义：scope 必须覆盖「当前所有非白名单非 FLAT 持仓」——
+        #   若仍有此类存量仓，一个都不能漏（保护语义不变）；
+        #   若已全部清退，则不再强制任何豁免仓存在（本次场景 exempt_required=0）。
+        held_rows = c.rows(
+            "SELECT symbol FROM fusion_position "
+            "WHERE COALESCE(position,'FLAT') <> 'FLAT'")
+        held = {r[0] for r in held_rows}
+        # 非白名单持仓：品种码（去 888 后缀）不在有效白名单内
+        def _v(sym: str) -> str:
+            return sym[:-3] if sym.endswith("888") else sym
+
+        codes = {str(r[0]) for r in c.rows(
+            "SELECT variety_code FROM l3_ref.tradable_variety "
+            "WHERE effective_from <= CURRENT_DATE "
+            "AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)")}
+        nonwl_held = {s for s in held if _v(s) not in codes}
+        scope_syms = {r[0] for r in c.rows(
+            "SELECT symbol FROM l3_ref.v_tradable_scope")}
+        missing = sorted(nonwl_held - scope_syms)
+        observed.append(f"held_nonwl={len(nonwl_held)}/missing={len(missing)}")
+        if missing:
+            bad.append(
+                f"非白名单存量持仓不在 scope（拿不到 bar 与止损价）：{missing}")
     except Exception as exc:                              # noqa: BLE001
         bad.append(f"生产口径查询失败：{type(exc).__name__}: {exc}")
 
