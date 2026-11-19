@@ -83,7 +83,7 @@ def _is_trade_day(session, d: date) -> bool:
 def _run_cli(rel: str, *args: str) -> None:
     """调用已验证的写入脚本；check=True 保证 returncode 不被吞（skill 坑 #9）。"""
     cmd = [sys.executable, str(ROOT / rel), *args]
-    logger.info("[reconcile] run %s", " ".join(cmd))
+    logger.info("[reconcile] run {}", " ".join(cmd))
     subprocess.run(cmd, cwd=str(ROOT), check=True)
 
 

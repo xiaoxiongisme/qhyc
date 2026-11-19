@@ -3598,7 +3598,7 @@ def _spot_basis_job() -> None:
                                 f"{stats} | WARN 当日 0 行，待 20:30 "
                                 "daily_derived_reconcile 收敛（CL-20261118-01）")
                     logger.warning("[scheduler] spot_basis 当日 0 行（上游晚发布），"
-                                   "由 20:30 收敛作业兜底: %s", stats)
+                                   "由 20:30 收敛作业兜底: {}", stats)
                 else:
                     repo.finish(run, "success", str(stats))
                 logger.info(f"[scheduler] spot_basis done: {stats}")
