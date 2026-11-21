@@ -95,7 +95,8 @@ def save_order(order: dict[str, Any]) -> int:
     """落订单；同 idempotency_key 已存在则**直接返回旧 id**（幂等命中，绝不重复下单）。
 
     order 需含：signal_id, symbol_continuous, real_symbol, exchange, action, direction,
-    price, price_space, lots, multiplier, notional, channel, account, idempotency_key。
+    price, lots, multiplier, notional, channel, account, idempotency_key；
+    可选：price_type(默认 LIMIT)、pool_id(默认 None，5M-P0C)、price_space(默认 raw)。
 
     ★ 2026-11-06 修正（撞键丢单缺陷）
       ------------------------------------------------
@@ -133,9 +134,10 @@ def save_order(order: dict[str, Any]) -> int:
                     """
                     INSERT INTO execution_order
                         (signal_id, symbol_continuous, real_symbol, exchange,
-                         action, direction, price, price_space, lots, multiplier, notional,
-                         channel, account, status, idempotency_key)
-                    VALUES (:signal_id, :sym, :real, :ex, :action, :dir, :px, :space, :lots,
+                         action, direction, price, price_type, pool_id, price_space,
+                         lots, multiplier, notional, channel, account, status, idempotency_key)
+                    VALUES (:signal_id, :sym, :real, :ex, :action, :dir, :px,
+                            :ptype, :pool, :space, :lots,
                             :mult, :notional, :channel, :account, 'NEW', :key)
                     RETURNING id
                     """
@@ -148,6 +150,10 @@ def save_order(order: dict[str, Any]) -> int:
                     "action": order["action"],
                     "dir": order["direction"],
                     "px": order["price"],
+                    # 缺省值必须放在 Python 侧：stop_loss.py 等旧调用方未改造时
+                    # 仍可落库；DB 列同样带 DEFAULT（迁移 083），双保险。
+                    "ptype": order.get("price_type") or "LIMIT",
+                    "pool": order.get("pool_id"),
                     "space": order.get("price_space", "raw"),
                     "lots": order["lots"],
                     "mult": order.get("multiplier"),
@@ -382,6 +388,23 @@ def record_health(channel: str, *, healthy: bool, latency_ms: int | None = None,
             ),
             {"ch": channel, "h": healthy, "lat": latency_ms, "d": detail},
         )
+
+
+def list_orders_by_pool(pool_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    """列出某 5m 池的订单账本（CL-20261121-06，只读）。
+
+    池级在场状态不从 ``execution_position`` 取（该表默认不同步、不权威），
+    而从订单账本按时间回放 OPEN/CLOSE 重建。返回按 ``created_at`` 升序。
+    """
+    with session_scope() as s:
+        rows = s.execute(
+            text(
+                "SELECT * FROM execution_order WHERE pool_id = :p "
+                "ORDER BY created_at, id LIMIT :n"
+            ),
+            {"p": pool_id, "n": max(1, min(int(limit), 1000))},
+        ).mappings().all()
+        return [dict(r) for r in rows]
 
 
 def list_open_orders(statuses: tuple[str, ...] = ("NEW", "SENT", "PARTIAL")) -> list[dict[str, Any]]:

@@ -783,6 +783,25 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
         logger.error(f"[synth] 重试后仍未追平 minute_bar（可能 MinuteCollector 持续并发写入）: {lags}")
     else:
         logger.info("[synth] 校验通过：bar_* 已追平 minute_bar 最新桶")
+    # CL-20261121-04 / 5M-P0A：上面的追平校验只看「整批符号的聚合 max」，
+    # CU888/SC888 停更两周仍被其它品种顶到最新而静默 PASS。这里补一层**逐品种**
+    # 诊断（只记日志、不改合成语义，避免把仍在办 index 层 CL 的作业整体拖挂）。
+    # 真正的出信号门在 app.data.bar5m_gate.require_fresh + 5M-BAR-FRESH 守卫。
+    if scope_syms:
+        try:
+            from app.data.bar5m_gate import evaluate, load_bar5m_max, load_minute_max
+
+            mm = load_minute_max(session, scope_syms)
+            bm = load_bar5m_max(session, scope_syms)
+            bad = [r.status for r in evaluate(scope_syms, mm, bm, now=datetime.now(_SH_TZ),
+                                              max_age_min=None) if not r.ok]
+            if bad:
+                logger.error(
+                    f"[synth] bar_5m 逐品种新鲜度门未通过（5M-P0A / CL-20261121-04）："
+                    f"{len(bad)}/{len(scope_syms)} 个符号异常，状态={sorted(set(bad))}；"
+                    f"这些品种不得进入 5m 策略扫描")
+        except Exception as exc:  # 诊断不能反过来打断既有合成链
+            logger.warning(f"[synth] bar_5m 逐品种诊断不可用：{type(exc).__name__}: {exc}")
     logger.info(f"[synth] incremental done: 主连 {stats}；指数层 {idx_stats}")
 
     # 指数层新鲜度必须单独盯（CL-20261107-13）：上面的追平校验只覆盖口径符号。

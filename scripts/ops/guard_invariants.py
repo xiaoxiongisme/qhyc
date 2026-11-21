@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import uuid
@@ -47,7 +48,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# `__file__` 在「把本脚本经 stdin 送进容器做只读校验」时不存在；
+# 这种情况下以当前工作目录（容器内 /app）为仓库根，避免 IndexError 直接崩掉。
+_REPO_ROOT = (Path(__file__).resolve().parents[2] if "__file__" in globals()
+             and "<stdin>" not in str(__file__) else Path.cwd())
+sys.path.insert(0, str(_REPO_ROOT))
 
 from sqlalchemy import text  # noqa: E402
 
@@ -8106,7 +8111,234 @@ def _c_bs_isolated_from_trading(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, " / ".join(obs), "；".join(bad)
 
 
+# ------------------------------------------------ 5m 策略九条守卫（CL-20261121-04/05/06）
+#: 研究收敛后的 10 品种池（证据加固报告：FG/SR 主仓、EB 次仓、7 卫星）。
+#: 新增/删除品种必须同步改这里、CL 台账与本列表，避免"守卫盯的池≠策略跑的池"。
+FIVE_MIN_POOL = (
+    "EB888", "SR888", "FG888", "JD888", "MA888",
+    "M888", "UR888", "PP888", "A888", "BU888",
+)
+try:
+    _FIVE_MIN_ROOT = Path(__file__).resolve().parents[2]
+except (NameError, IndexError):  # 支持通过 stdin 在生产容器内跑单次只读校验
+    _FIVE_MIN_ROOT = Path.cwd()
+
+
+def _5m_switch(c: Ctx, key: str) -> bool:
+    try:
+        rows = c.rows("SELECT enabled FROM cfg_feature_switch WHERE switch_key = :k", k=key)
+        return bool(rows[0][0]) if rows else False
+    except Exception:  # noqa: BLE001  表不存在 = 开关未落地 = 按关闭处理
+        return False
+
+
+def _5m_src(*parts: str) -> str:
+    p = _FIVE_MIN_ROOT.joinpath(*parts)
+    return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+
+
+def _c_5m_bar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """逐品种 bar_5m 必须追平该品种 minute_bar 的「最后一根已收完桶」。
+
+    CL-20261121-04：合成作业的聚合 max 追平校验会被一个活跃品种"代表"过去，
+    CU888/SC888 停更 14 天照样全绿。这里按策略池逐 symbol 比对，且拒绝
+    bar 标签跑到已收完桶之后（在途半截桶）。
+    """
+    try:
+        rows = c.rows("""
+            WITH p(symbol) AS (VALUES """ + ",".join(f"('{s}')" for s in FIVE_MIN_POOL) + """),
+            m AS (SELECT p.symbol, max(b.ts) AS ts FROM p
+                  LEFT JOIN public.minute_bar b ON b.symbol = p.symbol
+                      AND b.ts >= now() - interval '3 days' GROUP BY 1),
+            k AS (SELECT p.symbol, max(b.bucket) AS bk FROM p
+                  LEFT JOIN l1_mkt.bar_5m b ON b.symbol = p.symbol
+                      AND b.bucket >= now() - interval '3 days' GROUP BY 1)
+            SELECT p.symbol, m.ts, k.bk,
+                   date_trunc('hour', m.ts)
+                     + floor(extract(minute from m.ts)::int / 5) * interval '5 minutes' AS exp
+            FROM p JOIN m USING(symbol) JOIN k USING(symbol)
+            WHERE m.ts IS NULL OR k.bk IS NULL
+               OR k.bk <> date_trunc('hour', m.ts)
+                          + floor(extract(minute from m.ts)::int / 5) * interval '5 minutes'
+            ORDER BY 1
+        """)
+    except Exception as exc:  # noqa: BLE001
+        return False, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
+            "查询失败", f"{type(exc).__name__}: {str(exc)[:180]}"
+    if rows:
+        bad = ", ".join(f"{r[0]}(bar={r[2]}, expected={r[3]})" for r in rows[:6])
+        return False, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
+            f"异常 {len(rows)} 个", bad + " → 5m 策略必须跳过这些品种（见 CL-20261121-04）"
+    return True, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
+        f"{len(FIVE_MIN_POOL)}/{len(FIVE_MIN_POOL)} 追平", ""
+
+
+def _c_5m_bar_grid(c: Ctx) -> tuple[bool, str, str, str]:
+    """5m 桶标签必须落在 5 分钟网格（含时区），杜绝半截桶被当成完整 K 线。"""
+    try:
+        bad = c.scalar("""
+            SELECT count(*) FROM l1_mkt.bar_5m
+            WHERE symbol = ANY(:syms) AND bucket >= now() - interval '14 days'
+              AND (extract(minute FROM (bucket AT TIME ZONE 'Asia/Shanghai'))::int % 5 <> 0
+                   OR extract(second FROM bucket) <> 0)
+        """, syms=list(FIVE_MIN_POOL))
+    except Exception as exc:  # noqa: BLE001
+        return False, "策略池 bar_5m 标签全在合法网格", "查询失败", f"{type(exc).__name__}"
+    n = int(bad or 0)
+    return n == 0, "策略池 bar_5m 标签全在合法网格", f"非法标签 {n} 根", \
+        ("" if n == 0 else f"{n} 根非网格标签 → CL-20261121-04 完备性门失效")
+
+
+def _c_5m_complete_gate(c: Ctx) -> tuple[bool, str, str, str]:
+    """完备性门必须真实接线：判定模块存在、扫描器调用、守卫逐品种（防建了没人读）。"""
+    gate = _5m_src("app", "data", "bar5m_gate.py")
+    runner = _5m_src("app", "strategies", "five_min", "runner.py")
+    checks = {
+        "gate.complete_bucket": "def complete_bucket" in gate,
+        "gate.require_fresh": "def require_fresh" in gate,
+        "runner.calls_gate": "require_fresh(" in runner,
+        "guard.per_symbol": "FIVE_MIN_POOL" in (_FIVE_MIN_ROOT / "scripts" / "ops" / "guard_invariants.py").read_text(encoding="utf-8"),
+    }
+    bad = [k for k, v in checks.items() if not v]
+    return not bad, "5m 完备性门存在且被扫描器真实调用", \
+        "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()), \
+        ("缺失：" + ",".join(bad) if bad else "")
+
+
+def _c_5m_exit_caliber(c: Ctx) -> tuple[bool, str, str, str]:
+    """exit_guard 口径：1R≙3ATR、止盈 2.5R、tp1 禁用、手数用 3ATR 风险。"""
+    src = _5m_src("app", "strategies", "five_min", "engine.py")
+    checks = {
+        "r_unit_3atr": bool(re.search(r"sl_atr\s*\*\s*self\.atr", src)),
+        "tp_2_5r": "tp_atr / self.sl_atr" in src,
+        "tp1_disabled": '"tp1_r": None' in src,
+        "risk_lots": bool(re.search(r"risk_r\s*/\s*\(sl_atr\s*\*\s*atr\s*\*\s*mult\)", src)),
+    }
+    bad = [k for k, v in checks.items() if not v]
+    return not bad, "5m 离场口径 1R=3ATR / TP=2.5R / tp1 禁用", \
+        "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()), \
+        ("口径漂移：" + ",".join(bad) + " → init_stop 传 1ATR 会让手数/止盈全错" if bad else "")
+
+
+def _c_5m_limit_order(c: Ctx) -> tuple[bool, str, str, str]:
+    """price_type 必须贯穿 API → DB → payload；DB 未迁移且开关关闭时记为待办通过。"""
+    api = _5m_src("app", "api", "routers", "execution.py")
+    runtime = _5m_src("app", "execution", "execution_runtime.py")
+    checks = {
+        "api_field": 'price_type: str = Field("LIMIT"' in api,
+        "payload": '"price_type": order.get("price_type") or "LIMIT"' in runtime,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    db_state = "列未迁移"
+    try:
+        rows = c.rows("""
+            SELECT column_default FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='execution_order'
+              AND column_name='price_type'
+        """)
+        if rows:
+            db_state = f"列存在 default={rows[0][0]}"
+            if "LIMIT" not in str(rows[0][0] or ""):
+                bad.append("db_default_not_limit")
+        elif _5m_switch(c, "five_min_pool_position_enabled"):
+            bad.append("migration_083_pending_while_switch_on")
+    except Exception as exc:  # noqa: BLE001
+        db_state = f"查询失败 {type(exc).__name__}"
+    return not bad, "限价单 price_type 全链路（API/DB/payload）", \
+        "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()) + ";" + db_state, \
+        ("缺失：" + ",".join(bad) if bad else "")
+
+
+def _c_5m_exec_gate(c: Ctx) -> tuple[bool, str, str, str]:
+    """上线门禁：开关打开时 EXECUTION_ENABLED=1 且 broker 不能是 sim。"""
+    api = _5m_src("app", "api", "routers", "execution.py")
+    on = _5m_switch(c, "five_min_pool_position_enabled")
+    enabled = os.getenv("EXECUTION_ENABLED", "0") == "1"
+    broker = os.getenv("EXECUTION_BROKER", "sim").lower()
+    wired = "def _require_enabled" in api and "503" in api
+    obs = (f"5m_switch={'on' if on else 'off'} EXECUTION_ENABLED={enabled} "
+           f"broker={broker} gate_wired={wired}")
+    if not on:
+        return wired, "5m 实盘门禁存在；策略未启用", obs + "（未启用，允许 sim）", \
+            ("" if wired else "_require_enabled 丢失")
+    bad = []
+    if not enabled:
+        bad.append("EXECUTION_ENABLED!=1")
+    if broker in ("sim", "simnow", "paper"):
+        bad.append("broker=sim（不可真盘下单）")
+    if not wired:
+        bad.append("门禁未接线")
+    return not bad, "5m 启用时实盘门禁与 broker 非 sim", obs, ";".join(bad)
+
+
+def _c_5m_schedule_parity(c: Ctx) -> tuple[bool, str, str, str]:
+    """调度真源一致：开关关闭时允许尚未注册；开启后 DB/代码/函数三处必须齐。"""
+    on = _5m_switch(c, "five_min_pool_position_enabled")
+    if not on:
+        return True, "5m 扫描调度注册与开关一致", "开关 off，尚未注册作业（P3 前不做）", ""
+    jobs = _5m_src("app", "scheduler_jobs.py")
+    sched = _5m_src("app", "scheduler.py")
+    try:
+        rows = c.rows("SELECT enabled, schedule FROM ops.scheduled_task "
+                      "WHERE job_id = 'five_min_scan'")
+    except Exception:  # noqa: BLE001
+        rows = []
+    checks = {
+        "db_job": bool(rows),
+        "job_spec": 'JobSpec("five_min_scan"' in jobs,
+        "scheduler_fn": "_five_min_scan_job" in sched,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    return not bad, "5m 扫描作业 DB/代码/函数三处一致", \
+        "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()), \
+        ("缺失：" + ",".join(bad) if bad else "")
+
+
+def _c_5m_single_pos(c: Ctx) -> tuple[bool, str, str, str]:
+    """池级单持仓：开关打开时同一 pool_id 不能有两笔未终态 OPEN 单。"""
+    if not _5m_switch(c, "five_min_pool_position_enabled"):
+        return True, "池级单持仓闸默认关闭，现状逐位不变", "switch off", ""
+    try:
+        rows = c.rows("""
+            SELECT pool_id, count(*) FROM execution_order
+            WHERE pool_id IS NOT NULL AND action = 'OPEN'
+              AND status IN ('NEW','SENT','PARTIAL','FILLED')
+            GROUP BY 1 HAVING count(*) > 1
+        """)
+    except Exception as exc:  # noqa: BLE001
+        return False, "同一 5m 池最多一笔在场单", "查询失败", f"{type(exc).__name__}"
+    bad = [f"{r[0]}={r[1]}" for r in rows]
+    return not bad, "同一 5m 池最多一笔在场单", f"越界池 {len(bad)} 个", \
+        ("；".join(bad) if bad else "")
+
+
+def _c_5m_risk_r(c: Ctx) -> tuple[bool, str, str, str]:
+    """单笔风险 R=500 且成本含 mult（P0 漏乘 bug 的防复发断言）。"""
+    cfg = _5m_src("app", "strategies", "five_min", "indicators.py")
+    eng = _5m_src("app", "strategies", "five_min", "engine.py")
+    checks = {
+        "r500": '"risk_r": 500.0' in cfg,
+        "lots_floor": bool(re.search(r"floor\(risk_r\s*/\s*\(sl_atr", eng)),
+        "cost_mult": "slip_ticks * tick * mult" in eng,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    return not bad, "5m 单笔 R=500 / 整数手 / 成本含 mult", \
+        "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()), \
+        ("漂移：" + ",".join(bad) if bad else "")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
+    # CL-20261121-04/05/06：5m 策略九条守卫。开关未开时只钉"接线存在+默认兼容"，
+    # 真正的行为断言在开关打开后生效；避免研究代码提前污染现网。
+    ("5M-BAR-FRESH", "策略池逐品种 bar_5m 追平已收完桶", "block", _c_5m_bar_fresh),
+    ("5M-BAR-GRID", "策略池 bar_5m 标签全在合法网格", "block", _c_5m_bar_grid),
+    ("5M-COMPLETE-GATE", "完备性门存在且被扫描器真实调用", "block", _c_5m_complete_gate),
+    ("5M-EXIT-CALIBER", "离场口径 1R=3ATR / TP=2.5R / tp1 禁用", "block", _c_5m_exit_caliber),
+    ("5M-LIMIT-ORDER", "限价单 price_type 全链路（API/DB/payload）", "block", _c_5m_limit_order),
+    ("5M-EXEC-GATE", "启用时 EXECUTION_ENABLED=1 且 broker 非 sim", "block", _c_5m_exec_gate),
+    ("5M-SCHEDULE-PARITY", "5m 扫描作业 DB/代码/函数三处一致", "block", _c_5m_schedule_parity),
+    ("5M-SINGLE-POS", "同一 5m 池最多一笔在场单", "block", _c_5m_single_pos),
+    ("5M-RISK-R", "单笔 R=500 / 整数手 / 成本含 mult", "block", _c_5m_risk_r),
     # CL-20261112-09：实时重放 1024 根历史窗口造成 337 行跨源冲突留痕。
     # 三条分别锁「不再新增冲突」「窗口真被裁切」「日终补缺真跑」，全部 block。
     ("OPS-L0-CROSS-SRC-QUIET", "实时采集不再反复重写跨源占位键",

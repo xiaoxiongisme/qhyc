@@ -37,6 +37,7 @@ def check_and_trigger(
     exchange: str,
     symbol_continuous: str | None = None,
     signal_id: str | None = None,
+    pool_id: str | None = None,
     channel: str = "SIM",
     account: str | None = None,
 ) -> dict[str, Any] | None:
@@ -61,6 +62,13 @@ def check_and_trigger(
 
     action = position_manager.derive_action(direction="SELL" if pos.net_lots > 0 else "BUY",
                                             pos=pos, exchange=exchange)
+    # CL-20261121-06：止损路径绕过 API，必须自己过一次池级平仓闸（仅显式 pool_id 时）。
+    if pool_id:
+        from app.strategies.five_min.pool_position import PoolPositionGuard
+
+        ok, reason = PoolPositionGuard().check_close(pool_id, real_symbol)
+        if not ok:
+            raise ValueError(f"[fail-loud] 止损平仓被池级闸拒绝：{reason}")
     from datetime import date
 
     key = persistence.build_idempotency_key(
@@ -74,6 +82,8 @@ def check_and_trigger(
         "direction": "SELL" if pos.net_lots > 0 else "BUY",
         "price": float(last_price),
         "price_space": "raw",
+        "price_type": "LIMIT",
+        "pool_id": pool_id,
         "lots": abs(pos.net_lots),
         "channel": channel,
         "account": account,

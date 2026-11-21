@@ -289,7 +289,7 @@ class CtpSession:
 
     # ---------------------------------------------------- 下单
     def submit(self, symbol: str, direction: str, action: str,
-               price: float, lots: int) -> dict[str, Any]:
+               price: float, lots: int, price_type: str = "LIMIT") -> dict[str, Any]:
         inst = self.resolve(symbol)
         combination = ACTION_MAP.get((action.upper(), direction.upper()))
         if combination is None:
@@ -311,7 +311,23 @@ class CtpSession:
         req.CombHedgeFlag = str(tdapi.THOST_FTDC_HF_Speculation)
         req.LimitPrice = price
         req.VolumeTotalOriginal = lots
-        req.OrderPriceType = mdapi.THOST_FTDC_OPT_LimitPrice
+        # CL-20261121-05：OrderPriceType 不再硬编码。未传/传 LIMIT 与现网逐位一致；
+        # MARKET 必须能找到 CTP 常量才发单，绝不能"静默降级为限价"（那就等于
+        # 用错价格类型下出真实资金单）。市价时价格字段按 CTP 规范传 0。
+        ptype = str(price_type or "LIMIT").upper()
+        if ptype == "LIMIT":
+            req.OrderPriceType = mdapi.THOST_FTDC_OPT_LimitPrice
+            req.LimitPrice = price
+        elif ptype == "MARKET":
+            any_price = getattr(mdapi, "THOST_FTDC_OPT_AnyPrice", None)
+            if any_price is None:
+                raise ValueError(
+                    "CTP SDK 无 THOST_FTDC_OPT_AnyPrice，拒绝以未知价格类型下单"
+                    "（禁止静默按限价/市价替代）")
+            req.OrderPriceType = any_price
+            req.LimitPrice = 0.0
+        else:
+            raise ValueError(f"不支持的 price_type={price_type!r}（仅 LIMIT/MARKET）")
         req.TimeCondition = mdapi.THOST_FTDC_TC_GFD
         req.VolumeCondition = mdapi.THOST_FTDC_VC_AV
         req.MinVolume = 1
@@ -329,6 +345,7 @@ class CtpSession:
                 "direction": direction.upper(),
                 "action": action.upper(),
                 "price": price,
+                "price_type": ptype,
                 "lots": lots,
                 "status": "SUBMITTING",
                 "filled_lots": 0,
@@ -574,6 +591,7 @@ class OrderIn(BaseModel):
     direction: str
     action: str = "OPEN"
     price: float | None = None
+    price_type: str = "LIMIT"
     lots: int
     channel: str | None = None
     account: str | None = None
@@ -607,13 +625,17 @@ def get_instrument(symbol: str) -> dict[str, Any]:
 def place(body: OrderIn) -> dict[str, Any]:
     if not SESSION.ready.is_set():
         raise HTTPException(503, f"CTP 未就绪：{SESSION.login_error or '尚未登录'}")
-    if body.price is None:
-        raise HTTPException(400, "price 必填：本网关首版只发限价单（市价单各家期货公司风控不同）")
+    ptype = str(body.price_type or "LIMIT").upper()
+    if ptype not in ("LIMIT", "MARKET"):
+        raise HTTPException(400, f"price_type 仅支持 LIMIT/MARKET，收到 {body.price_type!r}")
+    if ptype == "LIMIT" and body.price is None:
+        raise HTTPException(400, "LIMIT 单 price 必填（本网关首版不接无价市价单）")
     if body.lots <= 0:
         raise HTTPException(400, f"lots 必须为正整数，收到 {body.lots}")
     try:
         res = SESSION.submit(body.real_symbol, body.direction,
-                             body.action, body.price, body.lots)
+                             body.action, body.price or 0.0, body.lots,
+                             price_type=ptype)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if res["state"] == "TIMEOUT_UNKNOWN":

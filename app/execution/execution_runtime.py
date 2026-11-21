@@ -53,6 +53,11 @@ def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[s
         "direction": order["direction"],
         "action": order["action"],
         "price": float(order["price"]),
+        # CL-20261121-05：价格类型必须下发，否则网关只能猜（现网 CTP 硬编码限价）。
+        # 未改造的旧单（迁移前落库）取 DEFAULT 'LIMIT'，保持既有行为。
+        "price_type": order.get("price_type") or "LIMIT",
+        # CL-20261121-06：池级归属随 payload 下发，便于网关/审计侧识别同池单。
+        "pool_id": order.get("pool_id"),
         "lots": int(order["lots"]),
         "channel": order["channel"],
         "account": order["account"],

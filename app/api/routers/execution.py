@@ -57,6 +57,11 @@ class SubmitOrderReq(BaseModel):
     direction: str = Field(..., pattern="^(BUY|SELL)$")
     price: float = Field(..., gt=0)
     lots: int = Field(..., gt=0)
+    # CL-20261121-05 / 5M-P0B：默认 LIMIT 保持既有行为逐位不变；
+    # MARKET 仅在网关显式支持时才可生效（ctp_gateway 对未知类型 fail-loud）。
+    price_type: str = Field("LIMIT", pattern="^(LIMIT|MARKET)$")
+    pool_id: Optional[str] = Field(
+        None, description="5M-P0C 池级单持仓归属；不传则完全不启用池级闸")
     symbol_continuous: Optional[str] = None
     signal_id: Optional[str] = None
     multiplier: Optional[float] = None
@@ -64,6 +69,29 @@ class SubmitOrderReq(BaseModel):
     account: Optional[str] = None
     channel: Optional[str] = None
     dry_run: bool = Field(False, description="仅落库不下发（默认 False）")
+
+
+def build_order_dict(req: SubmitOrderReq, account: str | None,
+                     channel: str | None, key: str) -> dict[str, Any]:
+    """请求 → 落库字典（纯函数，便于离线断言字段贯穿，无需 DB）。"""
+    return {
+        "signal_id": req.signal_id or f"MANUAL:{req.real_symbol}",
+        "symbol_continuous": req.symbol_continuous or f"{req.real_symbol[:-4]}888",
+        "real_symbol": req.real_symbol,
+        "exchange": req.exchange,
+        "action": req.action,
+        "direction": req.direction,
+        "price": req.price,
+        "price_type": req.price_type,
+        "pool_id": req.pool_id,
+        "price_space": req.price_space,
+        "lots": req.lots,
+        "multiplier": req.multiplier,
+        "notional": (req.price * req.lots * req.multiplier) if req.multiplier else None,
+        "channel": channel,
+        "account": account,
+        "idempotency_key": key,
+    }
 
 
 @router.post("/orders", tags=["execution"])
@@ -109,22 +137,24 @@ def submit_order(req: SubmitOrderReq) -> dict:
                     f"status={dup['status']}（幂等键含交易日，跨天不再幂等）"
                     f"→ 本次**未落新单**（既有订单未被修改）"),
             }
-    order = {
-        "signal_id": req.signal_id or f"MANUAL:{req.real_symbol}",
-        "symbol_continuous": req.symbol_continuous or f"{req.real_symbol[:-4]}888",
-        "real_symbol": req.real_symbol,
-        "exchange": req.exchange,
-        "action": req.action,
-        "direction": req.direction,
-        "price": req.price,
-        "price_space": req.price_space,
-        "lots": req.lots,
-        "multiplier": req.multiplier,
-        "notional": (req.price * req.lots * req.multiplier) if req.multiplier else None,
-        "channel": channel,
-        "account": account,
-        "idempotency_key": key,
-    }
+    # CL-20261121-06 / 5M-P0C 第 0 道闸：池级单持仓。仅在显式声明 pool_id
+    # 且开关打开时生效；默认关闭/不传 pool_id 时本节完全不触碰现有路径。
+    if req.pool_id:
+        from app.strategies.five_min.pool_position import PoolPositionGuard
+
+        guard = PoolPositionGuard()
+        if req.action.startswith("OPEN"):
+            allowed, reason = guard.check_open(req.pool_id, req.real_symbol, req.signal_id)
+        else:
+            allowed, reason = guard.check_close(req.pool_id, req.real_symbol)
+        if not allowed:
+            return {
+                "order_id": None,
+                "state": "POOL_POSITION_BLOCKED",
+                "pool_id": req.pool_id,
+                "reason": reason,
+            }
+    order = build_order_dict(req, account, channel, key)
     order_id = persistence.save_order(order)
     if req.dry_run:
         return {"order_id": order_id, "state": "DRY_RUN", "idempotency_key": key}
