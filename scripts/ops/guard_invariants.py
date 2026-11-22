@@ -549,6 +549,55 @@ def _c_l0_index_hist_coverage(c: Ctx) -> tuple[bool, str, str, str]:
                       "洞不会自愈，必须从 contract 层补数后窗口化重建")
 
 
+def _c_index_8888_lag(c: Ctx) -> tuple[bool, str, str, str]:
+    """口径内每个 8888 指数连不得落后其合约层超过 2 个交易日（CL-20261121-03）。
+
+    ``DATA-L0-INDEX-COVERAGE`` 要 5/38 缺席（覆盖率 < 90%）才报警，实测从首个
+    品种停写到告警隔了 3 天；``DATA-INDEX-8888-SEAM`` 的缺口 ≤2 日阈值又太宽。
+    本断言在**单品种停写当日**即可发现：对每个口径内 8888，比较 index 层最后
+    一根与该品种合约层最后一根，落后 > 2 个交易日即 FAIL。
+
+    这类落后正是换月日 seam_mismatch → 拒写 → dormant 自锁的早期形态，提前预警
+    可在污染换月 ratio 门之前介入。查询严格窗口化（30 天）+ 限定口径内符号，
+    禁止对 l0_raw.minute_bar 全表 GROUP BY。
+    """
+    rows = c.rows("""
+        WITH sc AS (
+          SELECT symbol AS idx_sym, regexp_replace(symbol, '8888$', '') AS v
+          FROM l3_ref.v_tradable_scope WHERE symbol LIKE '%8888'
+        ), idx AS (
+          SELECT b.symbol AS idx_sym2, max(b.ts) AS last_idx
+          FROM l0_raw.minute_bar b
+          WHERE b.layer = 'index' AND b.ts >= now() - interval '30 days'
+            AND b.symbol IN (SELECT symbol FROM l3_ref.v_tradable_scope
+                             WHERE symbol LIKE '%8888')
+          GROUP BY 1
+        ), ctr AS (
+          SELECT c.variety_code AS v2, max(c.ts) AS last_ctr
+          FROM l0_raw.minute_bar c
+          WHERE c.layer = 'contract' AND c.ts >= now() - interval '30 days'
+            AND c.variety_code IN (SELECT regexp_replace(symbol, '8888$', '')
+                                   FROM l3_ref.v_tradable_scope
+                                   WHERE symbol LIKE '%8888')
+          GROUP BY 1
+        )
+        SELECT sc.idx_sym, i.last_idx, k.last_ctr,
+               round(date_part('day', k.last_ctr - i.last_idx)::numeric, 2) AS lag_days
+        FROM sc
+        LEFT JOIN idx i ON i.idx_sym2 = sc.idx_sym
+        LEFT JOIN ctr k ON k.v2 = sc.v
+        WHERE i.last_idx IS NOT NULL AND k.last_ctr IS NOT NULL
+          AND k.last_ctr - i.last_idx > interval '2 days'
+        ORDER BY lag_days DESC
+    """)
+    bad = list(rows or [])
+    obs = (f"口径内 8888 落后合约层 >2 日的 {len(bad)} 个"
+           + (f"：{', '.join(f'{r[0]}({float(r[3]):.1f}d)' for r in bad[:12])}" if bad else ""))
+    return not bad, "口径内 8888 指数连滞后合约层 ≤ 2 交易日", obs, (
+        "" if not bad else f"8888 停写早期信号：{obs}；"
+                           "换月日 seam_mismatch 拒写后自锁，须在污染 ratio 门前介入")
+
+
 def _c_bar_grid_valid(c: Ctx) -> tuple[bool, str, str, str]:
     """L1/L2 近 14 天不得有非网格「在途半截桶」，BA 桶集必须是 L1 的子集。
 
@@ -8422,6 +8471,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 洞不会自愈，必须逐交易日盯住最近 6 个已收盘日。
     ("DATA-L0-INDEX-HIST-COVERAGE", "近 6 个已收盘交易日指数层无历史洞",
      "block", _c_l0_index_hist_coverage),
+    # CL-20261121-03：上面两条要 5/38 缺席才报警（实测晚 3 天）。本条盯单品种
+    # index 落后 contract > 2 交易日，在换月日停写当日即预警，配合合成脚本的
+    # 动态锚点判据 + 口径内 dormant 例外形成「自愈 + 早报」双保险。
+    ("DATA-INDEX-8888-LAG", "口径内 8888 指数连滞后合约层 ≤ 2 交易日",
+     "warn", _c_index_8888_lag),
     # CL-20261110-02：跨周期对拍只查 L1，而 V5X 读 BA；非网格在途桶与
     # BA 孤儿桶两层都没人看。必须同时断言标签合法性与 BA ⊆ L1。
     ("BAR-GRID-VALID", "L1/L2 桶标签合法且 BA ⊆ L1", "block", _c_bar_grid_valid),

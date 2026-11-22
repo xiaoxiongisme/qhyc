@@ -71,7 +71,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Sequence
 
 import numpy as np
@@ -101,6 +101,19 @@ SEAM_LOOKBACK_DAYS = 30
 #: 参与全局判据，脚本每 30 分钟返回 exit 2，把「其余 80 个品种已正常写入」
 #: 的事实淹没在 ERROR 里（CL-20261110-01）。
 DORMANT_DAYS = 7
+
+# ---- CL-20261121-03 防复发参数 ----
+#: 锚点日完整性动态判据：行数须 ≥ min(MIN_SEAM_DAY_ROWS, 近 N 完整日中位数×本比例)。
+#: 事故复盘：11-13 A 残段日仅 59 行（正常 345），却因 MIN_SEAM_DAY_ROWS=30 被当
+#: 完整接缝日，front 已切新合约 → 残差跳变 → seam_mismatch → 拒写 → 7 天后
+#: dormant 永久跳过。固定 30 行的绝对门槛无法区分「真休眠的 1~2 行」和
+#: 「活跃品种的盘中残段 59 行」，必须按品种自身的中位数动态判定。
+DYNAMIC_SEAM_RATIO = 0.6
+SEAM_MEDIAN_DAYS = 10
+#: seam_mismatch 时向前回溯稳定锚点的最大交易日数（Timescale chunk 剪枝）。
+REBUILD_LOOKBACK_DAYS = 5
+#: 自动重建的备份表（带 rebuild_run/variety_code/rebuilt_at 额外列）。
+REBUILD_BAK_TABLE = "public.bak_8888_auto_rebuild"
 
 
 def _connect():
@@ -149,7 +162,35 @@ def _seam_anchor(cur, variety: str):
     下一轮也能自动从完整日重算接缝并补齐，不会死锁。
 
     返回 ``(seam_day, last_ts, exchange, amt_caliber)``；无完整日返回 None。
+
+    CL-20261121-03：动态完整日判据
+    --------------------------------
+    固定 ``MIN_SEAM_DAY_ROWS=30`` 挡不住「活跃品种的盘中残段日」（实测 A 在
+    2026-11-13 只写 59 行、正常日 345 行，仍 ≥30 被当完整日）。锚点落在残段日
+    会让 delta 用错 front 基线 → seam_mismatch → 拒写 → dormant 永久跳过。
+
+    改为：先取该品种近 SEAM_MEDIAN_DAYS 个自然日里「行数达到绝对门槛」的那些日，
+    以它们的行数中位数 × DYNAMIC_SEAM_RATIO 作为动态门槛，再取满足动态门槛的
+    最后一个日。这样残段日（远低于中位数）自动被排除，锚点回退到真正的完整日。
+
+    绝对门槛 MIN_SEAM_DAY_ROWS 仍保留为下限，防止全品种都残缺时把垃圾日当锚点。
     """
+    # 1) 近 N 日的日行数分布（只看达到绝对门槛的日，避免休眠/残段拉低中位数）
+    cur.execute("""
+        SELECT count(*) AS n
+        FROM l0_raw.minute_bar
+        WHERE layer = 'index' AND symbol = %s
+          AND ts >= now() - make_interval(days => %s)
+        GROUP BY ts::date HAVING count(*) >= %s
+        ORDER BY 1
+    """, (variety + "8888", SEAM_LOOKBACK_DAYS, MIN_SEAM_DAY_ROWS))
+    counts = [r[0] for r in cur.fetchall()]
+    if not counts:
+        return None
+    median_rows = float(np.median(counts))
+    threshold = max(MIN_SEAM_DAY_ROWS, int(median_rows * DYNAMIC_SEAM_RATIO))
+
+    # 2) 取满足动态门槛的最后一个完整日
     cur.execute("""
         SELECT ts::date AS d, max(ts) AS mx
         FROM l0_raw.minute_bar
@@ -157,14 +198,14 @@ def _seam_anchor(cur, variety: str):
           AND ts >= now() - make_interval(days => %s)
         GROUP BY 1 HAVING count(*) >= %s
         ORDER BY 1 DESC LIMIT 1
-    """, (variety + "8888", SEAM_LOOKBACK_DAYS, MIN_SEAM_DAY_ROWS))
+    """, (variety + "8888", SEAM_LOOKBACK_DAYS, threshold))
     row = cur.fetchone()
     if row is None:
         return None
     last = _last_index(cur, variety)
     if last is None:
         return None
-    return row[0], last[0], last[2], last[3]
+    return row[0], last[0], last[2], last[3], threshold
 
 
 def _daily_quality(cur, syms: Sequence[str], t0: datetime, t1: datetime) -> pd.DataFrame:
@@ -243,13 +284,43 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
     probe = _last_index(cur, variety)
     if probe is None:
         return {"variety": variety, "status": "no_index_series", "rows": 0}
-    if probe[0] < datetime.now(probe[0].tzinfo) - timedelta(days=DORMANT_DAYS):
-        return {"variety": variety, "status": "dormant", "rows": 0}
+
+    # CL-20261121-03：dormant 误判修正。
+    # 旧实现只按「index 最后一根距今的天数」判休眠，无法区分：
+    #   * 真休眠（FB/WR：合约层也无新数据）——应跳过；
+    #   * 假休眠（A/JD/PK 因 seam_mismatch 停写，但合约层仍在更新）——必须继续处理，
+    #     否则随天数增长越过 DORMANT_DAYS 后被永久跳过，真因被掩盖且不会自愈。
+    # 修法（严格限定范围）：仅当品种同时满足
+    #   (a) 在口径内 l3_ref.v_tradable_scope（8888 是换月 ratio 门唯一输入，只有
+    #       口径内品种的停写才会污染交易链）；且
+    #   (b) 合约层仍有新数据（last contract ts > index 最后一根）；
+    # 才覆盖 dormant 进入接缝校验。
+    # 口径外的老品种（AL/AU/FB/LH/SN/TL/WR/ZN 等）历史曲线与当前重算本就不同源，
+    # 它们的合约层也一直有新数据，若一并放开会把「dormant 跳过」变成一片
+    # seam_mismatch 报错（实测 dry-run 新增 4 个 FAIL、exit 2）——必须维持跳过。
+    dormant = probe[0] < datetime.now(probe[0].tzinfo) - timedelta(days=DORMANT_DAYS)
+    if dormant:
+        cur.execute("SELECT 1 FROM l3_ref.v_tradable_scope WHERE symbol = %s",
+                    (variety + "8888",))
+        in_scope = cur.fetchone() is not None
+        if in_scope:
+            cur.execute("SELECT max(ts) FROM l0_raw.minute_bar "
+                        "WHERE layer='contract' AND variety_code=%s AND ts > %s",
+                        (variety, probe[0]))
+            cts = cur.fetchone()[0]
+        else:
+            cts = None
+        if not in_scope or cts is None:
+            return {"variety": variety, "status": "dormant", "rows": 0}
+        # 口径内 + 合约层有新数据 → 活跃品种被误判，继续处理并显式标记
+        dormant_overridden = True
+    else:
+        dormant_overridden = False
 
     anchor = _seam_anchor(cur, variety)
     if anchor is None:
         return {"variety": variety, "status": "no_seam_anchor", "rows": 0}
-    seam_day, last_ts, exchange, amt_caliber = anchor
+    seam_day, last_ts, exchange, amt_caliber, dynamic_threshold = anchor
 
     # 窗口：从「最后一个完整日的前 1 天」开始，保证接缝日能被完整重建。
     # 注意不能用 last_ts（可能只写了 1 根的盘中残段日）——见 _seam_anchor 文档。
@@ -388,7 +459,8 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
     resid = (out.loc[common, "close"] - stored.loc[common]).astype("float64")
     spread = float(resid.max() - resid.min())
     if spread > SEAM_EPS:
-        return {"variety": variety, "status": f"seam_mismatch(spread={spread:.6f})", "rows": 0}
+        return {"variety": variety, "status": f"seam_mismatch(spread={spread:.6f})",
+                "rows": 0, "seam_day": str(seam_day), "dormant_overridden": dormant_overridden}
     delta = float(resid.median())
 
     # ---- 3) 只取新增行（坏日已在 stage 层剔除，不会出现在 out 里）----
@@ -409,7 +481,9 @@ def extend_one(cur, variety: str, dry_run: bool) -> dict:
         return {"variety": variety, "status": "dry-run", "rows": len(new),
                 "ffill_dropped": n_filled, "skipped_days": bad_days,
                 "range": f"{new.index.min()} .. {new.index.max()}",
-                "delta": round(delta, 4)}
+                "delta": round(delta, 4), "seam_day": str(seam_day),
+                "dormant_overridden": dormant_overridden,
+                "dynamic_threshold": dynamic_threshold}
 
     rows = []
     for ts, r in new.iterrows():
