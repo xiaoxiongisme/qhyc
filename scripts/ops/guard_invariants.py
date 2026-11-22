@@ -38,6 +38,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import re
@@ -1593,6 +1594,73 @@ def _c_factor_freshness_coverage(c: Ctx) -> tuple[bool, str, str, str]:
     return not bad, label, f"6 例对拍 + 集成对拍 / 违规 {len(bad)}", "；".join(bad)
 
 
+def _is_mpr_delivery_exit(symbol: str, trade_date: date, sl: int,
+                          prev_sl: int, future_max: int | None) -> bool:
+    """判定逐合约持仓腰斩是否为「临近交割的自然退场」（CL-20261122-04）。
+
+    必须同时满足三条，缺一不可：
+      1. 只豁免腰斩（sl < prev_sl），暴涨方向绝不豁免；
+      2. 合约代码末 4 位为合法 YYMM，交割月距交易日 <= 1 个自然月
+         （LL2612 在 11 月腰斩 → 交割月 12 月，满足；P2705 距 6 个月，不满足）；
+      3. 腰斩后不反弹：后续最大持仓 <= 腰斩值 × 1.5，无后续数据视为已退场。
+
+    第 3 条是区分「真实退场」与「采集残缺」的关键：11-06 P2705 坏值
+    220849→11955 会在次日弹回 20 万级，而 L2612/M2612 退场后一路递减
+    或直接消失，永不反弹。
+    """
+    if sl >= prev_sl:
+        return False
+    m = re.search(r"(\d{2})(\d{2})$", symbol)
+    if not m:
+        return False
+    yy, mm = int(m.group(1)), int(m.group(2))
+    if not 1 <= mm <= 12:
+        return False
+    delivery_idx = (2000 + yy) * 12 + mm
+    trade_idx = trade_date.year * 12 + trade_date.month
+    if delivery_idx > trade_idx + 1:
+        return False
+    if future_max is not None and float(future_max) > float(sl) * 1.5:
+        return False
+    return True
+
+
+def _c_mpr_exit_exemption_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261122-04：退场豁免必须真接线，且只能放过退场、不能放过坏值。
+
+    直接 import 主守卫调用的 `_is_mpr_delivery_exit` 做六例对拍——这是对
+    「豁免逻辑真实生效、且没被改宽」的真实引用断言，而非只检查源码里有
+    这个函数名（防止「定义了没人用」或「条件被悄悄放宽」两类静默失效）。
+    """
+    label = "DCE 腰斩守卫的退场豁免真接线且坏值不放行"
+    bad: list[str] = []
+    try:
+        from scripts.ops.guard_invariants import (  # noqa: PLC0415
+            _is_mpr_delivery_exit as pred,
+            _c_mpr_dce_contract_continuity as main_guard,
+        )
+        src = inspect.getsource(main_guard)
+        if "_is_mpr_delivery_exit" not in src:
+            bad.append("主守卫未调用豁免判据（定义了没人用）")
+        if "future_max" not in src:
+            bad.append("主守卫未把后续持仓传给豁免判据")
+        cases = [
+            ("L2612 退场后消失", "L2612", date(2026, 11, 17), 19321, 73257, None, True),
+            ("M2612 退场后递减", "M2612", date(2026, 11, 17), 55647, 197063, 33388, True),
+            ("P2705 坏值会反弹", "P2705", date(2026, 11, 6), 11955, 220849, 200792, False),
+            ("PP2701 坏值会反弹", "PP2701", date(2026, 11, 6), 26249, 447868, 413880, False),
+            ("临近交割但反弹", "L2612", date(2026, 11, 17), 19321, 73257, 100000, False),
+            ("暴涨方向不豁免", "L2701", date(2026, 11, 17), 300000, 100000, None, False),
+        ]
+        for name, sym, d, sl, prev, fut, want in cases:
+            got = pred(sym, d, sl, prev, fut)
+            if got != want:
+                bad.append(f"{name}: 期望豁免={want} 实际={got}")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"导入/对拍失败 {type(exc).__name__}: {str(exc)[:150]}")
+    return not bad, label, f"6 例对拍 + 真实引用 / 违规 {len(bad)}", "；".join(bad)
+
+
 def _c_mpr_dce_contract_continuity(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261110-12：DCE 会员持仓必须**逐合约**检查规模连续性。
 
@@ -1618,10 +1686,14 @@ def _c_mpr_dce_contract_continuity(c: Ctx) -> tuple[bool, str, str, str]:
               GROUP BY 1,2
             ), lagd AS (
               SELECT trade_date, symbol, sl,
-                     lag(sl) OVER (PARTITION BY symbol ORDER BY trade_date) prev_sl
+                     lag(sl) OVER (PARTITION BY symbol ORDER BY trade_date) prev_sl,
+                     max(sl) OVER (
+                       PARTITION BY symbol ORDER BY trade_date
+                       ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+                     ) AS future_max
               FROM daily
             )
-            SELECT trade_date, symbol, sl, prev_sl,
+            SELECT trade_date, symbol, sl, prev_sl, future_max,
                    round(sl::numeric / nullif(prev_sl, 0), 3) ratio
             FROM lagd
             WHERE prev_sl > 10000 AND (sl < prev_sl * 0.3 OR sl > prev_sl * 3.0)
@@ -1629,8 +1701,18 @@ def _c_mpr_dce_contract_continuity(c: Ctx) -> tuple[bool, str, str, str]:
         """)
     except Exception as exc:  # noqa: BLE001
         return False, label, f"查询失败 {type(exc).__name__}", str(exc)[:200]
-    bad = [f"{r[0]} {r[1]} long={r[2]} prev={r[3]} ratio={r[4]}" for r in rows]
-    return not bad, label, f"逐合约腰斩/暴涨 {len(bad)} 处", "；".join(bad[:10])
+    bad: list[str] = []
+    exempt: list[str] = []
+    for r in rows:
+        d, sym, sl, prev, future, ratio = r[0], r[1], r[2], r[3], r[4], r[5]
+        if _is_mpr_delivery_exit(sym, d, sl, prev, future):
+            exempt.append(f"{d} {sym} long={sl} prev={prev} ratio={ratio}(交割退场豁免)")
+        else:
+            bad.append(f"{d} {sym} long={sl} prev={prev} ratio={ratio}")
+    detail = "；".join(bad[:10]) or "无"
+    if exempt:
+        detail += "｜豁免：" + "；".join(exempt[:5])
+    return not bad, label, f"逐合约腰斩/暴涨 {len(bad)} 处（退场豁免 {len(exempt)}）", detail
 
 
 def _c_daily_refresh_wired(c: Ctx) -> tuple[bool, str, str, str]:
@@ -8548,6 +8630,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261110-12：11-06 DCE 11 个合约数值腰斩，品种数型监控全 PASS。
     ("OPS-MPR-DCE-CONTRACT-CONTINUITY", "DCE 会员持仓逐合约规模连续（无腰斩/暴涨）",
      "block", _c_mpr_dce_contract_continuity),
+    # CL-20261122-04：退场豁免是放宽判据，必须有真实引用断言锁住——
+    # 既防「定义了没接线」，也防条件被悄悄放宽到放过采集坏值。
+    ("OPS-MPR-EXIT-EXEMPTION-WIRED", "DCE 退场豁免真接线且坏值不放行",
+     "block", _c_mpr_exit_exemption_wired),
     ("OPS-DAILY-REFRESH-WIRED", "日频刷新链接通且失败冒泡", "block",
      _c_daily_refresh_wired),
     ("OPS-MEM-CALIBER", "内存告警读 cgroup 限额（非宿主全局口径）", "block", _c_mem_caliber),
