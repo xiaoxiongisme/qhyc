@@ -8458,6 +8458,45 @@ def _c_5m_risk_r(c: Ctx) -> tuple[bool, str, str, str]:
         ("漂移：" + ",".join(bad) if bad else "")
 
 
+def _c_5m_sim_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261123-02：5m 模拟盘必须走 sim 端点、作业复用端点、实盘开关不动。
+
+    真实引用断言（防「端点建了没人读」与「配置漂移送单到真柜」两类静默失效）：
+      * sim 端点存在且强制 channel=SIM + broker==sim 校验；
+      * 扫描作业函数存在、DB 任务登记、JobSpec 三处齐；
+      * 作业源码真实调用 scan_once 与 submit_sim_order（同源，非另起落单逻辑）；
+      * 实盘开关 five_min_pool_position_enabled 必须仍 off（模拟盘不得打开实盘闸）。
+    """
+    api = _5m_src("api", "routers", "execution.py")
+    sched = _5m_src("scheduler.py")
+    jobs = _5m_src("scheduler_jobs.py")
+    checks = {
+        "sim_endpoint": "def submit_sim_order(" in api and '@router.post("/sim/orders"' in api,
+        "force_sim_channel": 'channel = "SIM"' in api and "非 sim → 拒绝模拟盘下单" in api,
+        "job_fn": "def _five_min_scan_job(" in sched,
+        "job_spec": 'JobSpec("five_min_scan"' in jobs,
+        "uses_scan_once": "from app.strategies.five_min.runner import" in sched
+                          and "scan_once(" in sched,
+        "reuses_endpoint": "submit_sim_order" in sched,
+        "broker_guard_in_job": "EXECUTION_BROKER" in sched and "非 sim" in sched,
+    }
+    try:
+        rows = c.rows("SELECT enabled FROM ops.scheduled_task WHERE task_id='five_min_scan'")
+        checks["db_job"] = bool(rows)
+        live = c.rows("SELECT enabled FROM cfg_feature_switch "
+                      "WHERE switch_key='five_min_pool_position_enabled'")
+        checks["live_switch_off"] = bool(live) and not bool(live[0][0])
+        sim_sw = c.rows("SELECT enabled FROM cfg_feature_switch "
+                        "WHERE switch_key='five_min_sim_scan_enabled'")
+        checks["sim_switch_registered"] = bool(sim_sw)
+    except Exception:  # noqa: BLE001
+        checks["db_job"] = checks["live_switch_off"] = checks["sim_switch_registered"] = False
+    bad = [k for k, v in checks.items() if not v]
+    obs = "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items())
+    return not bad, "5m 模拟盘 sim 端点/作业同源且实盘隔离", obs, \
+        ("缺失：" + ",".join(bad) if bad else "")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261121-04/05/06：5m 策略九条守卫。开关未开时只钉"接线存在+默认兼容"，
     # 真正的行为断言在开关打开后生效；避免研究代码提前污染现网。
@@ -8470,6 +8509,7 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("5M-SCHEDULE-PARITY", "5m 扫描作业 DB/代码/函数三处一致", "block", _c_5m_schedule_parity),
     ("5M-SINGLE-POS", "同一 5m 池最多一笔在场单", "block", _c_5m_single_pos),
     ("5M-RISK-R", "单笔 R=500 / 整数手 / 成本含 mult", "block", _c_5m_risk_r),
+    ("5M-SIM-SCAN-WIRED", "5m 模拟盘 sim 端点/作业同源且实盘隔离", "block", _c_5m_sim_scan_wired),
     # CL-20261112-09：实时重放 1024 根历史窗口造成 337 行跨源冲突留痕。
     # 三条分别锁「不再新增冲突」「窗口真被裁切」「日终补缺真跑」，全部 block。
     ("OPS-L0-CROSS-SRC-QUIET", "实时采集不再反复重写跨源占位键",

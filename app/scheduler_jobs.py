@@ -111,6 +111,9 @@ def build_job_registry() -> list[JobSpec]:
         JobSpec("preopen_gate_day_1255", "preopen_gate", "day_1255", _GAP_DAILY, preopen_on, False),
         JobSpec("preopen_gate_night_2030", "preopen_gate", "night_2030", _GAP_DAILY, preopen_on, False),
         JobSpec("fusion_scan", "fusion_scan", "scan", _GAP_DAILY, fusion_on, False),
+        # CL-20261123-02：5m 模拟盘扫描。开关 five_min_sim_scan_enabled 默认 off；
+        # 作业常驻注册表但整轮 return，不写 task_run，留痕靠 execution_order。
+        JobSpec("five_min_scan", "five_min_scan", "sim", _GAP_DAILY, True, False),
         JobSpec("hourly_collect", "hourly_collect", "collect", _GAP_DAILY, hourly_on, False),
         JobSpec("minute_and_bars", "minute_and_bars", "pipeline", _GAP_DAILY, True, False),
         JobSpec("back_adjusted_rebuild", "back_adjusted", "rebuild", _GAP_DAILY, True, False),

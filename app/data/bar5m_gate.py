@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Mapping
 
+from sqlalchemy import text
+
 FIVE_MIN = timedelta(minutes=5)
 DEFAULT_MAX_AGE_MIN = 90
 _LOOKBACK_DAYS = 3
@@ -172,7 +174,7 @@ def load_minute_max(session, symbols: list[str],
     if not symbols:
         return {}
     rows = session.execute(
-        _MINUTE_SQL, {"syms": list(symbols), "days": lookback_days}).all()
+        text(_MINUTE_SQL), {"syms": list(symbols), "days": lookback_days}).all()
     return {str(s): _norm_ts(ts, datetime.now()) for s, ts in rows if ts is not None}
 
 
@@ -182,7 +184,7 @@ def load_bar5m_max(session, symbols: list[str],
     if not symbols:
         return {}
     rows = session.execute(
-        _BAR_SQL, {"syms": list(symbols), "days": lookback_days}).all()
+        text(_BAR_SQL), {"syms": list(symbols), "days": lookback_days}).all()
     return {str(s): _norm_ts(ts, datetime.now()) for s, ts in rows if ts is not None}
 
 

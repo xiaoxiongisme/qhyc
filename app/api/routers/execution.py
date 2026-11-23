@@ -162,6 +162,50 @@ def submit_order(req: SubmitOrderReq) -> dict:
     return {"order_id": order_id, "idempotency_key": key, **res}
 
 
+@router.post("/sim/orders", tags=["execution"])
+def submit_sim_order(req: SubmitOrderReq) -> dict:
+    """5m 模拟盘专用下单端点（CL-20261123-02）。
+
+    与 :func:`submit_order` 的唯一区别是**门禁口径**，不是下单逻辑：
+
+    * 不查 ``EXECUTION_ENABLED`` —— 本端点永不触达真实资金；
+    * **强制** ``channel=SIM``、``broker=sim``，任一不满足即 503 fail-loud，
+      绝不因配置漂移把模拟盘订单送到 CTP/QMT；
+    * 其余落库/幂等/网关下发全部复用 :func:`build_order_dict`、
+      :mod:`persistence`、:mod:`execution_runtime`，行为与实盘端点逐位一致。
+
+    ⚠ 调用方只应是 5m 模拟扫描作业；人工调用请先确认 ``EXECUTION_BROKER=sim``。
+    """
+    from datetime import date
+
+    from app.execution import execution_runtime, persistence
+
+    cfg = get_settings().execution
+    if str(cfg.broker).lower() != "sim":
+        raise HTTPException(
+            503,
+            f"EXECUTION_BROKER={cfg.broker!r} 非 sim → 拒绝模拟盘下单"
+            "（防止配置漂移把 sim 订单送到真实柜台）")
+    # 强制 SIM：忽略请求里任何 channel，杜绝调用方误传 REAL/CTP
+    channel = "SIM"
+    account = req.account or cfg.account or "SIM"
+    key = persistence.build_idempotency_key(
+        req.signal_id or f"SIM:{req.real_symbol}", req.real_symbol, req.action, date.today())
+    if req.signal_id:
+        dup = persistence.find_order_by_signal(
+            account, req.real_symbol, req.signal_id, only_unsettled=True)
+        if dup is not None:
+            return {"order_id": dup["id"], "idempotency_key": dup["idempotency_key"],
+                    "state": "DUPLICATE_BLOCKED", "channel": channel}
+    order = build_order_dict(req, account, channel, key)
+    order_id = persistence.save_order(order)
+    if req.dry_run:
+        return {"order_id": order_id, "state": "DRY_RUN", "idempotency_key": key,
+                "channel": channel}
+    res = execution_runtime.submit_order(order_id)
+    return {"order_id": order_id, "idempotency_key": key, "channel": channel, **res}
+
+
 @router.get("/orders/by-key", tags=["execution"])
 def lookup_order_by_key(key: str) -> dict:
     """按**幂等键**查单（只读）。

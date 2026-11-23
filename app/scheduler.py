@@ -1559,6 +1559,94 @@ def _fusion_scan_job() -> None:
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] fusion scan failed: {e}")
 
+
+def _five_min_scan_job() -> None:
+    """5m 策略模拟盘扫描（CL-20261123-02）：复用 runner.scan_once 产出意图，
+    经 reverse 反解真实合约后落 SIM 单。全程不碰 EXECUTION_ENABLED 与实盘开关。
+
+    安全口径（三重，任一不满足即整轮跳过，fail-loud 记日志）：
+      1. ``cfg_feature_switch.five_min_sim_scan_enabled`` 必须 on（默认 off）；
+      2. ``EXECUTION_BROKER`` 必须 sim —— 配置漂移时绝不把模拟单送到真实柜台；
+      3. 交易时段门 + bar_5m 新鲜度门由 scan_once 内部 require_fresh 执行。
+
+    落单复用 :func:`app.api.routers.execution.submit_sim_order` 的同一实现——
+    由守卫 ``5M-SIM-SCAN-WIRED`` 钉住这条同源关系，禁止另起一套落单逻辑。
+    """
+    if not _switch_on("five_min_sim_scan_enabled", "QH_FIVE_MIN_SIM_SCAN", default=False):
+        logger.debug("[scheduler] five_min_sim_scan_enabled=off → 跳过 5m 模拟盘扫描")
+        return
+    import os
+
+    if str(os.getenv("EXECUTION_BROKER", "sim")).lower() != "sim":
+        logger.exception("[scheduler] EXECUTION_BROKER 非 sim → 拒绝 5m 模拟盘扫描")
+        raise RuntimeError("[fail-loud] 5m 模拟盘 broker 非 sim")
+
+    from datetime import date
+
+    from app.api.routers.execution import SubmitOrderReq, submit_sim_order
+    from app.execution.schemas import ReverseRequest
+    from app.execution.service import resolve_signal_to_order
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    from app.strategies.five_min.runner import DEFAULT_SYMBOLS, scan_once, to_order_intent
+
+    now = datetime.now(_SH_TZ)
+    if not is_hourly_collection_allowed(now):
+        logger.info(f"[scheduler] 5m sim scan {now:%m-%d %H:%M} 非交易时段，跳过")
+        return
+
+    n_ready = n_ordered = n_blocked = 0
+    try:
+        with session_scope() as s:
+            intents = scan_once(s, DEFAULT_SYMBOLS, pool_id="5m-sim")
+        for it in intents:
+            if it.get("status") != "READY":
+                n_blocked += 1
+                continue
+            n_ready += 1
+            sym = it["symbol_continuous"]
+            side = int(it["signal"]["side"])
+            direction = "LONG" if side > 0 else "SHORT"
+            rev = ReverseRequest(
+                symbol=sym, trade_date=date.today(), direction=direction,
+                entry_px=float(it["entry_px"]),
+                atr=float(it["atr"]),
+                target_risk=float(it["risk_r"]),
+                price_space="raw",
+            )
+            # resolve_signal_to_order 需要 Session；每个意图用短事务，避免长事务持锁
+            with session_scope() as s2:
+                order = resolve_signal_to_order(s2, rev)
+            if order.blocking_reasons or not order.real_symbol:
+                n_blocked += 1
+                logger.warning(f"[scheduler] 5m sim {sym} 反解阻断：{order.blocking_reasons[:2]}")
+                continue
+            req = SubmitOrderReq(
+                real_symbol=order.real_symbol,
+                exchange=order.exchange or "",
+                action="OPEN",
+                direction="BUY" if side > 0 else "SELL",
+                price=float(order.price or it["entry_px"]),
+                price_type="LIMIT",
+                price_space="raw",
+                lots=int(order.lots or it["lots"]),
+                symbol_continuous=sym,
+                signal_id=f"5M:{sym}:{it['signal']['dt']}",
+                pool_id="5m-sim",
+                channel="SIM",
+            )
+            res = submit_sim_order(req)
+            if res.get("state") in ("ACK", "DUPLICATE_BLOCKED", "DRY_RUN"):
+                n_ordered += 1
+            else:
+                n_blocked += 1
+            logger.info(f"[scheduler] 5m sim order {sym}→{order.real_symbol} "
+                        f"lots={order.lots} state={res.get('state')} id={res.get('order_id')}")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] 5m sim scan failed: {e}")
+        raise
+    logger.info(f"[scheduler] 5m sim scan done ready={n_ready} ordered={n_ordered} blocked={n_blocked}")
+
+
 def _sync_cloud_local_job() -> None:
     """统一云地同步链路（PRD §14）：subprocess 隔离跑 scripts/sync_cloud_local.py。
 
@@ -1978,6 +2066,19 @@ def _build_scheduler() -> BlockingScheduler:
         misfire_grace_time=7200,
     )
     logger.info("[scheduler] registered cron day1 03:20 (archive_nontradable)")
+
+    # 5m 模拟盘扫描（CL-20261123-02）：与 fusion/v5x 同节奏 :05/:35，
+    # 但内部独立开关 five_min_sim_scan_enabled 控制；默认 off，注册 ≠ 会下单。
+    # 不写 task_run（task_run_based=False），存活由调度事件 + 订单落库留痕兜底。
+    sched.add_job(
+        _five_min_scan_job,
+        trigger=CronTrigger(minute="5,35", timezone=settings.env.TZ),
+        id="five_min_scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("[scheduler] registered five_min_scan at :05/:35 (sim only, switch-gated)")
 
     # 融合策略实时信号扫描：每个整点后 :05/:35 触发（小时线落盘后再生成信号/推送，
     # 与每小时 :00 的 hourly_collect 错开，避免重叠；与每日三次 ingest 并行，互不影响）
