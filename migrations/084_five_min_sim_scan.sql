@@ -41,7 +41,7 @@ VALUES
      '5m 模拟盘扫描（sim）',
      '复用 runner.scan_once 每 :05/:35 扫 10 品种，意图经反解后由 /execution/sim/orders 落 SIM 单；'
      || '独立开关 five_min_sim_scan_enabled 控制，默认关闭',
-     'in_process',
+     'apscheduler',
      '5,35 * * * *',
      '每整点后 :05/:35（与 fusion/v5x 同节奏，复用现有扫描链路）',
      'app.scheduler:_five_min_scan_job',

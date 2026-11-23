@@ -8467,9 +8467,9 @@ def _c_5m_sim_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
       * 作业源码真实调用 scan_once 与 submit_sim_order（同源，非另起落单逻辑）；
       * 实盘开关 five_min_pool_position_enabled 必须仍 off（模拟盘不得打开实盘闸）。
     """
-    api = _5m_src("api", "routers", "execution.py")
-    sched = _5m_src("scheduler.py")
-    jobs = _5m_src("scheduler_jobs.py")
+    api = _5m_src("app", "api", "routers", "execution.py")
+    sched = _5m_src("app", "scheduler.py")
+    jobs = _5m_src("app", "scheduler_jobs.py")
     checks = {
         "sim_endpoint": "def submit_sim_order(" in api and '@router.post("/sim/orders"' in api,
         "force_sim_channel": 'channel = "SIM"' in api and "非 sim → 拒绝模拟盘下单" in api,
