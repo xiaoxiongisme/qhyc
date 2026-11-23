@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from app.core.logging import logger
@@ -29,6 +31,62 @@ _QUERY_STATE_MAP = {
     "NEW": "NEW",
     "SENT": "SENT",
 }
+
+
+def _broker_fill_id(broker_order_id: str, fill_lots: int, fill_price: Decimal) -> str:
+    """成交幂等键：同一笔 broker 单的同一「累计手数+均价」只记一次。
+
+    与 ``execution_bridge.bridge_report`` 的合成口径一致，ON CONFLICT 由
+    ``execution_fill(order_id, broker_fill_id)`` UNIQUE 兜底。部分成交后累计手数
+    变化会生成新键，重复回报/重启回查则撞键不重复记账。
+    """
+    return f"{broker_order_id}#{fill_lots}@{fill_price}"
+
+
+def _record_broker_fill(order: dict[str, Any], resp: dict[str, Any]) -> int:
+    """把回执**自带**的成交明细写 execution_fill；返回累计成交手数（0=回执无明细）。
+
+    CL-20261123-03：旧实现 ACK 只 ``update_status(SENT)``，sim_broker/CTP 回执里
+    明明带了 ``filled_lots`` / ``avg_fill_price`` 却无人落库；``execution_fill``
+    长期 0 行，滑点/成交率无法从真实成交计算。
+
+    纪律：
+      * 字段缺失，或显式 0 手/0 价（挂单未成交）→ 返回 0，不猜、不写脏账；
+      * 只出现一个、或手数/价格非法 → **fail-loud**，不按 0/默认值兜底；
+      * 只写 ``execution_fill``，不碰持仓（position_sync 默认 false，口径未变）。
+    """
+    lots_raw = resp.get("filled_lots")
+    px_raw = resp.get("avg_fill_price")
+    broker_id = resp.get("broker_order_id") or order.get("broker_order_id")
+    if lots_raw is None and px_raw is None:
+        return 0
+    try:
+        lots = int(lots_raw or 0)
+        px = Decimal(str(px_raw)) if px_raw is not None else Decimal("0")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"[fail-loud] 成交回执字段类型非法：filled_lots={lots_raw!r}, "
+            f"avg_fill_price={px_raw!r}") from exc
+    # 显式「零成交」是正常形态：sim 限价挂单 ACK 回 0/None，CTP 未成交回报回 0/0。
+    # 不能因为字段出现就当成交写库（否则 fill_lots=0 会被 CHECK 拒，或写出 0 价脏账）。
+    if lots <= 0 and px <= 0:
+        return 0
+    if not broker_id:
+        raise ValueError(
+            "[fail-loud] 成交回执有成交明细但无 broker_order_id，无法生成幂等成交号")
+    if lots <= 0 or px <= 0:
+        raise ValueError(
+            f"[fail-loud] 成交回执字段不完整/非法：filled_lots={lots_raw!r}, "
+            f"avg_fill_price={px_raw!r}（拒绝按 0 兜底）")
+
+    persistence.save_fill(
+        int(order["id"]),
+        broker_fill_id=_broker_fill_id(str(broker_id), lots, px),
+        fill_ts=datetime.now(timezone.utc),
+        fill_price=px,
+        fill_lots=lots,
+    )
+    return lots
 
 
 def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -64,10 +122,19 @@ def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[s
     }
     resp = get_broker().submit(body)
     state = resp["state"]
+    filled_saved = 0
 
     if state == "ACK":
         persistence.update_status(order_id, "SENT",
                                   broker_order_id=resp.get("broker_order_id"))
+        # CL-20261123-03：ACK 回执自带成交明细（sim 立即成交 / 网关成交回报）必须落库。
+        # 先 SENT 再记成交再终态：NEW→FILLED 直跳会被状态机拒绝；若 save_fill 失败，
+        # 订单留在 SENT，recover_on_boot/reconcile 可重放，不会形成「状态终态但无成交」。
+        filled_saved = _record_broker_fill(order, resp)
+        if filled_saved:
+            target = "FILLED" if filled_saved >= int(order["lots"]) else "PARTIAL"
+            persistence.update_status(order_id, target,
+                                      broker_order_id=resp.get("broker_order_id"))
     elif state == "REJECT":
         persistence.update_status(order_id, "REJECTED",
                                   error=resp.get("error", "网关拒绝"))
@@ -78,7 +145,7 @@ def submit_order(order_id: int, payload: dict[str, Any] | None = None) -> dict[s
         logger.warning(
             f"[exec] 订单 {order_id} 提交超时（TIMEOUT_UNKNOWN），留 NEW 待查单，**禁止重试 submit**"
         )
-    return {**resp, "order_id": order_id}
+    return {**resp, "order_id": order_id, "fill_lots_saved": filled_saved}
 
 
 def reconcile_order(order_id: int) -> dict[str, Any]:
@@ -114,9 +181,17 @@ def reconcile_order(order_id: int) -> dict[str, Any]:
     mapped = _QUERY_STATE_MAP.get(raw)
     if not mapped:
         return {"state": raw, "order_id": order_id, "detail": f"未知订单状态 {raw}，未改库"}
+
+    # CL-20261123-03：查单回执是成交回报的第二入口（限价挂单 on_tick / CTP OnRtnTrade
+    # 后重查、超时澄清、重启恢复都走这里）。即使状态已是 FILLED 也要重放 save_fill：
+    # UNIQUE(order_id, broker_fill_id) 保证重复回查不重复记账，却能补回上次落库失败的明细。
+    fill_lots_saved = 0
+    if mapped in ("FILLED", "PARTIAL"):
+        fill_lots_saved = _record_broker_fill(order, resp)
     if mapped != order["status"]:
         persistence.update_status(order_id, mapped, broker_order_id=bid)
-    return {"state": raw, "order_id": order_id, "mapped": mapped}
+    return {"state": raw, "order_id": order_id, "mapped": mapped,
+            "fill_lots_saved": fill_lots_saved}
 
 
 def recover_on_boot() -> int:

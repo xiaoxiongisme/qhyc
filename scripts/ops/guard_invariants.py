@@ -8503,6 +8503,58 @@ def _c_5m_sim_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
         ("缺失：" + ",".join(bad) if bad else "")
 
 
+def _c_exec_fill_writeback_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261123-03：成交回报必须在 ACK 与查单**两个入口**都写 execution_fill。
+
+    真实引用断言（防「save_fill 函数存在但没人调用」与「写了 fill 却没幂等键」）：
+      * submit_order 的 ACK 分支调用 _record_broker_fill；
+      * reconcile_order 的 FILLED/PARTIAL 分支也调用（挂单 on_tick / 重启回查入口）；
+      * 幂等键由 broker_order_id + 累计手数 + 均价 合成，persistence 侧 ON CONFLICT；
+      * DB 侧 UNIQUE(order_id, broker_fill_id) 约束真实存在；
+      * 运行时不碰 position_sync（持仓同步默认 false，口径未变）。
+    """
+    rt = _5m_src("app", "execution", "execution_runtime.py")
+    ps = _5m_src("app", "execution", "persistence.py")
+    checks = {
+        "ack_entry": "filled_saved = _record_broker_fill(order, resp)" in rt,
+        "reconcile_entry": "fill_lots_saved = _record_broker_fill(order, resp)" in rt,
+        "idempotent_key": "_broker_fill_id(" in rt and "broker_order_id" in rt,
+        "save_call": "persistence.save_fill(" in rt,
+        "db_conflict_guard": "ON CONFLICT (order_id, broker_fill_id) DO NOTHING" in ps,
+        "no_position_write": "position_sync.sync_from_fill(" not in rt
+                             and "from app.execution import position_sync" not in rt,
+    }
+    try:
+        rows = c.rows(
+            "SELECT 1 FROM pg_constraint "
+            "WHERE conname='execution_fill_order_id_broker_fill_id_key' "
+            "AND conrelid='execution_fill'::regclass")
+        checks["db_unique"] = bool(rows)
+    except Exception:  # noqa: BLE001
+        checks["db_unique"] = False
+    bad = [k for k, v in checks.items() if not v]
+    return not bad, "成交回报 ACK/查单双入口写库且幂等", \
+        "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()), \
+        ("缺失：" + ",".join(bad) if bad else "")
+
+
+def _c_exec_fill_no_orphan(c: Ctx) -> tuple[bool, str, str, str]:
+    """近 30 天 FILLED/PARTIAL 订单必须在 execution_fill 有对应明细。"""
+    try:
+        rows = c.rows("""
+            SELECT o.id, o.status FROM execution_order o
+            WHERE o.status IN ('FILLED','PARTIAL')
+              AND o.created_at >= now() - interval '30 days'
+              AND NOT EXISTS (SELECT 1 FROM execution_fill f WHERE f.order_id = o.id)
+            ORDER BY o.id
+        """)
+    except Exception as exc:  # noqa: BLE001
+        return False, "近30天成交订单均有成交明细", "查询失败", f"{type(exc).__name__}"
+    bad = [f"id={r[0]}:{r[1]}" for r in rows]
+    return not bad, "近30天成交订单均有成交明细", f"缺明细 {len(bad)} 笔", \
+        ("；".join(bad[:10]) if bad else "")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261121-04/05/06：5m 策略九条守卫。开关未开时只钉"接线存在+默认兼容"，
     # 真正的行为断言在开关打开后生效；避免研究代码提前污染现网。
@@ -8516,6 +8568,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("5M-SINGLE-POS", "同一 5m 池最多一笔在场单", "block", _c_5m_single_pos),
     ("5M-RISK-R", "单笔 R=500 / 整数手 / 成本含 mult", "block", _c_5m_risk_r),
     ("5M-SIM-SCAN-WIRED", "5m 模拟盘 sim 端点/作业同源且实盘隔离", "block", _c_5m_sim_scan_wired),
+    # CL-20261123-03：成交回报写库——ACK/查单双入口 + 幂等 + 无孤儿成交单。
+    ("EXEC-FILL-WRITEBACK-WIRED", "成交回报 ACK/查单双入口写库且幂等",
+     "block", _c_exec_fill_writeback_wired),
+    ("EXEC-FILL-NO-ORPHAN", "近30天成交订单均有成交明细",
+     "block", _c_exec_fill_no_orphan),
     # CL-20261112-09：实时重放 1024 根历史窗口造成 337 行跨源冲突留痕。
     # 三条分别锁「不再新增冲突」「窗口真被裁切」「日终补缺真跑」，全部 block。
     ("OPS-L0-CROSS-SRC-QUIET", "实时采集不再反复重写跨源占位键",
