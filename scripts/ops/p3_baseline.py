@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """P3 首次基线（容器内只读跑）：10 品种限价成交率/跳空/压力曲线。
 
-不写库、不改生产运行代码；仅用 /app 已部署模块 + /tmp/5mcalib 的新校准模块。
+不写库、不改生产运行代码；校准模块现已在 app/strategies/five_min/calibration.py，
+按常规 PYTHONPATH=/app 直接运行即可（CL-20261123-01）。
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from app.data import barstore
-from calibration import calibrate_touch, fill_rate_stress_replay
+from app.strategies.five_min.calibration import calibrate_touch, fill_rate_stress_replay
 from app.strategies.five_min.indicators import attach_indicators
 from app.strategies.five_min.signals import scan_signals
 
