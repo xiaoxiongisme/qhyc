@@ -8403,22 +8403,28 @@ def _c_5m_exec_gate(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_5m_schedule_parity(c: Ctx) -> tuple[bool, str, str, str]:
-    """调度真源一致：开关关闭时允许尚未注册；开启后 DB/代码/函数三处必须齐。"""
-    on = _5m_switch(c, "five_min_pool_position_enabled")
-    if not on:
-        return True, "5m 扫描调度注册与开关一致", "开关 off，尚未注册作业（P3 前不做）", ""
+    """调度真源一致：five_min_scan 作业一旦注册，DB/代码/函数三处必须齐。
+
+    CL-20261123-02 修正：原实现有两个缺陷——
+      1) 只在实盘开关 open 时才校验，导致 sim 作业注册后守卫仍显示"尚未注册"；
+      2) SQL 查 ``job_id`` 列（不存在，真列是 ``task_id``），异常被吞后 db_job 恒 N。
+    现改为：只要三处任一出现 five_min_scan 痕迹（DB 行 / JobSpec / 函数），
+    就要求三处齐全；三处都没有才返回"尚未注册"。实盘开关语义由 5M-EXEC-GATE 管。
+    """
     jobs = _5m_src("app", "scheduler_jobs.py")
     sched = _5m_src("app", "scheduler.py")
     try:
         rows = c.rows("SELECT enabled, schedule FROM ops.scheduled_task "
-                      "WHERE job_id = 'five_min_scan'")
+                      "WHERE task_id = 'five_min_scan'")
     except Exception:  # noqa: BLE001
         rows = []
     checks = {
         "db_job": bool(rows),
         "job_spec": 'JobSpec("five_min_scan"' in jobs,
-        "scheduler_fn": "_five_min_scan_job" in sched,
+        "scheduler_fn": "def _five_min_scan_job(" in sched,
     }
+    if not any(checks.values()):
+        return True, "5m 扫描调度注册与开关一致", "三处均未注册（P3 前不做）", ""
     bad = [k for k, v in checks.items() if not v]
     return not bad, "5m 扫描作业 DB/代码/函数三处一致", \
         "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()), \
