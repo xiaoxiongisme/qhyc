@@ -8740,19 +8740,22 @@ def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
     jobs = _5m_src("app", "scheduler_jobs.py")
     executor = _5m_src("app", "strategies", "five_min", "exit_executor.py")
     api = _5m_src("app", "api", "routers", "execution.py")
-    # migration 全文（建表/开关/任务登记）
+    # migration 全文：087 建表/任务登记 + 088 开关改名（错位避双开关冲突）
     mig = ""
     try:
         from pathlib import Path as _P
-        mp = _P(__file__).resolve().parents[2] / "migrations" / "087_five_min_exit_chain.sql"
-        if mp.exists():
-            mig = mp.read_text(encoding="utf-8")
+        mdir = _P(__file__).resolve().parents[2] / "migrations"
+        for _mn in ("087_five_min_exit_chain.sql", "088_five_min_exit_switch_name.sql"):
+            mp = mdir / _mn
+            if mp.exists():
+                mig += mp.read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass
     checks = {
         "table_plan": "CREATE TABLE IF NOT EXISTS five_min_exit_plan" in mig,
         "table_action": "CREATE TABLE IF NOT EXISTS five_min_exit_action" in mig,
-        "switch": "five_min_exit_scan_enabled" in mig,
+        "switch": "_switch_on(\"five_min_exit_sim_enabled\"" in sched,
+        "switch_decoupled": "five_min_exit_sim_enabled" in mig,
         "task_seed": "five_min_exit_scan" in mig,
         "open_writes_plan": "persist_plan(sp, plan)" in sched,
         "job_fn": "def _five_min_exit_job(" in sched,
@@ -8769,8 +8772,11 @@ def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
         rows = c.rows("SELECT enabled FROM ops.scheduled_task WHERE task_id='five_min_exit_scan'")
         checks["db_task"] = bool(rows)
         sw = c.rows("SELECT enabled FROM cfg_feature_switch "
-                    "WHERE switch_key='five_min_exit_scan_enabled'")
+                    "WHERE switch_key='five_min_exit_sim_enabled'")
         checks["db_switch"] = bool(sw)
+        # 双开关错位：开关映射后的 task 名不得真实存在（否则 OPS-SWITCH-JOB-CONSIST 冲突）
+        checks["switch_not_collide"] = not bool(c.rows(
+            "SELECT 1 FROM ops.scheduled_task WHERE task_id='five_min_exit_sim'"))
         live = c.rows("SELECT enabled FROM cfg_feature_switch "
                       "WHERE switch_key='five_min_pool_position_enabled'")
         checks["live_switch_off"] = bool(live) and not bool(live[0][0])
@@ -8779,6 +8785,7 @@ def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
     except Exception:  # noqa: BLE001
         checks["db_task"] = checks["db_switch"] = False
         checks["live_switch_off"] = checks["plan_table_db"] = False
+        checks["switch_not_collide"] = False
     bad = [k for k, v in checks.items() if not v]
     obs = "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items())
     return not bad, "5m 离场执行两环接线且口径/实盘隔离", obs, \

@@ -1687,8 +1687,8 @@ def _five_min_exit_job() -> None:
       3. 交易时段门 is_hourly_collection_allowed；
       4. 池级在场校验 PoolPositionGuard.check_close（只平本池持仓合约）。
     """
-    if not _switch_on("five_min_exit_scan_enabled", "QH_FIVE_MIN_EXIT_SCAN", default=False):
-        logger.debug("[scheduler] five_min_exit_scan_enabled=off → 跳过 5m 离场扫描")
+    if not _switch_on("five_min_exit_sim_enabled", "QH_FIVE_MIN_EXIT_SCAN", default=False):
+        logger.debug("[scheduler] five_min_exit_sim_enabled=off → 跳过 5m 离场扫描")
         return
     import os
 
