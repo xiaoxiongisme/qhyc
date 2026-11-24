@@ -8725,6 +8725,66 @@ def _c_5m_sim_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
         ("缺失：" + ",".join(bad) if bad else "")
 
 
+def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261124-06：5m 离场执行链路两环真实接线（防「建了没人读」）。
+
+    真实引用断言：
+      * migration 087 建 five_min_exit_plan / five_min_exit_action 两表 + 开关 + 任务；
+      * 开仓作业落单成功后真实调用 persist_plan 写计划；
+      * 离场作业 _five_min_exit_job 存在、DB 任务登记、JobSpec 三处齐；
+      * 作业真实调用 exit_executor.decide 与 submit_sim_order(action=CLOSE)；
+      * 口径未污染：exit_executor 固定 tp_r=2.5、tp1/time_stop/trail 置空；
+      * 平仓只走 sim（EXECUTION_BROKER 非 sim fail-loud）+ 实盘池闸开关仍 off。
+    """
+    sched = _5m_src("app", "scheduler.py")
+    jobs = _5m_src("app", "scheduler_jobs.py")
+    executor = _5m_src("app", "strategies", "five_min", "exit_executor.py")
+    api = _5m_src("app", "api", "routers", "execution.py")
+    # migration 全文（建表/开关/任务登记）
+    mig = ""
+    try:
+        from pathlib import Path as _P
+        mp = _P(__file__).resolve().parents[2] / "migrations" / "087_five_min_exit_chain.sql"
+        if mp.exists():
+            mig = mp.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+    checks = {
+        "table_plan": "CREATE TABLE IF NOT EXISTS five_min_exit_plan" in mig,
+        "table_action": "CREATE TABLE IF NOT EXISTS five_min_exit_action" in mig,
+        "switch": "five_min_exit_scan_enabled" in mig,
+        "task_seed": "five_min_exit_scan" in mig,
+        "open_writes_plan": "persist_plan(sp, plan)" in sched,
+        "job_fn": "def _five_min_exit_job(" in sched,
+        "job_spec": 'JobSpec("five_min_exit_scan"' in jobs,
+        "uses_decide": "exit_executor.decide(" in sched,
+        "action_close": 'action="CLOSE"' in sched,
+        "reuses_sim_endpoint": "submit_sim_order(req)" in sched,
+        "broker_guard": "EXECUTION_BROKER" in sched and "离场扫描 broker 非 sim" in sched,
+        "caliber_tp_2_5": "abs(float(tp_r) - 2.5)" in executor,
+        "tp1_disabled": '"tp1_px": None' in executor and '"rest_lots": 0' in executor,
+        "sim_endpoint_exists": "def submit_sim_order(" in api,
+    }
+    try:
+        rows = c.rows("SELECT enabled FROM ops.scheduled_task WHERE task_id='five_min_exit_scan'")
+        checks["db_task"] = bool(rows)
+        sw = c.rows("SELECT enabled FROM cfg_feature_switch "
+                    "WHERE switch_key='five_min_exit_scan_enabled'")
+        checks["db_switch"] = bool(sw)
+        live = c.rows("SELECT enabled FROM cfg_feature_switch "
+                      "WHERE switch_key='five_min_pool_position_enabled'")
+        checks["live_switch_off"] = bool(live) and not bool(live[0][0])
+        checks["plan_table_db"] = bool(c.rows(
+            "SELECT to_regclass('five_min_exit_plan') IS NOT NULL"))
+    except Exception:  # noqa: BLE001
+        checks["db_task"] = checks["db_switch"] = False
+        checks["live_switch_off"] = checks["plan_table_db"] = False
+    bad = [k for k, v in checks.items() if not v]
+    obs = "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items())
+    return not bad, "5m 离场执行两环接线且口径/实盘隔离", obs, \
+        ("缺失：" + ",".join(bad) if bad else "")
+
+
 def _c_exec_fill_writeback_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261123-03：成交回报必须在 ACK 与查单**两个入口**都写 execution_fill。
 
@@ -8790,6 +8850,8 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("5M-SINGLE-POS", "同一 5m 池最多一笔在场单", "block", _c_5m_single_pos),
     ("5M-RISK-R", "单笔 R=500 / 整数手 / 成本含 mult", "block", _c_5m_risk_r),
     ("5M-SIM-SCAN-WIRED", "5m 模拟盘 sim 端点/作业同源且实盘隔离", "block", _c_5m_sim_scan_wired),
+    # CL-20261124-06：5m 离场执行两环（开仓写计划 + 盘中下 CLOSE）+ 口径/实盘隔离。
+    ("5M-EXIT-WIRED", "5m 离场执行两环接线且口径/实盘隔离", "block", _c_5m_exit_wired),
     # CL-20261123-03：成交回报写库——ACK/查单双入口 + 幂等 + 无孤儿成交单。
     ("EXEC-FILL-WRITEBACK-WIRED", "成交回报 ACK/查单双入口写库且幂等",
      "block", _c_exec_fill_writeback_wired),

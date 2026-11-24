@@ -1641,10 +1641,132 @@ def _five_min_scan_job() -> None:
                 n_blocked += 1
             logger.info(f"[scheduler] 5m sim order {sym}→{order.real_symbol} "
                         f"lots={order.lots} state={res.get('state')} id={res.get('order_id')}")
+            # CL-20261124-06：开仓落单成功后写离场计划（P3 闭环第一环）。
+            # 只有真正 ACK/FILLED（或幂等命中已存在的单）才建计划；DRY_RUN 不建，
+            # 避免空计划。口径取意图 exit_plan payload（1R=3ATR / TP=2.5R）。
+            if res.get("state") in ("ACK", "DUPLICATE_BLOCKED"):
+                try:
+                    from app.strategies.five_min.exit_executor import (
+                        build_exit_plan, persist_plan,
+                    )
+                    ep = it.get("exit_plan") or {}
+                    plan = build_exit_plan(
+                        signal_id=f"5M:{sym}:{it['signal']['dt']}",
+                        open_order_id=res.get("order_id"),
+                        symbol_continuous=sym, real_symbol=order.real_symbol,
+                        exchange=order.exchange or "",
+                        direction="LONG" if side > 0 else "SHORT",
+                        lots=int(order.lots or it["lots"]),
+                        entry_px=float(it["entry_px"]),
+                        init_stop=float(ep["init_stop"]), r_unit=float(ep["r_unit"]),
+                        tp_r=float(ep.get("tp2_r") or 2.5),
+                        pool_id="5m-sim",
+                    )
+                    with session_scope() as sp:
+                        pid = persist_plan(sp, plan)
+                    logger.info(f"[scheduler] 5m exit plan sym={sym} "
+                                f"plan_id={pid} tp_px={plan['tp_px']}")
+                except Exception as e:  # noqa: BLE001 —— 建计划失败必须 fail-loud
+                    logger.exception(f"[scheduler] 5m exit plan write failed {sym}: {e}")
+                    raise
     except Exception as e:  # noqa: BLE001
         logger.exception(f"[scheduler] 5m sim scan failed: {e}")
         raise
     logger.info(f"[scheduler] 5m sim scan done ready={n_ready} ordered={n_ordered} blocked={n_blocked}")
+
+
+def _five_min_exit_job() -> None:
+    """5m 模拟盘离场扫描（CL-20261124-06，P3 闭环第二环）。
+
+    盘中轮询 five_min_exit_plan 的 OPEN 计划，按 5M-EXIT-CALIBER 口径决策，
+    触发则经 /execution/sim/orders 下 CLOSE 单（强制 SIM），回写动作并关计划。
+
+    安全口径（与开仓作业对称，任一不满足即跳过/fail-loud）：
+      1. ``cfg_feature_switch.five_min_exit_scan_enabled`` 必须 on（默认 off）；
+      2. ``EXECUTION_BROKER`` 必须 sim；
+      3. 交易时段门 is_hourly_collection_allowed；
+      4. 池级在场校验 PoolPositionGuard.check_close（只平本池持仓合约）。
+    """
+    if not _switch_on("five_min_exit_scan_enabled", "QH_FIVE_MIN_EXIT_SCAN", default=False):
+        logger.debug("[scheduler] five_min_exit_scan_enabled=off → 跳过 5m 离场扫描")
+        return
+    import os
+
+    if str(os.getenv("EXECUTION_BROKER", "sim")).lower() != "sim":
+        logger.exception("[scheduler] EXECUTION_BROKER 非 sim → 拒绝 5m 离场扫描")
+        raise RuntimeError("[fail-loud] 5m 离场扫描 broker 非 sim")
+
+    from app.api.routers.execution import SubmitOrderReq, submit_sim_order
+    from app.data import barstore
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    from app.strategies.five_min import exit_executor
+    from app.strategies.five_min.pool_position import PoolPositionGuard
+
+    now = datetime.now(_SH_TZ)
+    if not is_hourly_collection_allowed(now):
+        logger.info(f"[scheduler] 5m exit scan {now:%m-%d %H:%M} 非交易时段，跳过")
+        return
+
+    n_eval = n_exit = 0
+    try:
+        with session_scope() as s:
+            plans = exit_executor.open_plans(s)
+        for plan in plans:
+            sym = plan["symbol_continuous"]
+            # 取价：raw continuous 5m 最新 close（与入场 entry_px 同口径）
+            bars = barstore.load(sym, freq="5m", caliber="continuous", limit=3)
+            if bars.empty or "close" not in bars:
+                logger.warning(f"[scheduler] 5m exit no price for {sym}, skip")
+                continue
+            last_price = float(bars["close"].iloc[-1])
+            kind = exit_executor.decide(plan, last_price=last_price, now=now)
+            n_eval += 1
+            if kind is None:
+                continue
+
+            # 池级在场校验：只平本池当前持仓合约，防跨合约平仓开反向裸仓
+            guard = PoolPositionGuard()
+            ok, reason = guard.check_close(plan.get("pool_id"), plan["real_symbol"])
+            if not ok:
+                logger.warning(f"[scheduler] 5m exit 池闸阻断 {sym}: {reason}")
+                continue
+
+            direction = "SELL" if plan["direction"] == "LONG" else "BUY"
+            exit_signal_id = f"5M:EXIT:{sym}:{plan['signal_id']}"
+            req = SubmitOrderReq(
+                real_symbol=plan["real_symbol"],
+                exchange=plan["exchange"],
+                action="CLOSE",
+                direction=direction,
+                price=last_price,
+                price_type="LIMIT",
+                price_space="raw",
+                lots=int(plan["lots"]),
+                symbol_continuous=sym,
+                signal_id=exit_signal_id,
+                pool_id=plan.get("pool_id"),
+                channel="SIM",
+            )
+            res = submit_sim_order(req)
+            state = res.get("state")
+            order_id = res.get("order_id")
+            with session_scope() as s:
+                exit_executor.record_action(
+                    s, plan["id"], "HARD_STOP" if kind == "HARD_STOP" else "TP",
+                    int(plan["lots"]), last_price, order_id, str(state),
+                    note=f"last_price={last_price:g} signal={plan['signal_id']}")
+                # 只有成功下单或幂等命中才算平掉，DRY_RUN/REJECT 不动计划状态
+                if state in ("ACK", "DUPLICATE_BLOCKED"):
+                    exit_executor.close_plan(
+                        s, plan["id"], "HARD_STOP" if kind == "HARD_STOP" else "TP",
+                        order_id)
+                    n_exit += 1
+            logger.info(f"[scheduler] 5m exit {sym} kind={kind} "
+                        f"state={state} order_id={order_id} price={last_price:g}")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] 5m exit scan failed: {e}")
+        raise
+    logger.info(f"[scheduler] 5m exit scan done evaluated={n_eval} exited={n_exit}")
 
 
 def _sync_cloud_local_job() -> None:
@@ -2079,6 +2201,18 @@ def _build_scheduler() -> BlockingScheduler:
         coalesce=True,
     )
     logger.info("[scheduler] registered five_min_scan at :05/:35 (sim only, switch-gated)")
+
+    # 5m 模拟盘离场扫描（CL-20261124-06）：与 five_min_scan 同节奏 :05/:35，
+    # 内部独立开关 five_min_exit_scan_enabled 控制；默认 off，注册 ≠ 会平仓。
+    sched.add_job(
+        _five_min_exit_job,
+        trigger=CronTrigger(minute="5,35", timezone=settings.env.TZ),
+        id="five_min_exit_scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("[scheduler] registered five_min_exit_scan at :05/:35 (sim, switch-gated)")
 
     # 融合策略实时信号扫描：每个整点后 :05/:35 触发（小时线落盘后再生成信号/推送，
     # 与每小时 :00 的 hourly_collect 错开，避免重叠；与每日三次 ingest 并行，互不影响）
