@@ -8414,8 +8414,7 @@ def _c_5m_bar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
         else:
             hard_bad.append(r)
     if in_progress:
-        logger.info("[5M-BAR-FRESH] in-progress buckets skipped: %s",
-                    [r[0] for r in in_progress[:10]])
+        logger.info(f"[5M-BAR-FRESH] in-progress buckets skipped: {[r[0] for r in in_progress[:10]]}")
     if hard_bad:
         bad = ", ".join(f"{r[0]}(bar={r[2]}, expected={r[3]})" for r in hard_bad[:6])
         return False, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
