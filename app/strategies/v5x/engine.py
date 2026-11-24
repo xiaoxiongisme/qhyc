@@ -246,6 +246,42 @@ class VolRatio:
 # 三、单品种引擎
 # ============================================================
 
+
+def classify_stop_kind(dirn: int, avg_px: float, extreme: float,
+                       e_atr: float, entry_px: float, be_done: bool,
+                       cfg: V5XConfig) -> str:
+    """离场那一刻，三条止损候选中**哪条生效**——纯诊断，不参与任何决策。
+
+    CL-20261124-05：``reason`` 只有 stop/tp 两档，吊灯/初始/保本三种止损
+    全归为 stop，导致盈利锁盈单也被推成「止损」。本函数用与 ``on_bar``
+    离场判据**逐位相同**的三条候选线胜负关系，标出真正触发的那条：
+
+      * ``initial`` —— 均价 ∓ SL_ATR*ATR 最紧（离场价还在均价的亏损侧）；
+      * ``trail``   —— 峰值/谷值 ∓ TRAIL_ATR*ATR 更紧后生效（吊灯移动止损）；
+      * ``be``      —— 保本已激活且入场价更紧，止损被抬到 entry（锁盈/保本）。
+
+    ``extreme``：多头传 peak，空头传 trough。方向语义与 on_bar 一致。
+    ★ 必须与 on_bar 第 345-360 行保持同式；任何一侧改动都要同步另一侧，
+      否则「标出来的机制」与「真正触发的机制」会漂移——这正是守卫
+      V5X-STOP-KIND 逐例对拍锁死的东西。
+    """
+    if dirn > 0:                                   # 多头：越低价越紧
+        st = avg_px - cfg.SL_ATR * e_atr
+        t = extreme - cfg.TRAIL_ATR * e_atr
+        if t > st:
+            st = t
+        if be_done and entry_px > st:
+            return "be"
+        return "trail" if t > avg_px - cfg.SL_ATR * e_atr else "initial"
+    st = avg_px + cfg.SL_ATR * e_atr                 # 空头：越高价越紧
+    t = extreme + cfg.TRAIL_ATR * e_atr
+    if t < st:
+        st = t
+    if be_done and entry_px < st:
+        return "be"
+    return "trail" if t < avg_px + cfg.SL_ATR * e_atr else "initial"
+
+
 class SymbolEngine:
     """状态机：state 0 空仓 / 1 多 / 2 空。每根 bar 收盘调 on_bar 一次。"""
 
@@ -534,14 +570,23 @@ class SymbolEngine:
         cost = self.cost.cost_round(self.entry_raw, raw_x, same_day, self.lots)
         net = raw - cost
         lots = self.lots
+        # CL-20261124-05：纯诊断字段——离场那刻哪条止损线生效。
+        # 严格在 state 归零之前读取 peak/trough/be_done；只写 trades/order，
+        # 不参与 raw/net/reason/state 任何决策（reason 仍是 stop/tp）。
+        stop_kind = None
+        if reason == 'stop' and self.e_atr > 0:
+            extreme = self.peak if dir_ > 0 else self.trough
+            stop_kind = classify_stop_kind(
+                dir_, self.avg_px, extreme, self.e_atr, self.entry_px,
+                self.be_done, cfg)
         self.trades.append(dict(sym=self.sym, dir=dir_, edt=None, xdt=ts, P=self.avg_px, X=fill,
                                 lots=lots, e_atr=self.e_atr, net=net, gross=raw,
                                 r=net / (cfg.SL_ATR * self.e_atr * self.cost.mult),
-                                reason=reason))
+                                reason=reason, stop_kind=stop_kind))
         self.state = 0; self.cooldown = cfg.COOLDOWN
         self.be_done = False; self.lots = 1.0
         # CL-20261109-05（C2b）：事件字典追加 reason，纯诊断字段，不参与任何决策。
         # 成交层（app/backtest/v5x_fill.py）靠它区分止损/止盈成交；引擎行为不变。
         return dict(type='CLOSE', dir=dir_, price=fill, lots=lots, ts=ts, net=net,
-                    reason=reason)
+                    reason=reason, stop_kind=stop_kind)
 

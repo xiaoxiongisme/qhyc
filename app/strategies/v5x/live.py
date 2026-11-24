@@ -153,6 +153,10 @@ class V5XSignal:
     stop_real: float | None = None
     etype: str = ""             # pb=回踩 / bk=突破
     reason: str | None = None   # stop / tp
+    #: CL-20261124-05：离场时哪条止损线生效（initial/trail/be）——纯诊断，
+    #: 不参与任何决策；仅用于把「吊灯锁盈」与「亏损止损」在文案上区分开。
+    #: None = 非止损离场（止盈/开仓/加仓）或历史行未记录该字段。
+    stop_kind: str | None = None
     net_yuan: float | None = None
     source: str = "live"        # live=实盘推送；replay=历史回放补录（不推送）
     #: 这一条是「上一轮推送失败、本轮补发」而非本轮新产出。
@@ -353,6 +357,7 @@ def _to_signals(sym: str, ts, off: float, orders: list[dict],
             stop_real=float(stop_ba - o_off) if stop_ba is not None else None,
             etype=str(o.get("etype") or ""),
             reason=o.get("reason"),
+            stop_kind=o.get("stop_kind"),
             net_yuan=float(o["net"]) if "net" in o else None,
             source=source,
         ))
@@ -551,9 +556,9 @@ def _persist(session, sigs: Iterable[V5XSignal],
         row = session.execute(text("""
             INSERT INTO public.v5x_signal_log
                 (dedupe_key, symbol, bar_ts, action, side, price_ba, adj_offset,
-                 price_real, stop_ba, stop_real, lots, etype, reason, net_yuan, source)
+                 price_real, stop_ba, stop_real, lots, etype, reason, stop_kind, net_yuan, source)
             VALUES (:k, :sym, :ts, :act, :side, :pba, :off, :preal,
-                    :sba, :sreal, :lots, :etype, :reason, :net, :src)
+                    :sba, :sreal, :lots, :etype, :reason, :stop_kind, :net, :src)
             ON CONFLICT (dedupe_key) DO NOTHING
             RETURNING id
         """), {
@@ -561,7 +566,7 @@ def _persist(session, sigs: Iterable[V5XSignal],
             "side": s.side, "pba": s.price_ba, "off": s.adj_offset,
             "preal": s.price_real, "sba": s.stop_ba, "sreal": s.stop_real,
             "lots": s.lots, "etype": s.etype, "reason": s.reason,
-            "net": s.net_yuan, "src": source,
+            "stop_kind": s.stop_kind, "net": s.net_yuan, "src": source,
         }).first()
         if row is not None:
             new.append(s)
@@ -586,7 +591,7 @@ def _load_unsent(session, now: datetime,
     since = now - timedelta(hours=hours)
     rows = session.execute(text("""
         SELECT dedupe_key, symbol, action, side, bar_ts, adj_offset, price_ba,
-               price_real, lots, stop_ba, stop_real, etype, reason, net_yuan,
+               price_real, lots, stop_ba, stop_real, etype, reason, stop_kind, net_yuan,
                (notify_ok IS FALSE) AS was_failed
           FROM public.v5x_signal_log
          WHERE notify_ok IS NOT TRUE
@@ -612,6 +617,9 @@ def _load_unsent(session, now: datetime,
         stop_real=_f(r["stop_real"]),
         etype=r["etype"] or "",
         reason=r["reason"],
+        # CL-20261124-05：stop_kind 是新增可空列。用 keys() 兼容
+        # 「代码先于迁移部署」与旧行/测试 fixture 缺列的情况，缺则当历史行回退。
+        stop_kind=(r["stop_kind"] if "stop_kind" in r.keys() else None),
         net_yuan=_f(r["net_yuan"]),
         source="live",
         # notify_ok 为 NULL = 本轮刚落库；为 FALSE = 上轮推送失败，本轮补发
@@ -756,6 +764,14 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
         ("CLOSE", "SHORT"): "平空单",
     }
     reason_cn = {"stop": "止损", "tp": "止盈"}
+    # CL-20261124-05：stop 的三条来源必须分开显示，否则盈利锁盈单被误读成亏损止损。
+    # 判定来自引擎离场那刻的 stop_kind（真实引用），不靠 net_yuan 反推——
+    # 吊灯触发但扣费后小亏、保本锁盈都会让 net 反推误标。
+    stop_kind_cn = {
+        "trail": "吊灯移动止损（锁盈）",
+        "be": "保本止损（锁盈）",
+        "initial": "初始止损",
+    }
     etype_cn = {"pb": "回踩", "bk": "突破"}
     icon = {"OPEN": "🚨", "ADD": "➕", "CLOSE": "✅"}
 
@@ -805,6 +821,10 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
             lines.append(f"   止损位：{s.stop_real:,.2f}")
         if s.action == "CLOSE":
             r = reason_cn.get((s.reason or "").lower(), s.reason or "未注明")
+            # 历史行 stop_kind 为空 → 回退原「止损」文案，保持向后兼容；
+            # 新行 stop 且带 kind → 用精确机制标签。
+            if (s.reason or "").lower() == "stop" and s.stop_kind:
+                r = stop_kind_cn.get(s.stop_kind, r)
             lines.append(f"   离场原因：{r}")
             # CL-20261112-06 P0-2：平仓手数此前完全不展示，熔断把它清零也无人察觉。
             lines.append(f"   平仓手数：{s.lots:g}")

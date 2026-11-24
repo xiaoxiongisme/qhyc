@@ -2880,6 +2880,98 @@ def _c_v5x_snapshot_live_price(c: Ctx) -> tuple[bool, str, str, str]:
         + "。快照换价若污染止损/回放口径 = 信号链被拖下水（CL-20261124-01）")
 
 
+def _c_v5x_stop_kind(c: Ctx) -> tuple[bool, str, str, str]:
+    """V5X 离场原因细分真实接线（CL-20261124-05）。
+
+    要挡的失效模式：有人为了「文案好看」把 reason 从 stop 改成 trail，
+    于是成交层（靠 reason 区分止损/止盈）与所有历史对拍瞬间错位；或者
+    有人拿 net_yuan>0 反推吊灯，于是吊灯小亏、保本锁盈全被误标。
+    因此本守卫同时断言：
+      1. 纯判据 classify_stop_kind 存在且与 on_bar 三条候选线同式（六例对拍）；
+      2. reason 取值仍是 stop/tp，stop_kind 是**并列**的诊断字段、不顶替 reason；
+      3. 落库 INSERT / 读回 SELECT / 文案渲染三处都真实引用 stop_kind；
+      4. 迁移文件存在且列在库里——否则「代码写了但列没加」会静默丢字段。
+    """
+    label = "V5X 离场原因细分（吊灯/初始/保本）真实接线"
+    bad: list[str] = []
+    observed: list[str] = []
+
+    engine_src = _5m_src("app", "strategies", "v5x", "engine.py")
+    live_src = _5m_src("app", "strategies", "v5x", "live.py")
+    migrations = _REPO_ROOT / "migrations"
+
+    # 1) 纯判据存在 + on_bar 仍用原三条候选线（防止「改判据」）
+    has_cls = "def classify_stop_kind(" in engine_src
+    observed.append(f"classifier={has_cls}")
+    if not has_cls:
+        bad.append("engine.py 缺少 classify_stop_kind 纯判据")
+    for needle in ("cfg.SL_ATR", "cfg.TRAIL_ATR", "self.be_done and self.entry_px"):
+        if needle not in engine_src:
+            bad.append(f"engine.py 离场判据丢失 {needle}（判据被改动）")
+    # reason 仍只有 stop/tp 两档，_exit 不产生新 reason
+    if "'tp'" not in engine_src or "'stop'" not in engine_src:
+        bad.append("engine.py reason 取值不再是 stop/tp 两档")
+    observed.append("reason_two_tier=ok")
+
+    # 2) 六例对拍：直接 import 纯判据，逐例验证三种来源 × 两个方向
+    try:
+        from app.strategies.v5x.engine import V5XConfig, classify_stop_kind
+
+        cfg = V5XConfig()
+        cases = [
+            (1, 1000.0, 1000.0, 10.0, 1000.0, False, "initial"),
+            (1, 1000.0, 1060.0, 10.0, 1000.0, False, "trail"),
+            (1, 1000.0, 1060.0, 10.0, 1050.0, True, "be"),
+            (-1, 1000.0, 1000.0, 10.0, 1000.0, False, "initial"),
+            (-1, 1000.0, 940.0, 10.0, 1000.0, False, "trail"),
+            (-1, 1000.0, 940.0, 10.0, 950.0, True, "be"),
+        ]
+        wrong = []
+        for dirn, avg, ext, atr, entry, be, want in cases:
+            got = classify_stop_kind(dirn, avg, ext, atr, entry, be, cfg)
+            if got != want:
+                wrong.append(f"dir={dirn} want={want} got={got}")
+        observed.append(f"cases={len(cases)} wrong={len(wrong)}")
+        if wrong:
+            bad.append("classify_stop_kind 对拍失败：" + "; ".join(wrong))
+    except Exception as exc:                                   # noqa: BLE001
+        bad.append(f"import/对拍 classify_stop_kind 异常：{type(exc).__name__}: {exc}")
+
+    # 3) _exit 把 stop_kind 作为并列诊断字段写入，且只挂在 stop 上
+    if "stop_kind=stop_kind" not in engine_src or "if reason == 'stop'" not in engine_src:
+        bad.append("_exit 未把 stop_kind 作为 stop 专属诊断字段透传")
+
+    # 4) live.py 落库 / 读回 / 文案三处真实引用
+    for needle in (":stop_kind", '"stop_kind": s.stop_kind',
+                   '"stop_kind" in r.keys()', "stop_kind_cn"):
+        if needle not in live_src:
+            bad.append(f"live.py 缺少 stop_kind 引用：{needle}")
+    # 绝不能用 net_yuan 反推机制（文案里不能出现 net 判据分支）
+    if "net_yuan" in live_src and "net_yuan > 0" in live_src:
+        bad.append("live.py 疑似用 net_yuan>0 反推吊灯（机制与盈亏必须正交）")
+    observed.append("live_refs=ok")
+
+    # 5) 迁移文件 + 库列
+    has_mig = any(p.name.startswith("086_") and "stop_kind" in p.read_text(encoding="utf-8")
+                  for p in migrations.glob("*.sql")) if migrations.exists() else False
+    observed.append(f"migration086={has_mig}")
+    if not has_mig:
+        bad.append("缺少 migrations/086_* 的 stop_kind 加列迁移")
+    try:
+        n = c.scalar("""SELECT count(*) FROM information_schema.columns
+                        WHERE table_schema='public' AND table_name='v5x_signal_log'
+                          AND column_name='stop_kind'""") or 0
+        observed.append(f"db_column={n}")
+        if not n:
+            bad.append("生产库 v5x_signal_log 无 stop_kind 列（迁移未应用）")
+    except Exception as exc:                                    # noqa: BLE001
+        bad.append(f"查 stop_kind 列异常：{type(exc).__name__}: {exc}")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。离场原因若被改成新 reason 或用盈亏反推 = 成交层/对拍错位（CL-20261124-05）")
+
+
 def _c_v5x_close_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """V5X 收盘即时扫描链真实接线（CL-20261109-17）。
 
@@ -8926,6 +9018,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261124-01：现价改取分钟真实价；必须挡住「换价顺手改了止损/回放口径」。
     ("V5X-SNAPSHOT-LIVE-PRICE", "V5X 快照现价分钟价接线且止损/回放口径隔离", "block",
      _c_v5x_snapshot_live_price),
+    # CL-20261124-05：离场原因细分。挡住「改 reason 顶替 stop / net 反推吊灯 /
+    # 列没加静默丢字段」三种失效——都表现为「照常推送但机制标错」。
+    ("V5X-STOP-KIND", "V5X 离场原因细分（吊灯/初始/保本）真实接线", "block",
+     _c_v5x_stop_kind),
     # CL-20261109-17：用户要求「60m 收盘 +10s 扫描推送」。四个接缝都可静默断掉
     # （标签不同源 / 没注册 / 字典被写成 5 段 cron / 半截桶门失效），且表现都是
     # 「照常运行就是不推」。这条把它们钉在一处。
