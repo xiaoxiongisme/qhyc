@@ -5048,19 +5048,27 @@ def _c_loguru_fmt_braces(c: Ctx) -> tuple[bool, str, str, str]:
 
         root = Path(__file__).resolve().parents[2]
         pct = _re.compile(r"%[-+ 0#]*\d*(?:\.\d+)?[sdfr]")
-        marks = ("from app.core.logging import", "from loguru import")
         n_loguru = n_std = 0
         for p in list((root / "app").rglob("*.py")) + list((root / "scripts").rglob("*.py")):
             try:
                 txt = p.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            is_loguru = any(m in txt for m in marks) or \
-                p.as_posix().endswith("app/core/logging.py")
             try:
                 tree = ast.parse(txt)
             except SyntaxError:
                 continue
+            # CL-20261124-04：旧实现用全文子串匹配 marks，而本守卫的
+            # marks 常量与 docstring 自身就含 "from app.core.logging import"，
+            # 导致本文件被误判为 loguru、把标准库 %s 误报为缺陷。
+            # 改为 AST 检测真实 import（只认 from/import 语句，不看注释与字符串）。
+            is_loguru = p.as_posix().endswith("app/core/logging.py") or any(
+                (isinstance(n, ast.ImportFrom) and n.module
+                 and ("app.core.logging" in n.module or n.module == "loguru"))
+                or (isinstance(n, ast.Import)
+                    and any(a.name == "loguru" or a.name.startswith("app.core.logging")
+                            for a in n.names))
+                for n in ast.walk(tree))
             rel = p.relative_to(root).as_posix()
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
@@ -8413,8 +8421,8 @@ def _c_5m_bar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
             in_progress.append(r)
         else:
             hard_bad.append(r)
-    if in_progress:
-        logger.info(f"[5M-BAR-FRESH] in-progress buckets skipped: {[r[0] for r in in_progress[:10]]}")
+    # CL-20261124-04：不再单独 logger.info —— 本文件无 logger 定义，
+    # 盘中 in_progress 非空时会 NameError；在途数量已在下方返回值 observed 中。
     if hard_bad:
         bad = ", ".join(f"{r[0]}(bar={r[2]}, expected={r[3]})" for r in hard_bad[:6])
         return False, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
