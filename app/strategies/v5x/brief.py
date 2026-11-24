@@ -139,6 +139,12 @@ def build_brief(session, label: datetime, summary: dict) -> tuple[str, str]:
         if rows:
             lines.append("")
             lines.append("### 持仓一览")
+            # CL-20261124-01：现价已改取分钟实时价，明确标注以免误读为 60m 收盘价。
+            minute_rows = [r for r in rows if r.get("price_source") == "minute"]
+            if minute_rows:
+                pts = sorted({r.get("price_ts") for r in minute_rows if r.get("price_ts")})
+                ts_note = f"截至 {pts[-1][11:16]}" if pts else ""
+                lines.append(f"  · 现价取分钟实时价{ts_note}；止损/均价按 60m 桶口径不变")
             for r in rows[:8]:
                 tag = "保本" if r.get("be_done") else "止损"
                 lines.append(

@@ -2777,6 +2777,109 @@ def _c_v5x_snapshot_wired(c: Ctx) -> tuple[bool, str, str, str]:
         + "。持仓快照失效 = 用户无法核对理论持仓，统计与实盘永久错位（CL-20261109-08）")
 
 
+def _c_v5x_snapshot_live_price(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261124-01：快照现价改取分钟真实价的**展示层隔离**断言。
+
+    为什么值得 block
+
+    BR888 实测：22:00:33 简报推「现 14845」，而 22:00 夜盘桶已到 14805 ——
+    回放末根在采集/聚合完成前退到上一根 60m 桶。改分钟后最危险的静默失效是
+    「展示价换了，但止损/回放口径也被顺手改了」，那会把信号链拖下水。所以断言：
+
+      1. **真实引用**：snapshot.py 引用 ``latest_real_prices`` 且查 ``l0_raw.minute_bar``
+         continuous 层、带时间窗（防「函数写了没人调」/ 全表扫）；
+      2. **口径隔离**：``stop_real = _cur_stop(eng) - off`` 原样、``bar_last_price``
+         对账字段在、展示价字段来自 ``show_price``（真实引用，非字符串碰运气）；
+      3. **行为级**：format_snapshot 对 minute 行标注取价来源、对 bar 行不标；
+      4. **文案同源**：brief.py 同步标注，避免两个文案路径口径分叉。
+    """
+    label = "V5X 快照现价分钟真实价接线且止损/回放口径隔离"
+    try:
+        import ast
+
+        from app.strategies.v5x import snapshot as snap
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"import 失败 {type(exc).__name__}: {exc}", (
+            "快照模块不可导入（CL-20261124-01）")
+
+    bad: list[str] = []
+    observed: list[str] = []
+    root = Path(__file__).resolve().parents[2]
+
+    try:
+        snap_src = (root / "app/strategies/v5x/snapshot.py").read_text(encoding="utf-8")
+        brief_src = (root / "app/strategies/v5x/brief.py").read_text(encoding="utf-8")
+        tree = ast.parse(snap_src)
+    except Exception as exc:                              # noqa: BLE001
+        return False, label, f"源码读取失败 {type(exc).__name__}: {exc}", (
+            "snapshot/brief 源码不可读（CL-20261124-01）")
+
+    # 1) 真实引用：函数被 theoretical_positions 调用 + 查分钟表 + 窗口化
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    fn = next((n for n in tree.body
+               if isinstance(n, ast.FunctionDef) and n.name == "theoretical_positions"), None)
+    tp_src = ast.get_source_segment(snap_src, fn) or "" if fn else ""
+    called_latest = "latest_real_prices" in names and "live = latest_real_prices(" in tp_src
+    observes = {
+        "called_latest": called_latest,
+        "queries_minute": "l0_raw.minute_bar" in snap_src,
+        "continuous": "layer = 'continuous'" in snap_src or "layer='continuous'" in snap_src,
+        "windowed": "interval '5 days'" in snap_src,
+    }
+    observed.append(" ".join(f"{k}={v}" for k, v in observes.items()))
+    for k, v in observes.items():
+        if not v:
+            bad.append(f"分钟价引用缺失：{k}")
+
+    # 2) 口径隔离（真实 AST 片段，不用字符串碰运气）
+    isolates = {
+        "stop_from_engine": "stop_real = _cur_stop(eng) - off" in tp_src,
+        "bar_price_kept": "bar_last_price" in tp_src,
+        "show_price_used": '"last_price": round(show_price' in tp_src,
+        "flag_exists": "use_live_price" in tp_src,
+    }
+    observed.append(" ".join(f"{k}={v}" for k, v in isolates.items()))
+    for k, v in isolates.items():
+        if not v:
+            bad.append(f"止损/回放口径隔离缺失：{k}")
+
+    # 3) 行为级：文案标注
+    try:
+        fake_min = {
+            "last_bar": "2026-11-24 15:00:00+08:00", "stale_days": 0,
+            "n_long": 0, "n_short": 1,
+            "rows": [{"symbol": "BR888", "dir": "SHORT", "lots": 1,
+                      "avg_px_real": 147.4, "last_price": 148.05, "stop_real": 151.9,
+                      "unrealized_yuan": -325.0, "be_done": False,
+                      "price_source": "minute", "price_ts": "2026-11-24T22:08:00+08:00"}],
+        }
+        fake_bar = {**fake_min, "rows": [{**fake_min["rows"][0],
+                                          "price_source": "bar_60m", "price_ts": None}]}
+        t_min = snap.format_snapshot(fake_min)
+        t_bar = snap.format_snapshot(fake_bar)
+        behavior = {
+            "minute_noted": "现价取分钟实时价" in t_min,
+            "bar_not_noted": "现价取分钟实时价" not in t_bar,
+            "stop_intact": "止损151.9" in t_min,
+        }
+        observed.append(" ".join(f"{k}={v}" for k, v in behavior.items()))
+        for k, v in behavior.items():
+            if not v:
+                bad.append(f"文案行为不符：{k}")
+    except Exception as exc:                              # noqa: BLE001
+        bad.append(f"format_snapshot 行为检查异常：{type(exc).__name__}: {exc}")
+
+    # 4) 两个文案路径同源标注
+    brief_noted = "现价取分钟实时价" in brief_src and "price_source" in brief_src
+    observed.append(f"brief_noted={brief_noted}")
+    if not brief_noted:
+        bad.append("brief.py 未同步标注现价取价来源")
+
+    return not bad, label, " ".join(observed), (
+        "" if not bad else "；".join(bad)
+        + "。快照换价若污染止损/回放口径 = 信号链被拖下水（CL-20261124-01）")
+
+
 def _c_v5x_close_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """V5X 收盘即时扫描链真实接线（CL-20261109-17）。
 
@@ -8793,6 +8896,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 首份人工清单 5 个仓抄反了 4 个方向，所以「方向标签」也进断言。
     ("V5X-SNAPSHOT-WIRED", "理论持仓快照真实接线且方向标签正确", "block",
      _c_v5x_snapshot_wired),
+    # CL-20261124-01：现价改取分钟真实价；必须挡住「换价顺手改了止损/回放口径」。
+    ("V5X-SNAPSHOT-LIVE-PRICE", "V5X 快照现价分钟价接线且止损/回放口径隔离", "block",
+     _c_v5x_snapshot_live_price),
     # CL-20261109-17：用户要求「60m 收盘 +10s 扫描推送」。四个接缝都可静默断掉
     # （标签不同源 / 没注册 / 字典被写成 5 段 cron / 半截桶门失效），且表现都是
     # 「照常运行就是不推」。这条把它们钉在一处。

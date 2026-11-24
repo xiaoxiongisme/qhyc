@@ -41,12 +41,43 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from sqlalchemy import text  # noqa: E402
+
 from app.core.db import session_scope  # noqa: E402
 from app.core.logging import logger  # noqa: E402
 from app.strategies.v5x.live import _load, _replay_orders  # noqa: E402
 from app.strategies.v5x.params import config_from  # noqa: E402
 
-__all__ = ["theoretical_positions", "format_snapshot", "push_snapshot"]
+__all__ = ["theoretical_positions", "format_snapshot", "push_snapshot",
+           "latest_real_prices"]
+
+
+def latest_real_prices(session, symbols: list[str]) -> dict[str, tuple[float, object]]:
+    """每个品种最新已落库分钟的**真实价**（``continuous`` 层，无需反解 off）。
+
+    CL-20261124-01：整点简报在采集/60m 聚合完成前触发时，回放末根会退到上一根
+    60m 桶（BR888 实测推 14845，而 22:00 夜盘桶已到 14805）。分钟表逐分钟写、
+    与 60m raw 同属真实价空间，用它只刷展示层的「现价/浮亏」，比等 60m 桶聚合
+    快一根；止损/方向/手数仍由 60m 回放决定，不受影响。
+
+    纪律：
+      * **窗口化**：``ts >= now() - interval '5 days'``，禁止对 6000 万行分钟表全扫；
+      * **降级不报错**：某品种取不到时返回缺失，调用方回退 60m 口径价；
+      * **只读**：不写任何表。
+    """
+    if not symbols:
+        return {}
+    rows = session.execute(
+        text(
+            "SELECT DISTINCT ON (symbol) symbol, close, ts "
+            "FROM l0_raw.minute_bar "
+            "WHERE symbol = ANY(:syms) AND layer = 'continuous' "
+            "  AND ts >= now() - interval '5 days' AND close IS NOT NULL "
+            "ORDER BY symbol, ts DESC"
+        ),
+        {"syms": list(symbols)},
+    ).all()
+    return {str(sym): (float(close), ts) for sym, close, ts in rows}
 
 
 def _cur_stop(eng) -> float:
@@ -76,12 +107,19 @@ def _cur_stop(eng) -> float:
 
 def theoretical_positions(session, symbols: list[str] | None = None,
                           asof: date | None = None,
-                          overrides: dict | None = None) -> dict:
+                          overrides: dict | None = None,
+                          use_live_price: bool = True) -> dict:
     """重放到最后一根已收盘 bar，返回理论上仍持有的仓位。
 
     返回 ``{"asof", "last_bar", "rows", "n_long", "n_short", "n_flat", "stale_days"}``。
     每行含 ``symbol/dir/lots/avg_px_real/entry_px_real/last_price/stop_real/
     unrealized_yuan/entry_bar/last_bar``，价格全部为**真实可成交价**。
+
+    CL-20261124-01：``last_price`` / ``unrealized_yuan`` 默认取**最新分钟真实价**
+    （展示层，解决整点简报现价滞后一根 60m 桶）；同行的 ``bar_last_price`` 保留
+    60m 回放末根价作同源对账。``stop_real`` / ``avg_px_real`` / ``dir`` / ``lots``
+    仍由 60m 回放决定，**不随展示价变动**——止损判据与信号口径绝不改。
+    设 ``use_live_price=False`` 可回到纯 60m 口径（守卫/回放对拍用）。
     """
     asof = asof or date.today()
     # ★ 2026-11-09（CL-20261109-16）：``load_market_data`` 的区间是 **[start, end) 半开**，
@@ -95,6 +133,15 @@ def theoretical_positions(session, symbols: list[str] | None = None,
                 "n_long": 0, "n_short": 0, "n_flat": 0, "stale_days": None}
 
     cfg = config_from(overrides or {})
+    # CL-20261124-01：循环前一次性取全部品种的分钟真实价（避免逐品种 N+1 查询）。
+    # 取不到/异常一律降级为空 dict，调用方回退 60m 口径——展示降级，不影响交易判据。
+    live: dict[str, tuple[float, object]] = {}
+    if use_live_price:
+        try:
+            live = latest_real_prices(session, list(syms))
+        except Exception as exc:                          # noqa: BLE001
+            logger.warning("[v5x.snapshot] 分钟实时价不可用，回退 60m 口径: {0}: {1}".format(
+                type(exc).__name__, str(exc)[:120]))
     rows: list[dict] = []
     n_flat = 0
     last_bar = None
@@ -120,17 +167,29 @@ def theoretical_positions(session, symbols: list[str] | None = None,
         mult = float(eng.cost.mult)
         avg_real = eng.avg_px - off
         entry_real = eng.entry_px - off
-        last_real = float(df["close"].iloc[-1]) - off
+        bar_last_real = float(df["close"].iloc[-1]) - off   # 60m 回放末根真实价（对账口径）
         stop_real = _cur_stop(eng) - off
+        hit = live.get(sym)
+        if hit is not None:
+            show_price, price_ts = hit
+            price_source = "minute"
+            price_ts = str(price_ts)
+        else:
+            show_price = bar_last_real
+            price_ts = None
+            price_source = "bar_60m"
         rows.append({
             "symbol": sym,
             "dir": "LONG" if dirn > 0 else "SHORT",
             "lots": round(float(eng.lots), 2),
             "avg_px_real": round(avg_real, 4),
             "entry_px_real": round(entry_real, 4),
-            "last_price": round(last_real, 4),
-            "stop_real": round(stop_real, 4),
-            "unrealized_yuan": round((last_real - avg_real) * dirn * eng.lots * mult, 2),
+            "last_price": round(show_price, 4),          # 展示层：分钟实时价（缺失回退 bar）
+            "bar_last_price": round(bar_last_real, 4),   # 60m 回放口径，对账用
+            "price_source": price_source,                # 取价来源，供守卫/文案判别
+            "price_ts": price_ts,
+            "stop_real": round(stop_real, 4),            # 止损：仍由 60m 回放决定，不动
+            "unrealized_yuan": round((show_price - avg_real) * dirn * eng.lots * mult, 2),
             "be_done": bool(eng.be_done),
             "entry_bar": str(df["bucket"].iloc[eng.entry_i]),
             "last_bar": str(ts),
@@ -165,6 +224,13 @@ def format_snapshot(snap: dict, max_rows: int = 20) -> str:
 
     lines = [head,
              f"共 {len(rows)} 个：多 {snap.get('n_long', 0)} / 空 {snap.get('n_short', 0)}"]
+    # CL-20261124-01：现价改取分钟实时价后，明确标注取价来源/时点，
+    # 让用户不再把「现」误读为 60m 收盘价，也说明止损仍按 60m 桶。
+    minute_rows = [r for r in rows if r.get("price_source") == "minute"]
+    if minute_rows:
+        pts = sorted({r.get("price_ts") for r in minute_rows if r.get("price_ts")})
+        ts_note = f"截至 {pts[-1][11:16]}" if pts else ""
+        lines.append(f"现价取分钟实时价{ts_note}；止损/均价按 60m 桶（回放口径不变）")
     for r in rows[:max_rows]:
         tag = "保本" if r.get("be_done") else "止损"
         lines.append(
