@@ -13,6 +13,7 @@ from app.data.bar5m_gate import (
     filter_fresh,
     floor_5m,
     require_fresh,
+    require_fresh_safe,
 )
 
 TZ = timezone(timedelta(hours=8))
@@ -51,12 +52,42 @@ def test_lagging_symbol_is_rejected_while_others_pass():
         require_fresh(mm, mm, bm, now=NOW, max_age_min=None)
 
 
-def test_inflight_partial_bucket_is_rejected():
-    """bar 标签跑到已收完桶之后 = 在途半截桶，必须拒绝（不是"更及时"）。"""
+def test_inflight_partial_bucket_is_in_progress_not_signal():
+    """CL-20261124-02：bar 恰领先已收完桶一格 = 合成器在途桶。
+    不出信号（ok=False），但不再是 fail-loud 故障：扫描器跳过即可。
+    """
     mm = {"FG888": datetime(2026, 11, 21, 14, 32, tzinfo=TZ)}
     bm = {"FG888": datetime(2026, 11, 21, 14, 35, tzinfo=TZ)}
     row = evaluate(mm, mm, bm, now=NOW)[0]
+    assert row.status == "IN_PROGRESS" and not row.ok
+    # 严格门仍拒绝（保留原语义给严格口径调用方）
+    with pytest.raises(BarFreshnessError, match="FG888"):
+        require_fresh(mm, mm, bm, now=NOW, max_age_min=None)
+    # 扫描器口径：跳过在途，不抛错
+    allowed, rows = require_fresh_safe(mm, mm, bm, now=NOW, max_age_min=None)
+    assert allowed == [] and rows[0].status == "IN_PROGRESS"
+
+
+def test_ahead_two_buckets_is_hard_failure():
+    """领先 >=2 根不是正常在途，仍必须 fail-loud。"""
+    mm = {"FG888": datetime(2026, 11, 21, 14, 30, tzinfo=TZ)}
+    bm = {"FG888": datetime(2026, 11, 21, 14, 40, tzinfo=TZ)}
+    row = evaluate(mm, mm, bm, now=NOW)[0]
     assert row.status == "AHEAD_UNSAFE" and not row.ok
+    with pytest.raises(BarFreshnessError, match="FG888"):
+        require_fresh_safe(mm, mm, bm, now=NOW, max_age_min=None)
+
+
+def test_in_progress_skipped_while_other_symbol_trades():
+    """一个品种在途不应拖垮整轮：健康品种照常放行。"""
+    mm = {"FG888": datetime(2026, 11, 21, 14, 32, tzinfo=TZ),
+          "EB888": datetime(2026, 11, 21, 14, 37, tzinfo=TZ)}
+    bm = {"FG888": datetime(2026, 11, 21, 14, 35, tzinfo=TZ),
+          "EB888": datetime(2026, 11, 21, 14, 35, tzinfo=TZ)}
+    allowed, rows = require_fresh_safe(mm, mm, bm, now=NOW, max_age_min=None)
+    assert allowed == ["EB888"]
+    assert {r.symbol: r.status for r in rows} == {
+        "FG888": "IN_PROGRESS", "EB888": "OK"}
 
 
 def test_missing_bar_and_stale_minute_are_rejected():

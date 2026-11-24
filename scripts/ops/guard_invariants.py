@@ -8399,12 +8399,29 @@ def _c_5m_bar_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     except Exception as exc:  # noqa: BLE001
         return False, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
             "查询失败", f"{type(exc).__name__}: {str(exc)[:180]}"
-    if rows:
-        bad = ", ".join(f"{r[0]}(bar={r[2]}, expected={r[3]})" for r in rows[:6])
+    # CL-20261124-02：合成器 DO UPDATE 写在途桶（bar 恰领先已收完桶一个 5m
+    # 网格），交易时段属正常中间态：不可出信号，但不算 block 故障。
+    # 扫描器已由 require_fresh_safe 跳过这类品种；守卫同样降级，仅对
+    # 真落后 / 领先>=2根 / 停更保持 block。
+    from datetime import timedelta as _td
+    in_progress = []
+    hard_bad = []
+    for r in rows:
+        bk, exp = r[2], r[3]
+        if bk is not None and exp is not None \
+                and abs((bk - exp).total_seconds() - 300) < 1:
+            in_progress.append(r)
+        else:
+            hard_bad.append(r)
+    if in_progress:
+        logger.info("[5M-BAR-FRESH] in-progress buckets skipped: %s",
+                    [r[0] for r in in_progress[:10]])
+    if hard_bad:
+        bad = ", ".join(f"{r[0]}(bar={r[2]}, expected={r[3]})" for r in hard_bad[:6])
         return False, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
-            f"异常 {len(rows)} 个", bad + " → 5m 策略必须跳过这些品种（见 CL-20261121-04）"
+            f"异常 {len(hard_bad)} 个", bad + " → 5m 策略必须跳过（CL-20261121-04）"
     return True, "策略池 10 品种 bar_5m 逐品种追平已收完桶", \
-        f"{len(FIVE_MIN_POOL)}/{len(FIVE_MIN_POOL)} 追平", ""
+        f"{len(FIVE_MIN_POOL)}/{len(FIVE_MIN_POOL)} 追平(在途{len(in_progress)})", ""
 
 
 def _c_5m_bar_grid(c: Ctx) -> tuple[bool, str, str, str]:
@@ -8430,7 +8447,10 @@ def _c_5m_complete_gate(c: Ctx) -> tuple[bool, str, str, str]:
     checks = {
         "gate.complete_bucket": "def complete_bucket" in gate,
         "gate.require_fresh": "def require_fresh" in gate,
-        "runner.calls_gate": "require_fresh(" in runner,
+        # CL-20261124-02：扫描器改用 require_fresh_safe（跳过在途桶），
+        # 严格版 require_fresh 仍在门模块中保留，供严格口径调用方使用。
+        "runner.calls_gate": "require_fresh_safe(" in runner,
+        "gate.has_safe": "def require_fresh_safe" in gate,
         "guard.per_symbol": "FIVE_MIN_POOL" in (_FIVE_MIN_ROOT / "scripts" / "ops" / "guard_invariants.py").read_text(encoding="utf-8"),
     }
     bad = [k for k, v in checks.items() if not v]

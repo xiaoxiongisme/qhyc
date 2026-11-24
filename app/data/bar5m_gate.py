@@ -102,9 +102,13 @@ def evaluate(
     ``NO_MINUTE`` 该品种近窗内无分钟数据（连基准都没有）；
     ``NO_BAR`` 有分钟但 bar_5m 近窗内无该品种（CU/SC 式整段停更）；
     ``LAGGING`` bar_5m 落后于最后一根已收完桶；
-    ``AHEAD_UNSAFE`` bar_5m 出现了比已收完桶更晚的标签（在途半截桶）；
+    ``IN_PROGRESS`` bar 恰领先已收完桶一个 5m 网格：合成器的在途桶
+        （DO UPDATE 刷新，V5X 依赖其及时性），不可出信号但非故障；
+    ``AHEAD_UNSAFE`` bar 领先已收完桶 >=2 根或落在非网格位置（真异常）；
     ``STALE`` 分钟数据本身超过 ``max_age_min``（停更/非交易时段）；
     ``OK`` 唯一放行状态。
+    仅 ``OK`` 的 ``ok=True``；``IN_PROGRESS`` 与 ``AHEAD_UNSAFE`` 都不出信号，
+    但后者（以及 LAGGING/NO_BAR/STALE）才是 fail-loud 的对象。
     """
     results: list[SymbolFreshness] = []
     anchor = now
@@ -129,7 +133,13 @@ def evaluate(
         elif lag is not None and lag > 0:
             status = "LAGGING"
         elif lag is not None and lag < 0:
-            status = "AHEAD_UNSAFE"
+            # CL-20261124-02：合成器 DO UPDATE 会写「在途桶」——标签是下一个
+            # 5m 终点，但对应分钟尚未收完。实测 09:05-14:35 交易时段 9 次
+            # five_min_scan 失败全部是 bar=expected+5min 恰好一根。领先恰一格
+            # 属正常在途（不可出信号，但不算故障）；>=2 根才是真异常。
+            status = (
+                "IN_PROGRESS" if abs(lag + FIVE_MIN.total_seconds() / 60) < 1e-6
+                else "AHEAD_UNSAFE")
         else:
             status = "OK"
         results.append(SymbolFreshness(
@@ -166,6 +176,30 @@ def require_fresh(
             f"{r.symbol}:{r.status}(bar={r.bar_max},expected={r.expected})" for r in bad)
         raise BarFreshnessError(f"[5M-P0A] bar_5m 逐品种门未通过：{detail}")
     return rows
+
+
+def require_fresh_safe(
+    symbols: Iterable[str],
+    minute_max: Mapping[str, datetime | None],
+    bar_max: Mapping[str, datetime | None],
+    now: datetime | None = None,
+    max_age_min: int | None = DEFAULT_MAX_AGE_MIN,
+) -> tuple[list[str], list[SymbolFreshness]]:
+    """扫描器专用：返回 ``(可出信号品种, 全判定)``。
+
+    CL-20261124-02：合成器为 V5X 及时性写「在途桶」（bar 恰领先一格），
+    交易时段扫描必然撞上。这类品种只跳过、不 fail-loud；真异常
+    （LAGGING / NO_BAR / STALE / 领先>=2 根）仍抛 :class:`BarFreshnessError`。
+    保留 ``require_fresh`` 原样供严格口径调用方使用。
+    """
+    rows = evaluate(symbols, minute_max, bar_max, now, max_age_min)
+    hard_bad = [r for r in rows if not r.ok and r.status != "IN_PROGRESS"]
+    if hard_bad:
+        detail = ", ".join(
+            f"{r.symbol}:{r.status}(bar={r.bar_max},expected={r.expected})"
+            for r in hard_bad)
+        raise BarFreshnessError(f"[5M-P0A] bar_5m 逐品种门未通过：{detail}")
+    return [r.symbol for r in rows if r.ok], rows
 
 
 def load_minute_max(session, symbols: list[str],

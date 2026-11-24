@@ -89,11 +89,22 @@ def scan_once(
     mm: dict[str, datetime] = {}
     bm: dict[str, datetime] = {}
     # 新鲜度门用轻量 SQL，不先加载 1200 根 bar（fail-fast）。
-    from app.data.bar5m_gate import load_bar5m_max, load_minute_max
+    from app.data.bar5m_gate import (
+        load_bar5m_max, load_minute_max, require_fresh_safe,
+    )
 
     mm = load_minute_max(session, syms)
     bm = load_bar5m_max(session, syms)
-    require_fresh(syms, mm, bm, now=now, max_age_min=max_age_min)
+    # CL-20261124-02：在途桶（bar 恰领先一格）跳过而非整轮 fail-loud；
+    # 真异常（落后/停更/领先>=2根）仍由 require_fresh_safe 抛错。
+    fresh_syms, gate_rows = require_fresh_safe(
+        syms, mm, bm, now=now, max_age_min=max_age_min)
+    if not fresh_syms:
+        logger.warning(
+            '[5m] no fresh symbol to scan (in-progress or halted): %s',
+            [r.status for r in gate_rows])
+        return []
+    syms = [s for s in syms if s in set(fresh_syms)]
 
     if meta is None:
         meta = load_contract_meta(session, syms)
