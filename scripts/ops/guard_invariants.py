@@ -8779,7 +8779,8 @@ def _c_logger_bound(c: Ctx) -> tuple[bool, str, str, str]:
     if runner_path.is_file():
         src = runner_path.read_text(encoding="utf-8", errors="ignore")
         runner_ok = ("from app.core.logging import logger" in src
-                     and "logger.warning(" in src)
+                     and "logger.warning(" in src
+                     and "%s" not in src)  # loguru 只认 {}，%s 会丢参数（CL-20261125-01）
     ok = not missed and runner_ok
     obs = f"logger_calls={n_calls}/files={n_files}/unbound={len(missed)}/runner_ok={runner_ok}"
     return ok, "所有 logger.xxx 调用模块均绑定 logger", obs, \

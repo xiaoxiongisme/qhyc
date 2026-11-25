@@ -103,7 +103,7 @@ def scan_once(
         syms, mm, bm, now=now, max_age_min=max_age_min)
     if not fresh_syms:
         logger.warning(
-            '[5m] no fresh symbol to scan (in-progress or halted): %s',
+            '[5m] no fresh symbol to scan (in-progress or halted): {}',
             [r.status for r in gate_rows])
         return []
     syms = [s for s in syms if s in set(fresh_syms)]

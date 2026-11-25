@@ -56,3 +56,16 @@ def test_runner_module_has_logger_bound():
         ):
             bound = True
     assert bound, "runner.py 调用了 logger.xxx 但从未绑定 logger —— 必然 NameError"
+
+
+def test_runner_uses_brace_format_not_pct():
+    """runner.py 用 loguru 包装器，格式串必须是 {} 而非 %s（CL-20261125-01 连带修复）。"""
+    path = pathlib.Path(__file__).resolve().parents[1] / "app/strategies/five_min/runner.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name) and n.func.value.id == "logger"):
+            continue
+        if n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
+            assert "%s" not in n.args[0].value, \
+                f"runner.py:{n.lineno} 用 %s 占位符，loguru 会原样打印并丢参数"
