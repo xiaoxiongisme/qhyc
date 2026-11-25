@@ -39,6 +39,19 @@ class _FakeSession:
     def commit(self):
         self.commits += 1
 
+    # ★ CL-20261125-02：防御性补齐。wired fixture 已 mock 掉组合熔断，
+    #   正常情况下这两个方法不会被调用；但历史上 fixture 曾漏替
+    #   _apply_v5x_portfolio_brake，_FakeSession 因缺 execute/rollback 抛
+    #   AttributeError，pytest 又把错误写进生产 qhyc.log，制造熔断失效假象。
+    #   留空实现兜底，避免未来任何漏替再次污染生产日志。
+    def execute(self, *a, **k):
+        raise AssertionError(
+            "_FakeSession.execute 被调用：说明 run_v5x_scan 路径上有生产依赖"
+            "未被 wired fixture 替掉（检查 _apply_v5x_portfolio_brake）")
+
+    def rollback(self):
+        pass
+
 
 class _FakeFusion:
     fallback_webhook = "https://qyapi.example.invalid/hook?key=k"
@@ -55,6 +68,17 @@ def wired(monkeypatch):
                    "ok": (True, "pushplus")}
 
     monkeypatch.setattr(live, "scan_once", lambda session, **kw: [])
+    # ★ CL-20261125-02：run_v5x_scan 在「生成信号后、落库前」会调
+    #   _apply_v5x_portfolio_brake → brake_state_for_session → load_equity_curve，
+    #   后者要 session.execute()。本 fixture 的 _FakeSession 只有 commit()，
+    #   若不替掉就会走进生产风控抛 AttributeError；而 pytest 在容器 /app 下
+    #   import app 触发 setup_logging 写 /app/logs/qhyc.log（=生产日志），
+    #   于是每次跑本测试都往生产日志灌「熔断恒等放行」的假象，误导运维。
+    #   这组测试只关心推送通道，风控路径一律替成 fail-open 空实现。
+    monkeypatch.setattr(
+        live, "_apply_v5x_portfolio_brake",
+        lambda session, sigs: ("", {"enabled": False, "scalar": 1.0, "idle": False,
+                                    "reason": "test-stub", "n_days": 0, "need_days": 0}))
     monkeypatch.setattr(live, "_persist", lambda session, sigs: state["new"])
     monkeypatch.setattr(live, "_load_unsent", lambda session, now, **kw: state["queue"])
     monkeypatch.setattr(
