@@ -512,6 +512,99 @@ def _max_minute_ts(session: Session,
         {"syms": symbols}).scalar()
 
 
+# ---------------------------------------------------------------------------
+# CL-20261125-04：L1 合成增量水位表（ops.bar_synth_watermark）
+# ---------------------------------------------------------------------------
+#: 全局单键：4 个频率 × 2 层共用同一个 since_session（它们在 _minute_and_bars_job
+#: 里本就是同轮、同 scope 合成的，拆成多键只会制造口径分裂）。
+_WM_KEY = "l1_bar_synth"
+
+
+def _load_watermark(session: Session) -> dict | None:
+    """读水位；表不存在或空行返回 None（→ 调用方回退固定窗口，冷启动零风险）。
+
+    migration 089 尚未应用时表不存在会抛 UndefinedTable——此处吞掉并记 warning，
+    让改造在"代码先上、migration 后上"的顺序下也不会炸掉调度器。
+    """
+    try:
+        row = session.execute(text(
+            "SELECT covered_until, overlap_days, reset_days, runs "
+            "FROM ops.bar_synth_watermark WHERE key = :k"
+        ), {"k": _WM_KEY}).mappings().first()
+    except Exception as exc:  # noqa: BLE001 - migration 未应用/权限异常均降级
+        logger.warning(f"[synth-wm] 水位表不可用，回退固定窗口："
+                       f"{type(exc).__name__}: {exc}")
+        return None
+    if row is None or row["covered_until"] is None:
+        return None
+    return dict(row)
+
+
+def wm_since(covered: datetime | None, overlap_days: float,
+             now: datetime, days_back: int = 3) -> tuple[datetime, str]:
+    """纯函数：给定水位与时钟，算出会话对齐的合成起点（供单测无 DB 覆盖）。
+
+    冷启动（covered=None）→ floor(now - days_back - 1天)，逐位等于改造前口径。
+    有水位 → floor(covered - overlap_days)，不额外减 1 天。
+    """
+    if covered is None:
+        return _session_floor(now - timedelta(days=days_back) - timedelta(days=1)), "cold_start"
+    if covered.tzinfo is None:
+        covered = covered.replace(tzinfo=ZoneInfo("UTC")).astimezone(_SH_TZ)
+    since = _session_floor(covered - timedelta(days=overlap_days))
+    if since > now:
+        since = _session_floor(now - timedelta(days=1))
+    return since, "watermark"
+
+
+def resolve_synth_window(session: Session, days_back: int = 3) -> tuple[datetime, str]:
+    """计算本轮合成起点 since（**会话对齐**），返回 (since, 来源标签)。
+
+    水位存在：since = _session_floor(covered_until - overlap_days)。
+      · 正常轮次每 30min 前进 → 窗口稳定在 overlap_days（默认 1 天）——
+        覆盖"前一交易日夜盘(21:00→次日02:30) + 当天"，足以吸收 L0 回补；
+      · 漏跑/挂机多天 → covered_until 停滞，since 随 covered 不变，窗口自动
+        扩到"缺口 + overlap"，次日补算时不漏桶（相对固定 days_back 的核心优势）。
+      · 注意这里**不再额外减 1 天**：旧代码 floor(since-1天) 的 -1 是给
+        "会话段最长 6 小时"留的对齐余量；水位 covered 是已追平的 L0 最新分钟，
+        _session_floor 直接对齐即可，多减只会把窗口撑回 3 天、抵消减负收益。
+    水位缺失：since = 今天 - days_back（改造前行为），逐位等价。
+    """
+    wm = _load_watermark(session)
+    now = datetime.now(_SH_TZ)
+    covered = wm["covered_until"] if wm else None
+    overlap = float(wm["overlap_days"]) if wm else 1.0
+    return wm_since(covered, overlap, now, days_back)
+
+
+def advance_watermark(session: Session, covered_until: datetime,
+                      overlap_days: float = 1.0) -> None:
+    """追平校验通过后推进水位（单调，只前进不后退）。
+
+    单独 commit：与 bar 落库事务解耦——即便水位写失败也不回滚已正确落地的 bar，
+    大不了下次多重算一轮。水位表缺列/缺表时降级为 warning，不影响合成主链。
+    """
+    if covered_until is None:
+        return
+    try:
+        session.execute(text("""
+            INSERT INTO ops.bar_synth_watermark
+                (key, covered_until, overlap_days, runs, last_success_at, updated_at)
+            VALUES (:k, :cov, :ov, 1, now(), now())
+            ON CONFLICT (key) DO UPDATE SET
+                covered_until  = GREATEST(ops.bar_synth_watermark.covered_until, EXCLUDED.covered_until),
+                overlap_days   = EXCLUDED.overlap_days,
+                runs           = ops.bar_synth_watermark.runs + 1,
+                last_success_at= now(),
+                updated_at     = now()
+        """), {"k": _WM_KEY, "cov": covered_until, "ov": overlap_days})
+        session.commit()
+    except Exception as exc:  # noqa: BLE001 - 水位是优化项，不能拖挂合成主链
+        session.rollback()
+        logger.warning(f"[synth-wm] 水位推进失败（不影响已落库 bar）："
+                       f"{type(exc).__name__}: {exc}")
+
+
 def _index_layer_stale(session: Session, since: datetime,
                        scope: Scope | None = None) -> dict[str, list[str]]:
     """指数层 ``bar_*`` 落后于 L0 指数分钟的符号（按**日期**比较，口径无关）。
@@ -636,7 +729,8 @@ def _session_floor(dt: datetime) -> datetime:
 
 
 def purge_recent_buckets(session: Session, days_back: int = 4,
-                         scope: Scope | None = None) -> dict[str, int]:
+                         scope: Scope | None = None,
+                         since_session: datetime | None = None) -> dict[str, int]:
     """删除「最近 days_back 天」的全部桶，供切换合成口径后清除旧网格残留。
 
     背景（2026-11-03，见 docs/V2样本外崩塌排查.md §36）
@@ -654,10 +748,11 @@ def purge_recent_buckets(session: Session, days_back: int = 4,
     安全边界：本函数只 DELETE **不提交**，由调用方与随后的 upsert 在同一事务提交；
     upsert 抛错则整体回滚，旧数据原样保留。
     """
-    cutoff = datetime.now(_SH_TZ) - timedelta(days=days_back)
-    # 会话表必须把下界对齐到会话起点：任意时刻作下界会把「下界所在的那根桶」
-    # 一起删掉，而重建只从下界之后读分钟 → 半截桶（§36.12 实测踩过）。
-    cutoff_session = _session_floor(cutoff)
+    # CL-20261125-04：since_session 由调用方从 resolve_synth_window 取得，与
+    # synthesize_bars_incremental 严格共用同一窗口（删除范围 ⊆ 重建范围）。
+    # None 时回退原 days_back 口径（冷启动零风险）。
+    cutoff_session = (since_session if since_session is not None
+                      else _session_floor(datetime.now(_SH_TZ) - timedelta(days=days_back)))
 
     # ★ 2026-11-07（CL-20261107-01 S2）：删除范围必须与重建范围同口径。
     #   重建已按品种口径收口，若 purge 仍删「全部 symbol 的最近 N 天」，
@@ -690,8 +785,16 @@ def purge_recent_buckets(session: Session, days_back: int = 4,
 
 def synthesize_bars_incremental(session: Session, days_back: int = 3,
                                 max_retries: int = 2,
-                                scope: Scope | None = None) -> dict:
+                                scope: Scope | None = None,
+                                since_session: datetime | None = None,
+                                advance_wm: bool = True) -> dict:
     """增量重算最近 days_back 天的桶（覆盖在途桶），成本极低。返回各表影响行数。
+
+    CL-20261125-04：``since_session`` 由调用方经 :func:`resolve_synth_window` 算好
+    并传入，purge 与 synth 必须用**同一个**值（保证删除范围 ⊆ 重建范围）。
+    ``None`` 时回退到旧口径 today-days_back（冷启动/未迁移环境零风险）。
+    追平校验通过后调 :func:`advance_watermark` 推进水位；``advance_wm=False``
+    用于收盘链里的中间轮（只补桶、不把在途水位前推）。
 
     边界处理：DELETE 按「桶对齐」阈值（含 since 所在的不完整桶），
     否则 since 落在某桶中间时该半截桶起点早于 since 不会被删、又因冲突被
@@ -717,12 +820,13 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
         scope = load_scope(session)
     log_scope(scope, "incremental 合成")
 
-    since = datetime.now(_SH_TZ) - timedelta(days=days_back)
-    # ★ 会话式切分必须向前多看 1 天，并把起点**对齐到会话起点**：它按「连续分钟段」
-    #   累计交易分钟计数，若 since 落在段的中间，前面的分钟没参与计数 → 该段所有 bar
-    #   错位；若不对齐，还会把 since 所在的整根桶写成半截（§36.12）。单个连续段最长
-    #   约 6 小时（夜盘 21:00→次日 02:30），多留 1 天余量足够。
-    since_session = _session_floor(since - timedelta(days=1))
+    if since_session is None:
+        since = datetime.now(_SH_TZ) - timedelta(days=days_back)
+        # ★ 会话式切分必须向前多看 1 天，并把起点**对齐到会话起点**：它按「连续分钟段」
+        #   累计交易分钟计数，若 since 落在段的中间，前面的分钟没参与计数 → 该段所有 bar
+        #   错位；若不对齐，还会把 since 所在的整根桶写成半截（§36.12）。单个连续段最长
+        #   约 6 小时（夜盘 21:00→次日 02:30），多留 1 天余量足够。
+        since_session = _session_floor(since - timedelta(days=1))
     stats: dict[str, int] = {}
     idx_stats: dict[str, int] = {}
     for t, iv in _BARS:
@@ -769,9 +873,8 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
             f"疑似 minute_bar 正在被 MinuteCollector 并发写入")
         if attempt == max_retries:
             break
-        # 重跑：扩大窗口重算，覆盖刚被并发写入的分钟线（纯 upsert，无需先 DELETE）
-        since = datetime.now(_SH_TZ) - timedelta(days=days_back)
-        since_session = _session_floor(since - timedelta(days=1))
+        # 重跑：CL-20261125-04 复用**同一水位窗口**（不再退回固定 days_back），
+        # 只把刚被并发写入的分钟线补进来（纯 upsert，无需先 DELETE）。
         for t, iv in _BARS:
             since_t = since_session if t in _SESSION_BARS else since
             stats[t] = _synth_one(session, t, iv, since_t, _UPSERT_TAIL, scope)
@@ -783,6 +886,11 @@ def synthesize_bars_incremental(session: Session, days_back: int = 3,
         logger.error(f"[synth] 重试后仍未追平 minute_bar（可能 MinuteCollector 持续并发写入）: {lags}")
     else:
         logger.info("[synth] 校验通过：bar_* 已追平 minute_bar 最新桶")
+        # CL-20261125-04：只在追平校验通过后推进水位到「本轮实际覆盖到的 L0 最新分钟」。
+        # 失败/并发未追平时水位停在旧值 → 下轮仍从旧水位重算，绝不因水位前移而漏桶。
+        if advance_wm and target is not None:
+            advance_watermark(session, target, 1.0)
+            logger.info(f"[synth-wm] 水位推进到 {target:%Y-%m-%d %H:%M}（窗口起点 {since_session:%Y-%m-%d %H:%M}）")
     # CL-20261121-04 / 5M-P0A：上面的追平校验只看「整批符号的聚合 max」，
     # CU888/SC888 停更两周仍被其它品种顶到最新而静默 PASS。这里补一层**逐品种**
     # 诊断（只记日志、不改合成语义，避免把仍在办 index 层 CL 的作业整体拖挂）。
@@ -844,5 +952,6 @@ def synthesize_bars_full(session: Session, work_mem: str = "2GB") -> dict:
 
 
 __all__ = ["synthesize_bars_incremental", "synthesize_bars_full",
+           "resolve_synth_window", "advance_watermark",
            "minute_pipeline_lock", "LOCK_MINUTE_PIPELINE",
     "advisory_lock_holder", "release_stale_pipeline_lock"]

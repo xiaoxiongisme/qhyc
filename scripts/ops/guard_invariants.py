@@ -8477,6 +8477,115 @@ def _5m_switch(c: Ctx, key: str) -> bool:
         return False
 
 
+def _repo_src(*parts: str) -> str:
+    """读仓库内源码文本（相对项目根），供「真实引用」类断言使用。"""
+    p = _REPO_ROOT.joinpath(*parts)
+    return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+
+
+def _c_synth_watermark_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261125-04：L1 增量水位表必须「建了且真有人读、真有人写」。
+
+    qhyc 最隐蔽的失效模式是「表建好了却没有代码引用」（VAR-SCOPE-WIRED 的事故原型）。
+    本断言从两侧锁死：
+      1) schema：ops.bar_synth_watermark 存在且迁移 089 的关键列齐备；
+      2) 生产代码真实引用：synthesizer 定义 resolve_synth_window/advance_watermark，
+         且**两个调用方**（scheduler 主调度 + close_pipeline 收盘链）都调用了
+         resolve_synth_window —— 只在一个地方接不算接通；
+      3) 运行痕迹：一旦跑过至少一轮，runs 必须 > 0 且 covered_until 非空
+         （防「代码 import 了、函数定义了，但从没真正推进过水位」）。
+    """
+    bad: list[str] = []
+    seen: list[str] = []
+
+    # 1) schema
+    try:
+        cols = {r[0] for r in c.rows(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='ops' AND table_name='bar_synth_watermark'")}
+    except Exception as exc:  # noqa: BLE001
+        cols = set()
+        bad.append(f"水位表探测失败({type(exc).__name__})")
+    need = {"key", "covered_until", "overlap_days", "runs", "last_success_at"}
+    if not cols:
+        bad.append("ops.bar_synth_watermark 不存在（migration 089 未应用）")
+    elif not need.issubset(cols):
+        bad.append(f"水位表缺列 {sorted(need - cols)}")
+    else:
+        seen.append("schema")
+
+    # 2) 代码真实引用（读源码，不靠 import 猜测）
+    synth_src = _repo_src("app", "ingest", "synthesizer.py")
+    sched_src = _repo_src("app", "scheduler.py")
+    close_src = _repo_src("app", "ingest", "close_pipeline.py")
+    if "def resolve_synth_window(" not in synth_src:
+        bad.append("synthesizer 未定义 resolve_synth_window")
+    if "def advance_watermark(" not in synth_src:
+        bad.append("synthesizer 未定义 advance_watermark")
+    if "ops.bar_synth_watermark" not in synth_src:
+        bad.append("synthesizer 未真正读写水位表")
+    if "resolve_synth_window" not in sched_src:
+        bad.append("scheduler 主调度未调用 resolve_synth_window")
+    if "resolve_synth_window" not in close_src:
+        bad.append("close_pipeline 收盘链未调用 resolve_synth_window")
+    if not bad:
+        seen += ["synthesizer", "scheduler", "close_pipeline"]
+
+    # 3) 运行痕迹（仅在 schema 正常时判；冷启动刚部署允许 runs=0）
+    if cols and need.issubset(cols):
+        try:
+            row = c.rows(
+                "SELECT runs, covered_until IS NOT NULL AS has_cov "
+                "FROM ops.bar_synth_watermark WHERE key='l1_bar_synth'")
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"水位行探测失败({type(exc).__name__})")
+            row = []
+        if row:
+            runs, has_cov = row[0]
+            seen.append(f"runs={runs}")
+            if not has_cov:
+                bad.append("水位行存在但 covered_until 为空（从未成功推进）")
+        else:
+            seen.append("冷启动(无水位行，允许)")
+
+    return not bad, "水位表建了且被主调度+收盘链真实读写", (
+        f"{len(seen)} 处已接线: {', '.join(seen)}"), (
+        "水位未真正接通：" + "; ".join(bad) if bad else "")
+
+
+def _c_synth_watermark_safe(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261125-04：水位不得越过 L0 实际分钟（前移 = 静默漏桶）。
+
+    水位 covered_until 表示「已追平校验通过覆盖到的 L0 最新分钟」。若它 > 当前
+    L0 max(ts) 一个交易日以上，说明水位因时钟异常/误写前移，下次合成会从未来
+    时点起算 → 中间桶再也不重算 = 静默漏桶。这是水位方案最致命的失效模式，
+    必须 block 级钉死。冷启动（无水位行）本断言按 PASS 放行（由 WIRED 断言负责
+    检查是否真的接通）。
+    """
+    try:
+        row = c.rows("""
+            SELECT w.covered_until, m.mx
+            FROM (SELECT covered_until FROM ops.bar_synth_watermark
+                  WHERE key='l1_bar_synth') w
+            CROSS JOIN (SELECT max(ts) AS mx FROM l0_raw.minute_bar
+                        WHERE ts > now() - interval '3 days') m
+        """)
+    except Exception as exc:  # noqa: BLE001
+        return False, "水位不超过 L0 实际最新分钟", f"读取失败 {type(exc).__name__}", str(exc)[:180]
+    if not row:
+        return True, "水位不超过 L0 实际最新分钟", "冷启动(无水位行)", ""
+    cov, mx = row[0]
+    if cov is None or mx is None:
+        return True, "水位不超过 L0 实际最新分钟", "水位/L0 尚未就绪", ""
+    # 允许水位比 L0 最新分钟领先不超过 1 小时（追平时的并发写入边界）；
+    # 超过 36h = 水位跑到未来一个交易日以上 = 判定前移漏桶。
+    lead_h = (cov - mx).total_seconds() / 3600
+    ok = lead_h <= 36
+    return ok, "水位不超过 L0 实际最新分钟（防前移漏桶）", (
+        f"covered={cov:%Y-%m-%d %H:%M} L0max={mx:%Y-%m-%d %H:%M} lead={lead_h:.1f}h"), (
+        "" if ok else "水位领先 L0 超过 36h，疑似前移漏桶——检查 advance_watermark 是否只在追平后调用")
+
+
 def _5m_src(*parts: str) -> str:
     p = _FIVE_MIN_ROOT.joinpath(*parts)
     return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
@@ -9053,6 +9162,13 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # 而 L0/L1 全绿。锁「口径内主连 BA 与 L1 同交易日（缺口 0）」。
     ("DATA-L2-FRESH", "口径内 38 主连 BA 与 L1 同交易日（缺口 0）",
      "block", _c_l2_fresh),
+    # CL-20261125-04：L1 合成真增量水位。两条都是「此刻可判」，不靠时间衰减：
+    # WIRED 防「水位表建了没人读/只在单侧接线」，SAFE 防「水位前移导致静默漏桶」
+    # （后者是水位方案最致命的失效模式，一旦发生，中间桶再也不重算）。
+    ("SYNTH-WATERMARK-WIRED", "L1 合成水位表被主调度+收盘链真实读写", "block",
+     _c_synth_watermark_wired),
+    ("SYNTH-WATERMARK-SAFE", "合成水位不越过 L0 最新分钟（防前移漏桶）", "block",
+     _c_synth_watermark_safe),
     # CL-20261111-09：调度器成功=作业没抛异常、采集脚本吞子进程非0退出 → 假绿。
     # 不从 job 状态判健康，直接验证「数据真落地」：最近完整交易日实时
     # akshare_1min 须覆盖全部 53 主连（每品种≥100桶）。漏采=该品种全链路断更却记 success。

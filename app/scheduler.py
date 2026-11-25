@@ -3585,7 +3585,8 @@ def _minute_and_bars_job() -> None:
                 # （用户要求"存储过程也需要"）。字典禁用则跳过 CALL 并显式记日志。
                 from app.ops.task_registry import record_execution, sp_enabled
                 from app.ingest.synthesizer import (
-                    purge_recent_buckets, synthesize_bars_incremental)
+                    purge_recent_buckets, synthesize_bars_incremental,
+                    resolve_synth_window)
 
                 # ★ 2026-11-03 口径回归修复（docs/V2样本外崩塌排查.md §36）：
                 #   10-09 起本作业改成 CALL sp_build_l1_from_minute，而该 SP 用
@@ -3609,9 +3610,14 @@ def _minute_and_bars_job() -> None:
                     #   静默不再追加（实测卡了 8 天没人发现）。
                     #   失败只告警不抛：它坏了不等于 bar 合成要停摆，但必须看得见。
                     _extend_index_8888()
-                    purge_recent_buckets(s, days_back=4, scope=scope)
+                    # CL-20261125-04：purge 与 synth 共用同一会话对齐窗口。
+                    # 有水位→窗口收缩到 overlap(1.5天)；无水位→逐位回退旧的 4/3 天口径。
+                    since_sess, wm_src = resolve_synth_window(s, days_back=3)
+                    logger.info(f"[scheduler] L1 合成窗口起点 {since_sess:%Y-%m-%d %H:%M}（{wm_src}）")
+                    purge_recent_buckets(s, days_back=4, scope=scope,
+                                         since_session=since_sess)
                     synth_stats = synthesize_bars_incremental(
-                        s, days_back=3, scope=scope)
+                        s, days_back=3, scope=scope, since_session=since_sess)
                 elif not sp_enabled("sp_build_l1_from_minute"):
                     logger.warning(
                         "[scheduler] sp_build_l1_from_minute 被字典禁用"

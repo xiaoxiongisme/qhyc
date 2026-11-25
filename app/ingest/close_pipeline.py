@@ -530,12 +530,17 @@ def synth_l1(session: Session, *, purge: bool = True) -> dict:
     的正常管线负责。
     """
     from app.data.tradable_scope import load_scope
-    from app.ingest.synthesizer import purge_recent_buckets, synthesize_bars_incremental
+    from app.ingest.synthesizer import (
+        purge_recent_buckets, synthesize_bars_incremental, resolve_synth_window)
 
     scope = load_scope(session)
+    # CL-20261125-04：与主调度 :07/:37 同口径——purge/synth 共用同一会话对齐窗口。
+    since_sess, _ = resolve_synth_window(session, days_back=3)
     if purge:
-        purge_recent_buckets(session, days_back=4, scope=scope)
-    stats = synthesize_bars_incremental(session, days_back=3, scope=scope)
+        purge_recent_buckets(session, days_back=4, scope=scope,
+                             since_session=since_sess)
+    stats = synthesize_bars_incremental(session, days_back=3, scope=scope,
+                                        since_session=since_sess)
     return {k: v for k, v in stats.items()}
 
 
