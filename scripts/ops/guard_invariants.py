@@ -7056,11 +7056,20 @@ def _c_l2_fresh(c: Ctx) -> tuple[bool, str, str, str]:
     L2 会**静默滞后**：V5X 拿到过时复权价，而 L0/L1 全部断言仍 PASS。
     这正是用户点名的「L2 新鲜度盲区」。
 
-    判据：口径内主连(*888) 在 l2_adj.bar_60m_ba 的最新桶，与同一组在
-    l1_mkt.bar_60m 的最新桶，交易日口径缺口必须 = 0。BA 由 L1 同轮重建
+    判据：口径内主连(*888) 在 l2_adj.bar_60m_ba 的最新**已收盘**桶，与同一组在
+    l1_mkt.bar_60m 的最新**已收盘**桶，交易日口径缺口必须 = 0。BA 由 L1 同轮重建
     （back_adjusted_rebuild 每日 02:55/11:55/15:55 调 sp_build_l2_back_adjusted），
     正常应同桶；落后 ≥1 个交易日即 FAIL。窗口 14 天 + 口径视图集合，
     依赖 Timescale chunk 剪枝，不碰 l0 大表。
+
+    ★ CL-20261125-03：两侧必须加 ``bucket <= now()`` 排除**未收盘在途桶**。
+    L1 收盘链会提前预建未来标签桶（实测 10:00 / 11:15 / 14:15，14:15 仅 28 品种），
+    这些桶此刻 V5X 根本不会消费——它有 ``cap=now`` + ``complete_max`` + 合法网格
+    标签三重门，只吃已收盘且分钟到齐的 bar。原实现用 ``max(bucket)`` 把在途桶当
+    基准，导致每日 09:10（L1 预建 10:00 桶、BA 停在昨夜 23:00）38 品种全判落后、
+    定点 FAIL；逐品种核对 09:10 前已收盘桶其实 BA 全部覆盖（31 个有桶品种 matched，
+    7 个农产品夜盘不交易两侧都无桶），是**哨兵口径误报**，不是 V5X 读到过时价。
+    若去掉该过滤，误报立刻复发——这是本断言的关键前提，勿删。
     """
     # 逐品种取数（CL-20261111-11 修正粒度）：原实现用聚合 max(bucket) 比对，
     # 37 个品种新鲜、1 个滞后一周仍然 PASS——盲区并未真正闭合。改为逐 symbol。
@@ -7073,12 +7082,14 @@ def _c_l2_fresh(c: Ctx) -> tuple[bool, str, str, str]:
           SELECT b.symbol, max(b.bucket) AS mx
           FROM l1_mkt.bar_60m b JOIN sc ON sc.symbol = b.symbol
           WHERE b.bucket >= now() - interval '14 days'
+            AND b.bucket <= now()   -- CL-20261125-03: 排除未收盘在途桶
           GROUP BY 1
         ),
         ba AS (
           SELECT b.symbol, max(b.bucket) AS mx
           FROM l2_adj.bar_60m_ba b JOIN sc ON sc.symbol = b.symbol
           WHERE b.bucket >= now() - interval '14 days'
+            AND b.bucket <= now()   -- CL-20261125-03: 同上，两侧口径对齐
           GROUP BY 1
         )
         SELECT sc.symbol, l1.mx, ba.mx
