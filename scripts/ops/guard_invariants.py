@@ -8725,6 +8725,68 @@ def _c_5m_sim_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
         ("缺失：" + ",".join(bad) if bad else "")
 
 
+def _c_logger_bound(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261125-01：凡真实调用 logger.xxx(...) 的模块必须绑定 logger。
+
+    生产实证：runner.py:103 的 logger.warning 从未导入 logger，no-fresh 分支
+    每次触发 NameError，five_min_scan 近 24h failed=4。同类问题已在
+    guard_invariants.py(CL-20261124-04) 与此处各出现一次——用 AST 全项目
+    扫描一次性锁死「调用了却没绑定」，且只认真实 Call 节点，不把注释/
+    docstring 里的 `logger.warning` 字样算进来（避免自判 FAIL）。
+    """
+    import ast as _ast
+
+    root = _REPO_ROOT
+    missed: list[str] = []
+    n_calls = 0
+    n_files = 0
+    for sub in ("app", "scripts"):
+        base = root / sub
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            try:
+                tree = _ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:  # noqa: BLE001
+                continue
+            calls = [
+                n for n in _ast.walk(tree)
+                if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute)
+                and isinstance(n.func.value, _ast.Name) and n.func.value.id == "logger"
+            ]
+            if not calls:
+                continue
+            n_files += 1
+            n_calls += len(calls)
+            bound = False
+            for n in _ast.walk(tree):
+                if isinstance(n, _ast.ImportFrom) and any(a.name == "logger" for a in n.names):
+                    bound = True
+                if isinstance(n, _ast.Import) and any(a.asname == "logger" for a in n.names):
+                    bound = True
+                if isinstance(n, _ast.Assign) and any(
+                    isinstance(t, _ast.Name) and t.id == "logger" for t in n.targets
+                ):
+                    bound = True
+                if isinstance(n, _ast.AnnAssign) and isinstance(n.target, _ast.Name) \
+                        and n.target.id == "logger":
+                    bound = True
+            if not bound:
+                missed.append(str(path.relative_to(root)))
+    # runner.py 是本次故障点，额外做精确回归：必须存在绑定且其 no-fresh 分支保留 logger 调用。
+    runner_path = root / "app" / "strategies" / "five_min" / "runner.py"
+    runner_ok = False
+    if runner_path.is_file():
+        src = runner_path.read_text(encoding="utf-8", errors="ignore")
+        runner_ok = ("from app.core.logging import logger" in src
+                     and "logger.warning(" in src)
+    ok = not missed and runner_ok
+    obs = f"logger_calls={n_calls}/files={n_files}/unbound={len(missed)}/runner_ok={runner_ok}"
+    return ok, "所有 logger.xxx 调用模块均绑定 logger", obs, \
+        ("" if ok else "未绑定模块：" + ",".join(missed)
+         + ("；runner.py 导入/调用缺失" if not runner_ok else ""))
+
+
 def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261124-06：5m 离场执行链路两环真实接线（防「建了没人读」）。
 
@@ -8857,6 +8919,8 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("5M-SINGLE-POS", "同一 5m 池最多一笔在场单", "block", _c_5m_single_pos),
     ("5M-RISK-R", "单笔 R=500 / 整数手 / 成本含 mult", "block", _c_5m_risk_r),
     ("5M-SIM-SCAN-WIRED", "5m 模拟盘 sim 端点/作业同源且实盘隔离", "block", _c_5m_sim_scan_wired),
+    # CL-20261125-01：凡调用 logger.xxx 的模块必须绑定 logger（AST 真实调用扫描）。
+    ("OPS-LOGGER-BOUND-WIRED", "logger 调用模块均已绑定 logger", "block", _c_logger_bound),
     # CL-20261124-06：5m 离场执行两环（开仓写计划 + 盘中下 CLOSE）+ 口径/实盘隔离。
     ("5M-EXIT-WIRED", "5m 离场执行两环接线且口径/实盘隔离", "block", _c_5m_exit_wired),
     # CL-20261123-03：成交回报写库——ACK/查单双入口 + 幂等 + 无孤儿成交单。

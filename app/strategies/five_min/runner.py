@@ -19,6 +19,8 @@ from typing import Any, Iterable
 import numpy as np
 from sqlalchemy import text
 
+from app.core.logging import logger  # CL-20261125-01：下方 no-fresh 分支调用 logger.warning
+
 from app.data.bar5m_gate import require_fresh
 from app.strategies.five_min.engine import ExitPlan, lot_size
 from app.strategies.five_min.indicators import DEFAULT_CFG, attach_indicators
