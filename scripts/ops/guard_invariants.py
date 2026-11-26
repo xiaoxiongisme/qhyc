@@ -9027,6 +9027,141 @@ def _c_exec_fill_no_orphan(c: Ctx) -> tuple[bool, str, str, str]:
         ("；".join(bad[:10]) if bad else "")
 
 
+# ------------------------------------------------ CL-20261126-02 合约清单新鲜度
+def _c_universe_not_stale(c: Ctx) -> tuple[bool, str, str, str]:
+    """active 合约清单不得被陈旧批次污染（CL-20261126-02）。
+
+    2026-11-25 22:15 上游快照返回 2024/2025 合约，覆盖正确的 2026 批次；
+    watermarked 归零后单轮采集耗时超过调度间隔，flock 抢锁失败 11 次。
+    这里同时锁三层：DB 中 active 合约近 8 日水位覆盖、``refresh()`` 真实调用
+    闸门且 fail-loud、行为对拍（陈旧拒绝/正常放行）。
+    """
+    problems: list[str] = []
+    seen: list[str] = []
+    try:
+        n_active = int(c.scalar(
+            "SELECT count(*) FROM l3_ref.contract_universe WHERE is_active") or 0)
+        recent = {str(r[0]) for r in c.rows(
+            "SELECT DISTINCT symbol FROM l0_raw.minute_bar "
+            "WHERE layer = 'contract' AND ts >= now() - interval '8 days'")}
+        actives = {str(r[0]) for r in c.rows(
+            "SELECT symbol FROM l3_ref.contract_universe WHERE is_active")}
+    except Exception as exc:  # noqa: BLE001
+        return False, "active 合约多数近8日有水位且 refresh 拒绝陈旧批次", \
+            "查询失败", f"{type(exc).__name__}: {exc}"
+
+    if n_active < 100:
+        problems.append(f"active 仅 {n_active}")
+    cover = len(actives & recent)
+    ratio = cover / n_active if n_active else 0.0
+    if ratio < 0.5:
+        problems.append(f"水位覆盖 {cover}/{n_active}={ratio:.0%}")
+
+    wired, has_gate, has_raise = False, False, False
+    try:
+        import ast  # noqa: PLC0415
+        tree = ast.parse((_REPO_ROOT / "app/ingest/contract_universe.py").read_text(
+            encoding="utf-8", errors="ignore"))
+        fn = next((n for n in tree.body
+                   if isinstance(n, ast.FunctionDef) and n.name == "refresh"), None)
+        if fn is not None:
+            calls = set()
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Call):
+                    if isinstance(n.func, ast.Attribute):
+                        calls.add(n.func.attr)
+                    elif isinstance(n.func, ast.Name):
+                        calls.add(n.func.id)
+            has_gate = "plausible_universe" in calls
+            has_raise = any(isinstance(n, ast.Raise) for n in ast.walk(fn))
+            wired = has_gate and has_raise
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"AST 检查失败 {type(exc).__name__}")
+
+    behavior = False
+    try:
+        from datetime import timezone as _tz  # noqa: PLC0415
+        from app.ingest.contract_universe import plausible_universe  # noqa: PLC0415
+        probe_now = datetime(2026, 11, 26, tzinfo=_tz.utc)
+        stale = [{"symbol": f"A{yy}03"} for yy in (24, 24, 25)] * 40
+        fresh = ([{"symbol": "A2612"}] * 50 + [{"symbol": "A2701"}] * 50)
+        ok_stale, _ = plausible_universe(stale, now=probe_now)
+        ok_fresh, _ = plausible_universe(fresh, now=probe_now)
+        behavior = (not ok_stale) and ok_fresh
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"行为探针失败 {type(exc).__name__}: {exc}")
+
+    if not wired:
+        problems.append(f"refresh 未接闸门(call={has_gate}/raise={has_raise})")
+    if not behavior:
+        problems.append("陈旧批次未被拒绝或正常批次被误拒")
+    seen.append(f"active={n_active} 水位覆盖={cover}/{n_active}({ratio:.0%})")
+    seen.append(f"wired={wired} behavior={behavior}")
+    return not problems, "active 合约多数近8日有水位且 refresh 拒绝陈旧批次", \
+        "; ".join(seen), ("；".join(problems) if problems else "")
+
+
+def _intraday_gap_ok(cont, contract, now, max_gap_min: float = 90.0,
+                     cont_age_max_min: float = 30.0) -> tuple[bool, str]:
+    """采集活跃度内的 contract/continuous 落后判据（纯函数，供行为对拍）。"""
+    if cont is None:
+        return False, "continuous 窗口内无数据"
+    age_min = (now - cont).total_seconds() / 60.0
+    if age_min > cont_age_max_min:
+        return True, f"continuous 已停 {age_min:.0f}min，非活跃窗口"
+    if contract is None:
+        return False, "contract 窗口内无数据"
+    gap_min = (cont - contract).total_seconds() / 60.0
+    if gap_min > max_gap_min:
+        return False, f"contract 落后 continuous {gap_min:.0f}min"
+    return True, f"lag={gap_min:.0f}min"
+
+
+def _c_contract_intraday_fresh(c: Ctx) -> tuple[bool, str, str, str]:
+    """采集时段内 contract 层必须跟平 continuous（CL-20261126-02）。
+
+    ``DATA-L0-LAYERS-FRESH`` 按交易日判 gap=0d，抓不到「同一交易日内 contract
+    停更 11 小时」——11-25 22:03 到 11-26 09:37 实证。本条只在采集时段内
+    判定；连续层自身停超时交由其他守卫，避免重复报红。
+    """
+    try:
+        from app.ingest.trading_window import is_collection_window  # noqa: PLC0415
+        in_window = bool(is_collection_window())
+    except Exception:  # noqa: BLE001  取不到时段判据时不跳过，按 DB 实况判
+        in_window = True
+    if not in_window:
+        return True, "采集时段内 contract 落后 continuous <=90min", \
+            "非采集时段，跳过", ""
+
+    try:
+        now_db = c.scalar("SELECT now()")
+        row = c.rows(
+            "SELECT max(ts) FILTER (WHERE layer='continuous'), "
+            "       max(ts) FILTER (WHERE layer='contract') "
+            "FROM l0_raw.minute_bar WHERE ts >= now() - interval '2 days'")[0]
+        cont, contract = row[0], row[1]
+        task_on = c.scalar(
+            "SELECT enabled FROM ops.scheduled_task WHERE task_id='cron_fetch_1min'")
+    except Exception as exc:  # noqa: BLE001
+        return False, "采集时段内 contract 落后 continuous <=90min", \
+            "查询失败", f"{type(exc).__name__}: {exc}"
+
+    ok, why = _intraday_gap_ok(cont, contract, now_db)
+    problems = [] if ok else [why]
+    base = now_db.replace(minute=0, second=0, microsecond=0)
+    stale_ok, _ = _intraday_gap_ok(base, base - timedelta(minutes=200), base)
+    fresh_ok, _ = _intraday_gap_ok(base, base - timedelta(minutes=30), base)
+    behavior = (not stale_ok) and fresh_ok
+    if not behavior:
+        problems.append("行为对拍失败（陈旧/正常未分开）")
+    if not task_on:
+        problems.append("cron_fetch_1min 字典未启用")
+    observed = (f"continuous={cont} contract={contract} {why}; "
+                f"behavior={behavior}; task_enabled={task_on}")
+    return not problems, "采集时段内 contract 落后 continuous <=90min", observed, \
+        ("；".join(problems) if problems else "")
+
+
 INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261121-04/05/06：5m 策略九条守卫。开关未开时只钉"接线存在+默认兼容"，
     # 真正的行为断言在开关打开后生效；避免研究代码提前污染现网。
@@ -9469,6 +9604,11 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      _c_bs_schema_wired),
     ("BS-ISOLATED-FROM-TRADING", "少数面分区与交易链路硬隔离", "block",
      _c_bs_isolated_from_trading),
+    # CL-20261126-02：上游陈旧合约批次污染清单 → 水位归零 → 采集超时 → flock 假失败。
+    ("L0-UNIVERSE-NOT-STALE", "active 合约清单非陈旧且 refresh 拒绝污染", "block",
+     _c_universe_not_stale),
+    ("DATA-CONTRACT-INTRADAY-FRESH", "采集时段内 contract 跟平 continuous", "block",
+     _c_contract_intraday_fresh),
 ]
 
 
