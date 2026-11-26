@@ -53,9 +53,12 @@ def test_guard_clean_pass():
 
 def test_guard_collapse_is_caught():
     guard = _load("_t_guard_dce2", "scripts/ops/guard_invariants.py")
+    # CL-20261122-04：守卫 SELECT 增列 future_max（共 6 列：d, sym, sl,
+    # prev_sl, future_max, ratio），供交割退场豁免判据使用。fixture 必须同步，
+    # 否则 IndexError。P2705 附反弹值 200792 → 不豁免；PP2701 是暴涨 → 不豁免。
     rows = [
-        (date(2026, 11, 6), "P2705", 11955, 220849, 0.054),
-        (date(2026, 11, 9), "PP2701", 419909, 26249, 15.997),
+        (date(2026, 11, 6), "P2705", 11955, 220849, 200792, 0.054),
+        (date(2026, 11, 9), "PP2701", 419909, 26249, None, 15.997),
     ]
     ok, _, observed, detail = guard._c_mpr_dce_contract_continuity(
         guard.Ctx(session=_S(rows)))

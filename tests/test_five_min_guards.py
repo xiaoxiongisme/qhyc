@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -59,9 +60,23 @@ def test_source_wiring_guards_pass():
 def test_bar_fresh_guard_catches_one_stale_symbol():
     ok, _label, _obs, detail = gi._c_5m_bar_fresh(FakeCtx(rows=[]))
     assert ok and "追平" in _obs
-    stale = [("CU888", None, "2026-11-07 01:00+08", "2026-11-21 14:35+08")]
+    # CL-20261124-02：守卫用 (bk - exp).total_seconds() 区分「在途桶」与真落后，
+    # fixture 必须给 datetime（DB 返回带时区 timestamp），字符串会 TypeError。
+    tz8 = timezone(timedelta(hours=8))
+    stale = [("CU888", None,
+              datetime(2026, 11, 7, 1, 0, tzinfo=tz8),
+              datetime(2026, 11, 21, 14, 35, tzinfo=tz8))]
     ok, _label, obs, detail = gi._c_5m_bar_fresh(FakeCtx(rows=stale))
     assert not ok and "CU888" in detail and "异常 1 个" in obs
+
+
+def test_bar_fresh_guard_tolerates_in_progress_bucket():
+    """在途桶（bar 恰领先已收完桶 300s）是正常中间态，不得误报 block。"""
+    tz8 = timezone(timedelta(hours=8))
+    exp = datetime(2026, 11, 21, 14, 35, tzinfo=tz8)
+    in_progress = [("CU888", None, exp + timedelta(minutes=5), exp)]
+    ok, _label, obs, _detail = gi._c_5m_bar_fresh(FakeCtx(rows=in_progress))
+    assert ok and "在途1" in obs
 
 
 def test_bar_grid_guard_counts_illegal_labels():
@@ -71,7 +86,11 @@ def test_bar_grid_guard_counts_illegal_labels():
 
 
 def test_switched_off_guards_are_default_compatible():
-    c = FakeCtx()
+    # CL-20261123-02：schedule_parity 改为「三处任一有痕迹即要求三处齐全」。
+    # 生产实测 db_job=Y/job_spec=Y/scheduler_fn=Y 且功能开关 off，两项均 PASS。
+    # fixture 必须给一行 DB 作业记录（enabled=0），空 rows 会让守卫如实报
+    # 「三处不齐」——那是夹具失真，不是守卫误报。
+    c = FakeCtx(rows=[(0, "*/5 * * * *")])
     for fn in (gi._c_5m_exec_gate, gi._c_5m_schedule_parity, gi._c_5m_single_pos):
         assert fn(c)[0] is True
 
