@@ -1675,6 +1675,126 @@ def _five_min_scan_job() -> None:
     logger.info(f"[scheduler] 5m sim scan done ready={n_ready} ordered={n_ordered} blocked={n_blocked}")
 
 
+def _five_min_s2_scan_job() -> None:
+    """5m S2 夜盘动能模拟盘扫描（CL-20261128-02）：与白盘扫描**完全独立**的作业。
+
+    与 :func:`_five_min_scan_job` 的差异仅在四处（其余逐字同源）：
+      * 独立开关 ``five_min_s2_sim_enabled``（默认 off）；
+      * 扫描口径 cfg=S2_PRESET / symbols=S2_SYMBOLS（EB 夜盘动能，CL-20261128-01）；
+      * pool_id=5m-s2-sim（与白盘 5m-sim 隔离，离场作业按 plan 的 pool 隔离）；
+      * 幂等信号前缀 ``5M-S2:``（避免与白盘 EB888 信号撞幂等键）。
+
+    安全口径（三重，与白盘作业对称，任一不满足即整轮跳过/fail-loud）：
+      1. ``cfg_feature_switch.five_min_s2_sim_enabled`` 必须 on（默认 off）；
+      2. ``EXECUTION_BROKER`` 必须 sim —— 配置漂移时绝不把模拟单送到真实柜台；
+      3. 交易时段门 + bar_5m 新鲜度门由 scan_once 内部 require_fresh 执行。
+
+    落单复用 :func:`app.api.routers.execution.submit_sim_order` 的**同一实现**——
+    由守卫 5M-S2-SCAN-WIRED 钉住这条同源关系，禁止另起一套落单逻辑。
+    S2 离场复用全局 :func:`_five_min_exit_job`（按 plan 的 pool_id 隔离），不另建。
+    """
+    if not _switch_on("five_min_s2_sim_enabled", "QH_FIVE_MIN_S2_SCAN", default=False):
+        logger.debug("[scheduler] five_min_s2_sim_enabled=off → 跳过 5m S2 模拟盘扫描")
+        return
+    import os
+
+    if str(os.getenv("EXECUTION_BROKER", "sim")).lower() != "sim":
+        logger.exception("[scheduler] EXECUTION_BROKER 非 sim → 拒绝 5m S2 模拟盘扫描")
+        raise RuntimeError("[fail-loud] 5m S2 模拟盘 broker 非 sim")
+
+    from datetime import date
+
+    from app.api.routers.execution import SubmitOrderReq, submit_sim_order
+    from app.execution.schemas import ReverseRequest
+    from app.execution.service import resolve_signal_to_order
+    from app.ingest.trading_window import is_hourly_collection_allowed
+    from app.strategies.five_min.indicators import S2_PRESET, S2_SYMBOLS
+    from app.strategies.five_min.runner import scan_once
+
+    now = datetime.now(_SH_TZ)
+    if not is_hourly_collection_allowed(now):
+        logger.info(f"[scheduler] 5m S2 sim scan {now:%m-%d %H:%M} 非交易时段，跳过")
+        return
+
+    n_ready = n_ordered = n_blocked = 0
+    try:
+        with session_scope() as s:
+            intents = scan_once(s, S2_SYMBOLS, cfg=S2_PRESET, pool_id="5m-s2-sim")
+        for it in intents:
+            if it.get("status") != "READY":
+                n_blocked += 1
+                continue
+            n_ready += 1
+            sym = it["symbol_continuous"]
+            side = int(it["signal"]["side"])
+            direction = "LONG" if side > 0 else "SHORT"
+            rev = ReverseRequest(
+                symbol=sym, trade_date=date.today(), direction=direction,
+                entry_px=float(it["entry_px"]),
+                atr=float(it["atr"]),
+                target_risk=float(it["risk_r"]),
+                price_space="raw",
+            )
+            with session_scope() as s2:
+                order = resolve_signal_to_order(s2, rev)
+            if order.blocking_reasons or not order.real_symbol:
+                n_blocked += 1
+                logger.warning(f"[scheduler] 5m S2 sim {sym} 反解阻断：{order.blocking_reasons[:2]}")
+                continue
+            req = SubmitOrderReq(
+                real_symbol=order.real_symbol,
+                exchange=order.exchange or "",
+                action="OPEN",
+                direction="BUY" if side > 0 else "SELL",
+                price=float(order.price or it["entry_px"]),
+                price_type="LIMIT",
+                price_space="raw",
+                lots=int(order.lots or it["lots"]),
+                symbol_continuous=sym,
+                signal_id=f"5M-S2:{sym}:{it['signal']['dt']}",
+                pool_id="5m-s2-sim",
+                channel="SIM",
+            )
+            res = submit_sim_order(req)
+            if res.get("state") in ("ACK", "DUPLICATE_BLOCKED", "DRY_RUN"):
+                n_ordered += 1
+            else:
+                n_blocked += 1
+            logger.info(f"[scheduler] 5m S2 sim order {sym}→{order.real_symbol} "
+                        f"lots={order.lots} state={res.get('state')} id={res.get('order_id')}")
+            # 写离场计划：口径取意图 exit_plan payload（1R=3ATR / TP=1.5R，
+            # CL-20261128-01）；pool_id=5m-s2-sim 使全局离场作业按池隔离处理。
+            if res.get("state") in ("ACK", "DUPLICATE_BLOCKED"):
+                try:
+                    from app.strategies.five_min.exit_executor import (
+                        build_exit_plan, persist_plan,
+                    )
+                    ep = it.get("exit_plan") or {}
+                    plan = build_exit_plan(
+                        signal_id=f"5M-S2:{sym}:{it['signal']['dt']}",
+                        open_order_id=res.get("order_id"),
+                        symbol_continuous=sym, real_symbol=order.real_symbol,
+                        exchange=order.exchange or "",
+                        direction="LONG" if side > 0 else "SHORT",
+                        lots=int(order.lots or it["lots"]),
+                        entry_px=float(it["entry_px"]),
+                        init_stop=float(ep["init_stop"]), r_unit=float(ep["r_unit"]),
+                        tp_r=float(ep.get("tp2_r") or 1.5),
+                        pool_id="5m-s2-sim",
+                    )
+                    with session_scope() as sp:
+                        pid = persist_plan(sp, plan)
+                    logger.info(f"[scheduler] 5m S2 exit plan sym={sym} "
+                                f"plan_id={pid} tp_px={plan['tp_px']}")
+                except Exception as e:  # noqa: BLE001 —— 建计划失败必须 fail-loud
+                    logger.exception(f"[scheduler] 5m S2 exit plan write failed {sym}: {e}")
+                    raise
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"[scheduler] 5m S2 sim scan failed: {e}")
+        raise
+    logger.info(f"[scheduler] 5m S2 sim scan done ready={n_ready} ordered={n_ordered} blocked={n_blocked}")
+
+
 def _five_min_exit_job() -> None:
     """5m 模拟盘离场扫描（CL-20261124-06，P3 闭环第二环）。
 
@@ -2201,6 +2321,19 @@ def _build_scheduler() -> BlockingScheduler:
         coalesce=True,
     )
     logger.info("[scheduler] registered five_min_scan at :05/:35 (sim only, switch-gated)")
+
+    # 5m S2 夜盘动能模拟盘扫描（CL-20261128-02）：与白盘同节奏 :05/:35，
+    # 内部独立开关 five_min_s2_sim_enabled 控制；默认 off，注册 ≠ 会下单。
+    # 与白盘作业完全独立（symbols/cfg/pool_id/信号前缀均不同），互不串仓。
+    sched.add_job(
+        _five_min_s2_scan_job,
+        trigger=CronTrigger(minute="5,35", timezone=settings.env.TZ),
+        id="five_min_s2_scan",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("[scheduler] registered five_min_s2_scan at :05/:35 (sim, S2, switch-gated)")
 
     # 5m 模拟盘离场扫描（CL-20261124-06）：与 five_min_scan 同节奏 :05/:35，
     # 内部独立开关 five_min_exit_scan_enabled 控制；默认 off，注册 ≠ 会平仓。

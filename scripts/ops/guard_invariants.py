@@ -9019,6 +9019,73 @@ def _c_5m_s2_caliber(c: Ctx) -> tuple[bool, str, str, str]:
         ("缺失/漂移：" + ",".join(bad) if bad else "")
 
 
+def _c_5m_s2_scan_wired(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261128-02：S2 独立扫描作业真接线（防「预设建了没人扫」与「污染白盘」）。
+
+    实证来源：CL-20261128-01@718654d 上线 S2_PRESET 后，生产 _five_min_scan_job
+    仍传 DEFAULT_SYMBOLS + 默认 cfg（白盘两族），S2 从无样本，CL-22-01 P3 无法收口。
+    本守卫钉死 S2 扫描入口是**独立作业**且白盘链路逐位不动：
+      * 三处注册齐：DB task five_min_s2_scan / JobSpec / scheduler 函数；
+      * 作业源码真实调用 scan_once(s, S2_SYMBOLS, cfg=S2_PRESET, pool_id=5m-s2-sim)
+        与 submit_sim_order（同一落单端点，非另起逻辑）；
+      * 独立开关 five_min_s2_sim_enabled 注册且默认 off（去掉 _enabled 后无同名
+        task，规避 CL-06 双开关冲突）；
+      * broker 非 sim fail-loud、夜盘信号前缀 5M-S2: 隔离；
+      * **白盘未被污染**：_five_min_scan_job 仍传 DEFAULT_SYMBOLS、开关名未变。
+    """
+    import ast as _ast
+
+    sched = _5m_src("app", "scheduler.py")
+    jobs = _5m_src("app", "scheduler_jobs.py")
+    checks = {
+        "s2_job_fn": "def _five_min_s2_scan_job(" in sched,
+        "job_spec": 'JobSpec("five_min_s2_scan"' in jobs,
+        "cron_register": 'id="five_min_s2_scan"' in sched,
+        "passes_s2_symbols": "scan_once(s, S2_SYMBOLS, cfg=S2_PRESET, pool_id=\"5m-s2-sim\")" in sched,
+        "imports_s2_preset": "from app.strategies.five_min.indicators import S2_PRESET, S2_SYMBOLS" in sched,
+        "reuses_submit_sim": "submit_sim_order(req)" in sched,
+        "switch_guard": '_switch_on("five_min_s2_sim_enabled"' in sched,
+        "broker_fail_loud": "5m S2 模拟盘 broker 非 sim" in sched,
+        "signal_prefix_isolated": '"signal_id": f"5M-S2:' in sched or 'signal_id=f"5M-S2:' in sched,
+        "pool_isolated": 'pool_id="5m-s2-sim"' in sched,
+        "exit_plan_written": "build_exit_plan(" in sched and 'pool_id="5m-s2-sim"' in sched,
+    }
+    # 白盘作业逐位不动：函数仍在，且仍传 DEFAULT_SYMBOLS（未被改成 S2_SYMBOLS）。
+    checks["white_job_intact"] = "def _five_min_scan_job(" in sched and \
+        "scan_once(s, DEFAULT_SYMBOLS, pool_id=\"5m-sim\")" in sched
+    # AST 级：_five_min_s2_scan_job 函数体内必须真实出现 S2_PRESET/S2_SYMBOLS
+    # 与 submit_sim_order 调用（防注释/字符串糊弄字面匹配）。
+    try:
+        tree = _ast.parse(sched)
+        s2_fn = next((n for n in _ast.walk(tree)
+                      if isinstance(n, _ast.FunctionDef)
+                      and n.name == "_five_min_s2_scan_job"), None)
+        if s2_fn is None:
+            checks["ast_s2_fn"] = False
+            checks["ast_s2_cfg"] = False
+            checks["ast_reuse_endpoint"] = False
+        else:
+            checks["ast_s2_fn"] = True
+            names = {x.id for x in _ast.walk(s2_fn) if isinstance(x, _ast.Name)}
+            checks["ast_s2_cfg"] = "S2_PRESET" in names and "S2_SYMBOLS" in names
+            checks["ast_reuse_endpoint"] = "submit_sim_order" in names
+    except SyntaxError:
+        checks["ast_s2_fn"] = checks["ast_s2_cfg"] = checks["ast_reuse_endpoint"] = False
+    try:
+        sw = c.rows("SELECT enabled FROM cfg_feature_switch "
+                    "WHERE switch_key='five_min_s2_sim_enabled'")
+        checks["switch_registered"] = bool(sw)
+        checks["switch_default_off"] = bool(sw) and not bool(sw[0][0])
+        task = c.rows("SELECT enabled FROM ops.scheduled_task WHERE task_id='five_min_s2_scan'")
+        checks["db_job"] = bool(task)
+    except Exception:  # noqa: BLE001
+        checks["switch_registered"] = checks["switch_default_off"] = checks["db_job"] = False
+    bad = [k for k, v in checks.items() if not v]
+    obs = "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items())
+    return not bad, "5m S2 独立扫描作业真接线且白盘未污染", obs, \
+        ("缺失/漂移：" + ",".join(bad) if bad else "")
+
+
 def _c_exec_fill_writeback_wired(c: Ctx) -> tuple[bool, str, str, str]:
     """CL-20261123-03：成交回报必须在 ACK 与查单**两个入口**都写 execution_fill。
 
@@ -9285,6 +9352,8 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("5M-EXIT-CALIBER", "离场口径 1R=3ATR / TP=1.5R / tp1 禁用（CL-20261128-01）", "block", _c_5m_exit_caliber),
     # CL-20261128-01：S2 幸存结构 opt-in 能力真接线，默认白盘两族不受污染。
     ("5M-S2-CALIBER", "S2口径（EB夜盘动能+1.5R）真接线且默认两族未污染", "block", _c_5m_s2_caliber),
+    # CL-20261128-02：S2 独立扫描入口真接线，白盘扫描链路逐位不动。
+    ("5M-S2-SCAN-WIRED", "5m S2 独立扫描作业真接线且白盘未污染", "block", _c_5m_s2_scan_wired),
     ("5M-LIMIT-ORDER", "限价单 price_type 全链路（API/DB/payload）", "block", _c_5m_limit_order),
     ("5M-EXEC-GATE", "启用时 EXECUTION_ENABLED=1 且 broker 非 sim", "block", _c_5m_exec_gate),
     ("5M-SCHEDULE-PARITY", "5m 扫描作业 DB/代码/函数三处一致", "block", _c_5m_schedule_parity),

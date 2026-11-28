@@ -34,6 +34,8 @@ EXPECTED_KEYS = {
     "5M-EXIT-WIRED",
     # CL-20261128-01：S2 口径（EB夜盘动能+1.5R）真接线
     "5M-S2-CALIBER",
+    # CL-20261128-02：S2 独立扫描入口真接线
+    "5M-S2-SCAN-WIRED",
 }
 
 
@@ -57,6 +59,38 @@ def test_source_wiring_guards_pass():
                gi._c_5m_risk_r, gi._c_5m_limit_order, gi._c_5m_s2_caliber):
         ok, label, obs, detail = fn(c)
         assert ok, f"{label}: {obs} {detail}"
+
+
+def test_s2_scan_wired_guard_passes_with_db_rows():
+    """CL-20261128-02：S2 独立作业守卫需 DB 侧开关/task 行存在才全绿。"""
+    class CtxWithS2Rows(FakeCtx):
+        def rows(self, sql, **params):
+            if "five_min_s2_sim_enabled" in sql:
+                return [(False,)]  # 开关默认 off
+            if "five_min_s2_scan" in sql:
+                return [(True,)]   # task 已登记
+            return []
+
+    ok, label, obs, detail = gi._c_5m_s2_scan_wired(CtxWithS2Rows())
+    assert ok, f"{label}: {obs} {detail}"
+    assert "switch_default_off=Y" in obs
+    assert "white_job_intact=Y" in obs
+    assert "ast_s2_cfg=Y" in obs
+
+
+def test_s2_scan_wired_guard_catches_polluted_white_job():
+    """白盘作业被改成 S2_SYMBOLS 时必须拦截（防污染白盘链路）。"""
+    sched_path = _REPO / "app" / "scheduler.py"
+    orig = sched_path.read_text(encoding="utf-8")
+    try:
+        polluted = orig.replace('scan_once(s, DEFAULT_SYMBOLS, pool_id="5m-sim")',
+                                'scan_once(s, S2_SYMBOLS, cfg=S2_PRESET, pool_id="5m-sim")')
+        assert polluted != orig, "fixture: 未命中白盘 scan_once 调用"
+        sched_path.write_text(polluted, encoding="utf-8")
+        ok, _label, obs, detail = gi._c_5m_s2_scan_wired(FakeCtx())
+        assert not ok and "white_job_intact=N" in obs, f"{obs} {detail}"
+    finally:
+        sched_path.write_text(orig, encoding="utf-8")
 
 
 def test_bar_fresh_guard_catches_one_stale_symbol():
