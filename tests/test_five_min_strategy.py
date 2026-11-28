@@ -89,7 +89,7 @@ def test_engine_replays_single_position_with_correct_caliber():
     assert tr[0]["cost"] == expected_cost
     assert tr[0]["pnl"] == 16 * 10 * 8.0 - expected_cost
     assert tr[0]["exit_plan"]["r_unit"] == 3.0
-    assert tr[0]["exit_plan"]["tp2_r"] == 2.5
+    assert tr[0]["exit_plan"]["tp2_r"] == 1.5  # CL-20261128-01：TP 2.5R→1.5R
     assert tr[0]["exit_plan"]["tp1_r"] is None
     assert summarize(tr)["n"] == 2
 
@@ -123,5 +123,6 @@ def test_cost_scales_with_contract_multiplier():
 
 def test_exit_plan_caliber_guard():
     plan = ExitPlan(entry_px=100.0, side=-1, atr=2.0, lot_size=5)
-    assert plan.r_unit == 6.0 and plan.stop_px == 106.0 and plan.target_px == 85.0
-    assert plan.tp_r == 2.5 and lot_size(500, 2, 10, 3) == 8
+    # CL-20261128-01：TP 1.5R → target_px = 100 - 4.5*2 = 91（原 2.5R 为 85）
+    assert plan.r_unit == 6.0 and plan.stop_px == 106.0 and plan.target_px == 91.0
+    assert plan.tp_r == 1.5 and lot_size(500, 2, 10, 3) == 8

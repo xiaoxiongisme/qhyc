@@ -8,7 +8,7 @@ from app.strategies.five_min.exit_executor import (
 
 
 def _plan(direction="SHORT", entry=4306.0, r=37.57, lots=3):
-    """BU888 空头样例：entry=4306, 1R=3ATR, TP=2.5R。"""
+    """BU888 空头样例：entry=4306, 1R=3ATR, TP=1.5R（CL-20261128-01）。"""
     sign = 1 if direction == "LONG" else -1
     init_stop = entry - sign * r  # 空头 stop 在 entry+r 上方
     return build_exit_plan(
@@ -22,16 +22,17 @@ def _plan(direction="SHORT", entry=4306.0, r=37.57, lots=3):
 def test_build_plan_caliber():
     p = _plan("SHORT")
     assert p["direction"] == "SHORT"
-    assert p["tp_px"] == round(4306.0 - 2.5 * 37.57, 6)  # 空头目标在下方
+    assert p["tp_px"] == round(4306.0 - 1.5 * 37.57, 6)  # 空头目标在下方
     assert p["lots"] == 3
 
 
 def test_build_plan_rejects_bad_tp_r():
-    with pytest.raises(ValueError, match="2.5R"):
+    with pytest.raises(ValueError, match="1.5R"):
         build_exit_plan(
             signal_id="x", open_order_id=1, symbol_continuous="BU888",
             real_symbol="BU2701", exchange="SHFE", direction="SHORT",
-            lots=1, entry_px=100, init_stop=101, r_unit=1, tp_r=2.0)
+            lots=1, entry_px=100, init_stop=101, r_unit=1, tp_r=2.5)  # 旧口径必须被拒
+
 
 
 def test_build_plan_rejects_r_mismatch():
@@ -57,21 +58,23 @@ def test_decide_short_hard_stop():
 
 
 def test_decide_short_tp():
-    # 空头：价格下跌触止盈（entry-2.5r=4212.075）
-    assert decide(_plan(), last_price=4212.07) == "TP"
+    # 空头：价格下跌触止盈（entry-1.5r=4249.645）
+    assert decide(_plan(), last_price=4249.64) == "TP"
     assert decide(_plan(), last_price=4200.0) == "TP"
+    # 旧 2.5R 目标价 4212.07 处早已触发（口径收紧），且中间价位不再误判
+    assert decide(_plan(), last_price=4260.0) is None
 
 
 def test_decide_short_no_trigger():
-    # 区间内不触发
+    # 区间内不触发（1.5R 收紧后 4260 仍属区间）
     assert decide(_plan(), last_price=4280.0) is None
 
 
 def test_decide_long_symmetry():
     p = _plan("LONG", entry=5000.0, r=30.0)
-    # 多头：stop=4970, tp=5075
+    # 多头：stop=4970, tp=5045（1.5R）
     assert decide(p, last_price=4969.0) == "HARD_STOP"
-    assert decide(p, last_price=5076.0) == "TP"
+    assert decide(p, last_price=5046.0) == "TP"
     assert decide(p, last_price=5020.0) is None
 
 

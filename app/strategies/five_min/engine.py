@@ -24,17 +24,20 @@ from app.strategies.five_min.signals import Signal
 
 @dataclass(frozen=True)
 class ExitPlan:
-    """qhyc ``exit_guard`` 口径对齐层：1R ≙ 止损距离 = 3ATR，止盈 = 2.5R。
+    """qhyc ``exit_guard`` 口径对齐层：1R ≙ 止损距离 = 3ATR，止盈 = 1.5R。
 
     ⚠ 不要再把 ``init_stop`` 传成 entry±1ATR：那样 r_unit 会变成 1ATR，
     手数与止盈全错（CL-20261121-04 风险登记）。
+
+    CL-20261128-01：TP 由 2.5R 改为 1.5R（4.5ATR），与全组合五道检验唯一
+    幸存结构 S2（EB 夜盘动能，SL3/TP4.5）口径一致。该裁决经用户拍板。
     """
 
     entry_px: float
     side: int
     atr: float
     sl_atr: float = 3.0
-    tp_atr: float = 7.5
+    tp_atr: float = 4.5
     lot_size: int = 0
 
     @property
@@ -51,7 +54,7 @@ class ExitPlan:
 
     @property
     def tp_r(self) -> float:
-        """7.5ATR / 3ATR = 2.5R（非 exit_guard 默认 tp1_r=1.0）。"""
+        """4.5ATR / 3ATR = 1.5R（CL-20261128-01，非 exit_guard 默认 tp1_r=1.0）。"""
         return self.tp_atr / self.sl_atr
 
     def to_exit_guard_payload(self) -> dict[str, Any]:
@@ -59,7 +62,7 @@ class ExitPlan:
         return {
             "init_stop": round(self.stop_px, 6),
             "r_unit": round(self.r_unit, 6),
-            "tp1_r": None,          # 禁用分批止盈（研究口径是单一 7.5ATR 目标）
+            "tp1_r": None,          # 禁用分批止盈（研究口径是单一 4.5ATR 目标）
             "tp2_r": round(self.tp_r, 6),
             "long": self.side > 0,
         }
@@ -98,6 +101,9 @@ def run_replay(
     atr = ctx["atr"].to_numpy(float)
     dts = list(ctx["dt"]) if "dt" in ctx else [None] * len(ctx)
     sl, tp = float(p["sl_atr"]), float(p["tp_atr"])
+    # CL-20261128-01 · S2 opt-in 限价偏移：默认 0/1 完全保持原行为。
+    limit_off = float(p.get("limit_off_atr", 0.0) or 0.0)
+    limit_wait = max(1, int(p.get("limit_wait", 1) or 1))
     max_bars = p.get("max_bars")
     if max_bars is not None:
         max_bars = int(max_bars)
@@ -118,6 +124,18 @@ def run_replay(
                 fill_px, fill_i = None, None
                 if fill_mode == "next_open":
                     fill_px, fill_i = float(o[i + 1]), i + 1
+                elif limit_off > 0:
+                    # S2 研究口径：L = close - dir*off*ATR，挂 wait 根内触及成交，
+                    # 否则踏空（calc_outcome 同源）。成交价取挂单 L。
+                    limit_px = sig_px - sig.side * limit_off * a
+                    for w in range(1, limit_wait + 1):
+                        j = i + w
+                        if j >= n:
+                            break
+                        touched = l[j] <= limit_px if sig.side > 0 else h[j] >= limit_px
+                        if touched:
+                            fill_px, fill_i = limit_px, j
+                            break
                 else:
                     j = i + 1
                     if l[j] <= sig_px <= h[j]:

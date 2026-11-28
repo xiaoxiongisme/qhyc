@@ -32,6 +32,8 @@ EXPECTED_KEYS = {
     "5M-SINGLE-POS", "5M-RISK-R", "5M-SIM-SCAN-WIRED",
     # CL-20261124-06：离场执行两环守卫
     "5M-EXIT-WIRED",
+    # CL-20261128-01：S2 口径（EB夜盘动能+1.5R）真接线
+    "5M-S2-CALIBER",
 }
 
 
@@ -52,7 +54,7 @@ def test_nine_guards_registered_as_block():
 def test_source_wiring_guards_pass():
     c = FakeCtx()
     for fn in (gi._c_5m_complete_gate, gi._c_5m_exit_caliber,
-               gi._c_5m_risk_r, gi._c_5m_limit_order):
+               gi._c_5m_risk_r, gi._c_5m_limit_order, gi._c_5m_s2_caliber):
         ok, label, obs, detail = fn(c)
         assert ok, f"{label}: {obs} {detail}"
 

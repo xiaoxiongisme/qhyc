@@ -8679,16 +8679,17 @@ def _c_5m_complete_gate(c: Ctx) -> tuple[bool, str, str, str]:
 
 
 def _c_5m_exit_caliber(c: Ctx) -> tuple[bool, str, str, str]:
-    """exit_guard 口径：1R≙3ATR、止盈 2.5R、tp1 禁用、手数用 3ATR 风险。"""
+    """exit_guard 口径：1R≙3ATR、止盈 1.5R（CL-20261128-01）、tp1 禁用、手数用 3ATR 风险。"""
     src = _5m_src("app", "strategies", "five_min", "engine.py")
     checks = {
         "r_unit_3atr": bool(re.search(r"sl_atr\s*\*\s*self\.atr", src)),
-        "tp_2_5r": "tp_atr / self.sl_atr" in src,
+        "tp_atr_4_5": bool(re.search(r"tp_atr\s*:\s*float\s*=\s*4\.5", src)),
+        "tp_1_5r": "tp_atr / self.sl_atr" in src,
         "tp1_disabled": '"tp1_r": None' in src,
         "risk_lots": bool(re.search(r"risk_r\s*/\s*\(sl_atr\s*\*\s*atr\s*\*\s*mult\)", src)),
     }
     bad = [k for k, v in checks.items() if not v]
-    return not bad, "5m 离场口径 1R=3ATR / TP=2.5R / tp1 禁用", \
+    return not bad, "5m 离场口径 1R=3ATR / TP=1.5R / tp1 禁用", \
         "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items()), \
         ("口径漂移：" + ",".join(bad) + " → init_stop 传 1ATR 会让手数/止盈全错" if bad else "")
 
@@ -8916,7 +8917,7 @@ def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
       * 开仓作业落单成功后真实调用 persist_plan 写计划；
       * 离场作业 _five_min_exit_job 存在、DB 任务登记、JobSpec 三处齐；
       * 作业真实调用 exit_executor.decide 与 submit_sim_order(action=CLOSE)；
-      * 口径未污染：exit_executor 固定 tp_r=2.5、tp1/time_stop/trail 置空；
+      * 口径未污染：exit_executor 固定 tp_r=1.5（CL-20261128-01）、tp1/time_stop/trail 置空；
       * 平仓只走 sim（EXECUTION_BROKER 非 sim fail-loud）+ 实盘池闸开关仍 off。
     """
     sched = _5m_src("app", "scheduler.py")
@@ -8947,7 +8948,7 @@ def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
         "action_close": 'action="CLOSE"' in sched,
         "reuses_sim_endpoint": "submit_sim_order(req)" in sched,
         "broker_guard": "EXECUTION_BROKER" in sched and "离场扫描 broker 非 sim" in sched,
-        "caliber_tp_2_5": "abs(float(tp_r) - 2.5)" in executor,
+        "caliber_tp_1_5": "abs(float(tp_r) - 1.5)" in executor,
         "tp1_disabled": '"tp1_px": None' in executor and '"rest_lots": 0' in executor,
         "sim_endpoint_exists": "def submit_sim_order(" in api,
     }
@@ -8973,6 +8974,49 @@ def _c_5m_exit_wired(c: Ctx) -> tuple[bool, str, str, str]:
     obs = "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items())
     return not bad, "5m 离场执行两环接线且口径/实盘隔离", obs, \
         ("缺失：" + ",".join(bad) if bad else "")
+
+
+def _c_5m_s2_caliber(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261128-01：S2 幸存结构口径真接线（防「预设建了没人读/口径漂移」）。
+
+    实证来源：全组合五道检验唯一幸存 S2（combo_final_check.CORE[1]）=
+      EB 夜盘 hist_up010 动能做多 + 日线多 + 高波动门，SL3/TP4.5(1.5R)、限价 off0.3/wait2。
+    真实引用断言（AST 级 + 文字规则）：
+      * indicators 定义 S2_PRESET（MACD12/26、session=night、atr_rank_min=0.7、
+        limit_off=0.3、tp=4.5）且产出 hist_atr_raw/atr_pct_rank/session 三列；
+      * signals 有 hist_momentum 族且 scan_signals 在启用时路由到 _scan_s2；
+      * engine/runner 真实消费 limit_off_atr/limit_wait（限价偏移落成交价）；
+      * 离场 TP 固定 1.5R（engine tp_atr=4.5 + exit_executor tp_r=1.5）；
+      * S2 opt-in：默认 families 不含 hist_momentum（不污染现有白盘两族）。
+    """
+    ind = _5m_src("app", "strategies", "five_min", "indicators.py")
+    sig = _5m_src("app", "strategies", "five_min", "signals.py")
+    eng = _5m_src("app", "strategies", "five_min", "engine.py")
+    runner = _5m_src("app", "strategies", "five_min", "runner.py")
+    executor = _5m_src("app", "strategies", "five_min", "exit_executor.py")
+    checks = {
+        "s2_preset": 'S2_PRESET: dict[str, Any]' in ind,
+        "s2_symbols": 'S2_SYMBOLS: tuple[str, ...] = ("EB888",)' in ind,
+        "macd_12_26": bool(re.search(r'"macd_fast":\s*12,\s*"macd_slow":\s*26', ind)),
+        "session_night": '"session": "night"' in ind,
+        "atr_rank_min_07": '"atr_rank_min": 0.7' in ind,
+        "limit_off_03": '"limit_off_atr": 0.3' in ind,
+        "tp_4_5": '"tp_atr": 4.5' in ind,
+        "col_hist_atr_raw": 'd["hist_atr_raw"]' in ind,
+        "col_atr_rank": 'd["atr_pct_rank"]' in ind,
+        "col_session": 'd["session"]' in ind,
+        "family_hist_momentum": 'family == "hist_momentum"' in sig,
+        "routes_s2": '"hist_momentum" in p["families"]' in sig and "_scan_s2(ctx, p)" in sig,
+        "engine_limit_off": 'limit_off = float(p.get("limit_off_atr"' in eng,
+        "runner_limit_off": 'limit_off = float(p.get("limit_off_atr"' in runner,
+        "tp_1_5_executor": "abs(float(tp_r) - 1.5)" in executor,
+        # 默认两族不被污染：DEFAULT_CFG 的 families 仍是原两族
+        "default_unpolluted": '"families": ("trend_pullback", "macd_cross")' in ind,
+    }
+    bad = [k for k, v in checks.items() if not v]
+    obs = "/".join(f"{k}={'Y' if v else 'N'}" for k, v in checks.items())
+    return not bad, "5m S2 口径（EB夜盘动能+1.5R）真接线且默认两族未污染", obs, \
+        ("缺失/漂移：" + ",".join(bad) if bad else "")
 
 
 def _c_exec_fill_writeback_wired(c: Ctx) -> tuple[bool, str, str, str]:
@@ -9238,7 +9282,9 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     ("5M-BAR-FRESH", "策略池逐品种 bar_5m 追平已收完桶", "block", _c_5m_bar_fresh),
     ("5M-BAR-GRID", "策略池 bar_5m 标签全在合法网格", "block", _c_5m_bar_grid),
     ("5M-COMPLETE-GATE", "完备性门存在且被扫描器真实调用", "block", _c_5m_complete_gate),
-    ("5M-EXIT-CALIBER", "离场口径 1R=3ATR / TP=2.5R / tp1 禁用", "block", _c_5m_exit_caliber),
+    ("5M-EXIT-CALIBER", "离场口径 1R=3ATR / TP=1.5R / tp1 禁用（CL-20261128-01）", "block", _c_5m_exit_caliber),
+    # CL-20261128-01：S2 幸存结构 opt-in 能力真接线，默认白盘两族不受污染。
+    ("5M-S2-CALIBER", "S2口径（EB夜盘动能+1.5R）真接线且默认两族未污染", "block", _c_5m_s2_caliber),
     ("5M-LIMIT-ORDER", "限价单 price_type 全链路（API/DB/payload）", "block", _c_5m_limit_order),
     ("5M-EXEC-GATE", "启用时 EXECUTION_ENABLED=1 且 broker 非 sim", "block", _c_5m_exec_gate),
     ("5M-SCHEDULE-PARITY", "5m 扫描作业 DB/代码/函数三处一致", "block", _c_5m_schedule_parity),

@@ -1643,7 +1643,7 @@ def _five_min_scan_job() -> None:
                         f"lots={order.lots} state={res.get('state')} id={res.get('order_id')}")
             # CL-20261124-06：开仓落单成功后写离场计划（P3 闭环第一环）。
             # 只有真正 ACK/FILLED（或幂等命中已存在的单）才建计划；DRY_RUN 不建，
-            # 避免空计划。口径取意图 exit_plan payload（1R=3ATR / TP=2.5R）。
+            # 避免空计划。口径取意图 exit_plan payload（1R=3ATR / TP=1.5R，CL-20261128-01）。
             if res.get("state") in ("ACK", "DUPLICATE_BLOCKED"):
                 try:
                     from app.strategies.five_min.exit_executor import (
@@ -1659,7 +1659,7 @@ def _five_min_scan_job() -> None:
                         lots=int(order.lots or it["lots"]),
                         entry_px=float(it["entry_px"]),
                         init_stop=float(ep["init_stop"]), r_unit=float(ep["r_unit"]),
-                        tp_r=float(ep.get("tp2_r") or 2.5),
+                        tp_r=float(ep.get("tp2_r") or 1.5),
                         pool_id="5m-sim",
                     )
                     with session_scope() as sp:

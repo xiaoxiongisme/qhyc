@@ -135,6 +135,11 @@ def scan_once(
         if lots < 1:
             continue
         entry_px = float(ctx["close"].to_numpy(float)[s.index])
+        # CL-20261128-01 · S2：限价偏移挂单价 L=close-dir*off*ATR，
+        # 与 study calc_outcome 的成交价口径一致；默认 off=0 时逐字等于 close。
+        limit_off = float(p.get("limit_off_atr", 0.0) or 0.0)
+        if limit_off > 0:
+            entry_px = round(entry_px - s.side * limit_off * a, 6)
         plan = ExitPlan(entry_px, s.side, a, float(p["sl_atr"]), float(p["tp_atr"]), lots)
         intent = {
             "status": "READY", "symbol_continuous": sym, "signal": s.as_dict(),

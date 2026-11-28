@@ -7,7 +7,8 @@
 
 口径纪律（5M-EXIT-CALIBER 守卫钉死，勿引入 V3.4 账户级口径）
 ----------------------------------------------------------
-* 1R = 3ATR（止损距离）；止盈 = 2.5R = 7.5ATR；tp1 禁用；
+* 1R = 3ATR（止损距离）；止盈 = 1.5R = 4.5ATR（CL-20261128-01 用户拍板，
+  与全组合五道检验唯一幸存结构 S2 的 SL3/TP4.5 对齐）；tp1 禁用；
 * 触发二选一：触 init_stop（HARD_STOP）或触 tp_px（TP），**全手数平仓**，不分批、
   不做时间止损/吊灯——那是 V3.4 exit_guard 的默认口径，与本策略研究口径不同，
   混用会污染单一真源。本模块只借 :func:`exit_guard.evaluate` 的三段判定代码，
@@ -43,7 +44,7 @@ def build_exit_plan(
     entry_px: float,
     init_stop: float,
     r_unit: float,
-    tp_r: float = 2.5,
+    tp_r: float = 1.5,
     account: str = "SIM",
     channel: str = "SIM",
     pool_id: str | None = None,
@@ -51,7 +52,7 @@ def build_exit_plan(
     """按 5M-EXIT-CALIBER 构造一份离场计划（纯计算，不落库）。
 
     ``init_stop`` / ``r_unit`` 来自开仓意图的 exit_plan payload（1R=3ATR）；
-    ``tp_r`` 固定 2.5（tp1 禁用）。fail-loud：任何口径非法直接抛错。
+    ``tp_r`` 固定 1.5（CL-20261128-01，tp1 禁用）。fail-loud：任何口径非法直接抛错。
     """
     d = str(direction or "").upper()
     if d not in ("LONG", "SHORT"):
@@ -60,10 +61,10 @@ def build_exit_plan(
         raise ValueError(f"[fail-loud] lots 必须为正，收到 {lots!r}")
     if float(entry_px) <= 0 or float(init_stop) <= 0 or float(r_unit) <= 0:
         raise ValueError("[fail-loud] entry_px/init_stop/r_unit 必须为正")
-    if abs(float(tp_r) - 2.5) > 1e-9:
-        raise ValueError(f"[fail-loud] 5m 止盈口径固定 2.5R，收到 {tp_r!r}")
+    if abs(float(tp_r) - 1.5) > 1e-9:
+        raise ValueError(f"[fail-loud] 5m 止盈口径固定 1.5R，收到 {tp_r!r}")
     sign = 1.0 if d == "LONG" else -1.0
-    tp_px = round(float(entry_px) + sign * 2.5 * float(r_unit), 6)
+    tp_px = round(float(entry_px) + sign * 1.5 * float(r_unit), 6)
     # 自洽校验：init_stop 必须与 entry 相距正好 1R（否则 R 口径被污染）
     if abs(abs(float(entry_px) - float(init_stop)) - float(r_unit)) > max(1e-4, r_unit * 1e-4):
         raise ValueError(
@@ -91,7 +92,7 @@ def build_exit_plan(
 def to_guard_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """把 5m 计划映射成 exit_guard.evaluate 能消费的 plan dict。
 
-    关键：把 tp1 / time_stop / trail 全部置空，只留 HARD_STOP 与 2.5R TP2，
+    关键：把 tp1 / time_stop / trail 全部置空，只留 HARD_STOP 与 1.5R TP2，
     使 evaluate 的返回严格是「二选一、全手数」两条路径之一。
     """
     return {

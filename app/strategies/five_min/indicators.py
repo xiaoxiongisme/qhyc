@@ -17,12 +17,40 @@ import pandas as pd
 
 DEFAULT_CFG: dict[str, Any] = {
     "ema_fast": 21, "ema_slow": 60,
+    # CL-20261128-01：默认（白盘两族）保持 MACD12/27；S2 预设显式用 12/26
+    # 复现研究 labeled_features 口径，互不污染。
     "macd_fast": 12, "macd_slow": 27, "macd_signal": 9,
     "atr_n": 14, "daily_ema_fast": 20, "daily_ema_slow": 60,
     "hist_th": 0.10, "session": (9, 15),
-    "risk_r": 500.0, "sl_atr": 3.0, "tp_atr": 7.5,
+    "risk_r": 500.0, "sl_atr": 3.0, "tp_atr": 4.5,  # CL-20261128-01：TP 2.5R→1.5R
     "families": ("trend_pullback", "macd_cross"),
+    # opt-in S2 能力：默认关闭，仅 S2_PRESET 打开。
+    "atr_rank_min": None,       # >0 时启用 atr_pct_rank 高波动门
+    "limit_off_atr": 0.0,       # >0 时限价单挂 close-dir*off*atr（研究 off=0.3）
+    "limit_wait": 1,            # 限价成交等待根数（研究 wait=2）
 }
+
+# CL-20261128-01 · S2 幸存结构（全组合五道检验唯一通过者）预设。
+# 研究出处：combo_final_check.py CORE[1] + combo_enumerate.build_triggers/build_filters
+#   trigger=hist_up010 (ha>0.10 & pha<=0.10, ha=hist/a14 无方向)
+#   dir_long(daily_dir>0) + sess_night(session=='night') + atr_hi(atr_pct_rank>0.7)
+#   dir=+1, sl=3, tp=4.5, off=0.3, wait=2, H=96
+# 与生产默认白盘两族**隔离**：调用方显式传 cfg=S2_PRESET 才生效。
+# 注意 MACD12/26 是研究 labeled_features 口径；生产 Wilder14 ATR 在 scan 取尾部
+# 1200 根时与研究 ATR 收敛（仅 seed 差异），信号点等价。
+S2_PRESET: dict[str, Any] = {
+    "ema_fast": 21, "ema_slow": 60,
+    "macd_fast": 12, "macd_slow": 26, "macd_signal": 9,
+    "atr_n": 14, "daily_ema_fast": 20, "daily_ema_slow": 60,
+    "hist_th": 0.10, "session": "night",
+    "risk_r": 500.0, "sl_atr": 3.0, "tp_atr": 4.5,
+    "families": ("hist_momentum",),
+    "atr_rank_min": 0.7,
+    "limit_off_atr": 0.3, "limit_wait": 2,
+}
+
+# S2 仅 EB（苯乙烯）；品种门由调用方通过 symbols 参数注入，守卫钉死此常量。
+S2_SYMBOLS: tuple[str, ...] = ("EB888",)
 
 
 def ema(x: np.ndarray, n: int) -> np.ndarray:
@@ -85,6 +113,25 @@ def attach_indicators(bars: pd.DataFrame, daily: pd.DataFrame,
     d["ema_f"], d["ema_s"] = ef, es
     d["dif"], d["dea"], d["hist"] = dif, dea, dif - dea
     d["atr"] = wilder_atr(d["high"].to_numpy(), d["low"].to_numpy(), c, p["atr_n"])
+
+    # CL-20261128-01 · S2 opt-in 特征：均 causal（只用当日及更早 bar）。
+    # session 用研究口径 hour>=20→night / <12→am / 其余→pm（raw_features.py）；
+    # 与 trading_date（夜盘跨零点归前一日）是两套语义，勿混用。
+    hours = pd.to_datetime(d["dt"]).dt.hour.to_numpy()
+    d["session"] = np.where(hours >= 20, "night",
+                            np.where(hours < 12, "am", "pm"))
+    # hist_atr_raw = hist/atr（无方向，研究 labeled_features 口径）；
+    # hist_up010 = 当根 >0.10 且前根 <=0.10。
+    a = d["atr"].to_numpy(float)
+    d["hist_atr_raw"] = d["hist"].to_numpy(float) / np.maximum(a, 1e-9)
+    # atr_pct_rank = 过去 50 根 atr/close 分位（含当根，w<=cur 的比例），
+    # 完全复现 raw_features.build 的 causal 定义。
+    atr_pct = a / np.maximum(c, 1e-9)
+    rank = np.full(len(d), np.nan)
+    for i in range(59, len(d)):
+        w = atr_pct[i - 49:i + 1]
+        rank[i] = float((w <= atr_pct[i]).mean())
+    d["atr_pct_rank"] = rank
 
     if daily is None or daily.empty:
         d["daily_dir"], d["daily_pos"], d["tdate"] = 0, -1, None
