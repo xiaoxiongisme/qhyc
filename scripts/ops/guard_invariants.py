@@ -2791,7 +2791,8 @@ def _c_v5x_snapshot_live_price(c: Ctx) -> tuple[bool, str, str, str]:
       2. **口径隔离**：``stop_real = _cur_stop(eng) - off`` 原样、``bar_last_price``
          对账字段在、展示价字段来自 ``show_price``（真实引用，非字符串碰运气）；
       3. **行为级**：format_snapshot 对 minute 行标注取价来源、对 bar 行不标；
-      4. **文案同源**：brief.py 同步标注，避免两个文案路径口径分叉。
+      4. **文案同源**：CL-20261128-03 起第二条文案路径是 snapshot.format_positions，
+         直接消费 theoretical_positions 的 rows（含展示价/浮亏），不另算现价。
     """
     label = "V5X 快照现价分钟真实价接线且止损/回放口径隔离"
     try:
@@ -2869,15 +2870,131 @@ def _c_v5x_snapshot_live_price(c: Ctx) -> tuple[bool, str, str, str]:
     except Exception as exc:                              # noqa: BLE001
         bad.append(f"format_snapshot 行为检查异常：{type(exc).__name__}: {exc}")
 
-    # 4) 两个文案路径同源标注
-    brief_noted = "现价取分钟实时价" in brief_src and "price_source" in brief_src
-    observed.append(f"brief_noted={brief_noted}")
-    if not brief_noted:
-        bad.append("brief.py 未同步标注现价取价来源")
+    # 4) CL-20261128-03：第二条文案路径改为 snapshot.format_positions，
+    #    直接消费 theoretical_positions 的 rows（show_price 已按分钟价刷新）；
+    #    brief.py 只负责把 rows 传进来，不得自己重算现价。
+    same_source = (
+        "def format_positions(" in snap_src
+        and '"last_price"' not in brief_src
+        and "theoretical_positions" in brief_src
+    )
+    observed.append(f"same_source={same_source}")
+    if not same_source:
+        bad.append("第二条文案路径未复用 theoretical_positions 的展示价（brief.py 可能自行算价）")
 
     return not bad, label, " ".join(observed), (
         "" if not bad else "；".join(bad)
         + "。快照换价若污染止损/回放口径 = 信号链被拖下水（CL-20261124-01）")
+
+
+def _c_v5x_push_trade_only(c: Ctx) -> tuple[bool, str, str, str]:
+    """CL-20261128-03：交易消息只含交易信息，系统状态必须另发一条。
+
+    挡三种复发：① 有人把扫描/覆盖/分批等状态词塞回交易消息；② 交易消息不再带
+    持仓或累计盈亏；③ 累计口径与 2026-11-02 起点漂移（包含 net_yuan 之外字段）。
+    """
+    import ast  # noqa: PLC0415
+    from datetime import date, datetime  # noqa: PLC0415
+
+    label = "V5X 推送分流（交易信息单一消息 / 系统状态独立）"
+    bad: list[str] = []
+    obs: list[str] = []
+    root = Path(__file__).resolve().parents[2]
+    live_src = (root / "app" / "strategies" / "v5x" / "live.py").read_text(
+        encoding="utf-8", errors="ignore")
+    brief_src = (root / "app" / "strategies" / "v5x" / "brief.py").read_text(
+        encoding="utf-8", errors="ignore")
+
+    for needle in ("positions: list[dict] | None = None",
+                   "cumulative: float | None = None",
+                   "交易计划：", "自2026年11月2日以来，累计交易信号盈亏"):
+        if needle not in live_src:
+            bad.append(f"live.py 交易消息缺 {needle}")
+    if '_KIND_TRADE = "v5x_trade"' not in brief_src:
+        bad.append("brief.py 缺独立交易消息去重键")
+    if brief_src.count("send_notify(") < 2:
+        bad.append("brief.py 未分别推送交易/状态两条消息")
+    obs.append(f"send_notify_x{brief_src.count('send_notify(')}")
+
+    try:
+        tree = ast.parse(brief_src)
+        fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        for fn_name, want in (("build_brief", False), ("build_trade_brief", True)):
+            fn = fns.get(fn_name)
+            calls = ({n.func.id for n in ast.walk(fn)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+                     if fn else set())
+            if ("theoretical_positions" in calls) != want:
+                bad.append(f"{fn_name} 的持仓调用接线错误（应为 {want}）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"brief AST 检查异常：{type(exc).__name__}: {exc}")
+
+    try:
+        from app.strategies.v5x import brief as B
+        from app.strategies.v5x import snapshot as S
+        from app.strategies.v5x.live import V5XSignal, format_message
+
+        sig = V5XSignal(symbol="SC2701", action="OPEN", side="LONG",
+                        bar_ts=datetime(2026, 11, 28, 22, 0),
+                        adj_offset=0.0, price_ba=520.0, price_real=520.0,
+                        stop_real=500.0, lots=1.0, etype="bk")
+        pos = [{"symbol": "MA2701", "dir": "LONG", "lots": 1,
+                "stop_real": 2500.0, "unrealized_yuan": 110.0}]
+        _, body = format_message([sig], positions=pos, cumulative=-777.21)
+        for needle in ("当前持仓：", "交易计划：", "MA2701", "SC2701",
+                       "自2026年11月2日以来，累计交易信号盈亏：-777元"):
+            if needle not in body:
+                bad.append(f"交易消息缺 {needle}")
+        banned = ("分钟覆盖", "采集 ", "分批：", "待补发", "下一根收盘", "口径：")
+        for word in banned:
+            if word in body:
+                bad.append(f"交易消息混入系统状态词「{word}」")
+        obs.append("信号消息=交易字段")
+
+        label_dt = datetime(2026, 11, 28, 22, 0)
+        _, sys_body = B.build_brief(None, label_dt, {
+            "scan": {}, "coverage": (0, 0), "symbols": 38})
+        for word in ("当前持仓：", "累计交易信号盈亏"):
+            if word in sys_body:
+                bad.append(f"系统状态消息混入交易字段「{word}」")
+
+        orig_tp, orig_pnl = S.theoretical_positions, S.cumulative_signal_pnl
+        S.theoretical_positions = lambda _s: {"rows": pos}
+        S.cumulative_signal_pnl = lambda _s: -777.21
+        try:
+            _, trade_body = B.build_trade_brief(None, label_dt)
+        finally:
+            S.theoretical_positions, S.cumulative_signal_pnl = orig_tp, orig_pnl
+        for word in ("当前持仓：", "MA2701", "累计交易信号盈亏：-777元"):
+            if word not in trade_body:
+                bad.append(f"交易简报缺 {word}")
+        for word in banned:
+            if word in trade_body:
+                bad.append(f"交易简报混入系统状态词「{word}」")
+        obs.append("简报双消息=分离")
+
+        if S.PNL_SINCE != date(2026, 11, 2):
+            bad.append(f"累计盈亏起点漂移：{S.PNL_SINCE}")
+        sql = S.pnl_since_sql()
+        if "sum(net_yuan)" not in sql or "bar_ts >= :since" not in sql:
+            bad.append("累计盈亏 SQL 口径漂移")
+        class _R:
+            def scalar(self):
+                return 123.45
+        class _FakeSession:
+            def execute(self, _q, p):
+                if p.get("since") != date(2026, 11, 2):
+                    raise AssertionError("起点参数漂移")
+                return _R()
+        if S.cumulative_signal_pnl(_FakeSession()) != 123.45:
+            bad.append("累计盈亏函数未按起点取数")
+        obs.append("累计口径=11-02/net_yuan")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"行为对拍异常：{type(exc).__name__}: {exc}")
+
+    return (not bad), label, " ".join(obs), (
+        "" if not bad else "；".join(bad)
+        + "。交易消息混入状态词会让用户再次忽略关键交易信息（CL-20261128-03）")
 
 
 def _c_v5x_stop_kind(c: Ctx) -> tuple[bool, str, str, str]:
@@ -9599,6 +9716,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
     # CL-20261124-01：现价改取分钟真实价；必须挡住「换价顺手改了止损/回放口径」。
     ("V5X-SNAPSHOT-LIVE-PRICE", "V5X 快照现价分钟价接线且止损/回放口径隔离", "block",
      _c_v5x_snapshot_live_price),
+    # CL-20261128-03：交易消息只含持仓/计划/累计盈亏，系统状态另发一条；
+    # 挡住「状态词回流交易消息」「累计口径漂移到别的起点/字段」两类静默漂移。
+    ("V5X-PUSH-TRADE-ONLY", "V5X 推送分流（交易信息单一消息 / 系统状态独立）", "block",
+     _c_v5x_push_trade_only),
     # CL-20261124-05：离场原因细分。挡住「改 reason 顶替 stop / net 反推吊灯 /
     # 列没加静默丢字段」三种失效——都表现为「照常推送但机制标错」。
     ("V5X-STOP-KIND", "V5X 离场原因细分（吊灯/初始/保本）真实接线", "block",

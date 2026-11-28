@@ -92,15 +92,18 @@ def _next_close_label(label: datetime) -> datetime:
 
 
 def build_brief(session, label: datetime, summary: dict) -> tuple[str, str]:
-    """渲染简报（只读，不推送）。返回 (title, content)。"""
-    from app.strategies.v5x.snapshot import theoretical_positions
+    """渲染**系统状态**消息（只读，不推送）。
 
+    CL-20261128-03：持仓与交易计划已移出本函数，改由 :func:`build_trade_brief`
+    单独发一条交易消息。本函数只保留扫描/覆盖/分批/下一根收盘等运行状态，
+    两者职责严格分离。
+    """
     scan = summary.get("scan") or {}
     cov = summary.get("coverage") or (0, 0)
     n_sym = summary.get("symbols", 0)
 
     lines = [
-        f"## 📊 V5X 收盘简报 {label:%m-%d %H:%M}",
+        f"## 系统状态 {label:%m-%d %H:%M}",
         "",
         f"- 本根收盘链：扫描 **{n_sym}** 个品种，分钟覆盖 {cov[0]}/{cov[1]}，"
         f"采集 {summary.get('attempts', '?')} 轮",
@@ -130,84 +133,155 @@ def build_brief(session, label: datetime, summary: dict) -> tuple[str, str]:
                 f"  · 次批已补发 {len(late)} 批："
                 + "、".join("+".join(b.get("symbols", [])) for b in late[:4])
             )
-    try:
-        snap = theoretical_positions(session)
-        rows = snap.get("rows") or []
-        lines.append(
-            f"- 理论持仓：{len(rows)} 个（多 {snap.get('n_long', 0)} / "
-            f"空 {snap.get('n_short', 0)}），截至 {snap.get('last_bar') or '—'}")
-        if rows:
-            lines.append("")
-            lines.append("### 持仓一览")
-            # CL-20261124-01：现价已改取分钟实时价，明确标注以免误读为 60m 收盘价。
-            minute_rows = [r for r in rows if r.get("price_source") == "minute"]
-            if minute_rows:
-                pts = sorted({r.get("price_ts") for r in minute_rows if r.get("price_ts")})
-                ts_note = f"截至 {pts[-1][11:16]}" if pts else ""
-                lines.append(f"  · 现价取分钟实时价{ts_note}；止损/均价按 60m 桶口径不变")
-            for r in rows[:8]:
-                tag = "保本" if r.get("be_done") else "止损"
-                lines.append(
-                    f"  · {r['symbol']} {'多' if r['dir'] == 'LONG' else '空'} "
-                    f"{r['lots']:g}手 现{r['last_price']:.1f} "
-                    f"({r['unrealized_yuan']:+,.0f}) {tag}{r['stop_real']:.1f}")
-            if len(rows) > 8:
-                lines.append(f"  · …另 {len(rows) - 8} 个略")
-        else:
-            lines.append("  · 当前空仓（按规则无需持有任何品种）")
-        stale = snap.get("stale_days")
-        if stale is not None and stale >= 2:
-            lines.append(f"  · ⚠ 最后一根 bar 已是 {stale} 天前，清单可能过期")
-    except Exception as exc:  # noqa: BLE001 —— 持仓算不出也要让用户知道链路活着
-        logger.warning("[v5x.brief] 理论持仓摘要不可用（降级照推）: {0}: {1}".format(
-            type(exc).__name__, str(exc)[:120]))
-        lines.append("- 理论持仓：暂不可用（重放异常，不影响信号链路）")
-
     lines += [
         "",
         f"> 下一根收盘：{_next_close_label(label):%m-%d %H:%M}",
-        "> 这份是**状态确认**，不是交易信号；V5X 只出信号、不下单、不维护持仓。",
-        "> 口径：V5X.3 · BA 后复权信号 + 真实价反解，t-1 门控。",
+        "> 本条仅为系统运行状态；持仓、交易计划与累计盈亏见单独的「交易信息」消息。",
     ]
-    title = f"[V5X 简报] {label:%m-%d %H:%M} · 无新信号"
+    title = f"[系统状态] {label:%m-%d %H:%M} · 扫描 {n_sym} 品种"
     return title, "\n".join(lines)
+
+
+def build_trade_brief(session, label: datetime) -> tuple[str, str]:
+    """渲染**交易专用**消息（当前持仓 + 交易计划 + 累计信号盈亏）。
+
+    CL-20261128-03：无信号的收盘/整点本来只推状态简报，用户看不到持仓与累计盈亏。
+    这里复用唯一重放路径 :func:`snapshot.theoretical_positions`，与信号消息同一口径；
+    取数失败时照推（持仓标空仓、累计行省略），不拖垮推送链。
+    """
+    from app.strategies.v5x.snapshot import (
+        cumulative_signal_pnl, format_positions, theoretical_positions,
+    )
+
+    rows: list[dict] = []
+    cumulative: float | None = None
+    try:
+        rows = theoretical_positions(session).get("rows") or []
+        cumulative = cumulative_signal_pnl(session)
+    except Exception as exc:  # noqa: BLE001 —— 展示降级，不阻断状态确认
+        logger.warning("[v5x.brief] 交易信息取数不可用（降级照推）: {0}: {1}".format(
+            type(exc).__name__, str(exc)[:120]))
+
+    title = f"[交易信息] {label:%m-%d %H:%M}"
+    lines: list[str] = []
+    lines += format_positions(rows)
+    lines += ["", "交易计划：", "  本时段无新增交易计划"]
+    if cumulative is not None:
+        lines += ["", f"自2026年11月2日以来，累计交易信号盈亏：{cumulative:+,.0f}元。"]
+    return title, "\n".join(lines)
+
+
+#: 交易信息独立去重键（CL-20261128-03）：与状态简报分开，各自送达各自留痕。
+_KIND_TRADE = "v5x_trade"
+
+
+def _trade_seen(key: str) -> bool:
+    """该小时交易信息是否已推过。**表不可用时返回 True（不推）**。"""
+    try:
+        with _engine().connect() as conn:
+            return conn.execute(text(
+                "SELECT 1 FROM ops.notify_dedup "
+                "WHERE kind = :kind AND dedup_key = :k"
+            ), {"kind": _KIND_TRADE, "k": key}).first() is not None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[v5x.brief] 交易去重表不可读（本轮不推）: {0}: {1}".format(
+            type(exc).__name__, str(exc)[:120]))
+        return True
+
+
+def _claim_trade(key: str) -> bool:
+    """送达成功后才写留痕。"""
+    try:
+        with _engine().begin() as conn:
+            conn.execute(text(
+                "INSERT INTO ops.notify_dedup(kind, dedup_key, fingerprint, sent_at) "
+                "VALUES (:kind, :k, 'trade', now()) "
+                "ON CONFLICT (kind, dedup_key) DO NOTHING"
+            ), {"kind": _KIND_TRADE, "k": key})
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[v5x.brief] 交易去重留痕写入失败（不影响本条已送达）: {0}".format(
+            str(exc)[:120]))
+        return False
+
+
+def _signal_pushed_for_hour(session, label: datetime) -> bool:
+    """本小时是否已有信号消息送达——它已带持仓/累计盈亏，避免交易信息重复。"""
+    start = label.replace(minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=1)
+    try:
+        return session.execute(text(
+            "SELECT 1 FROM public.v5x_signal_log "
+            "WHERE source = 'live' AND notify_ok IS TRUE "
+            "  AND bar_ts >= :a AND bar_ts < :b LIMIT 1"
+        ), {"a": start, "b": end}).first() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _push_pair(session, label: datetime, summary: dict, *, kind: str,
+               do_push: bool) -> dict[str, Any]:
+    """同一轮发两条：**交易信息**与**系统状态**；各自去重、各自留痕。"""
+    from app.core.config import get_settings
+    from app.notify import send_notify
+
+    hour_key = label.strftime("%Y-%m-%d %H:00")
+    trade_title, trade_content = build_trade_brief(session, label)
+    sys_title, sys_content = build_brief(session, label, summary)
+    if not do_push:
+        return {"sent": False, "skip": "dry-run", "title": sys_title,
+                "trade_title": trade_title,
+                "content_preview": sys_content[:200]}
+
+    # 备用通道与交易信号共用同一配置项（CL-20261109-06 的教训：漏传 = 单点）。
+    # CL-20261110-06 仍 deferred：用户暂不配 webhook，此处如实传空串。
+    fallback = getattr(get_settings().fusion, "fallback_webhook", "") or ""
+    errors: list[str] = []
+    sent_trade = sent_sys = False
+    via: str = ""
+
+    if _signal_pushed_for_hour(session, label):
+        pass                       # 信号消息已带交易信息
+    elif _trade_seen(hour_key):
+        pass                       # 本小时交易信息已送达
+    else:
+        ok, via_t = send_notify(trade_title, trade_content, fallback)
+        if ok:
+            _claim_trade(hour_key)
+            sent_trade, via = True, via_t
+        else:
+            errors.append(f"交易信息推送失败 via={via_t}")
+
+    if _brief_seen_kind(kind, hour_key):
+        pass
+    else:
+        ok, via_s = send_notify(sys_title, sys_content, fallback)
+        if ok:
+            _claim_brief_kind(kind, hour_key)
+            sent_sys, via = True, via_s
+        else:
+            errors.append(f"系统状态推送失败 via={via_s}")
+
+    if errors:
+        # 不写去重行 → 下一轮可重试；外抛让流水记 failed。
+        raise RuntimeError("；".join(errors) + "（未留痕，下一轮可重试）")
+    if not sent_trade and not sent_sys:
+        return {"sent": False, "skip": "两类消息本小时均已推送", "key": hour_key}
+    logger.info(f"[v5x.brief] {hour_key} 已推送 trade={sent_trade} system={sent_sys} via={via}")
+    return {"sent": True, "via": via, "key": hour_key, "title": sys_title,
+            "trade_sent": sent_trade, "system_sent": sent_sys}
 
 
 def push_close_brief(session, label: datetime, summary: dict,
                      *, do_push: bool = True) -> dict[str, Any]:
-    """收盘链后补一条状态确认。无信号才推；失败外抛。"""
-    from app.core.config import get_settings
+    """收盘链后推两条（交易信息 + 系统状态）；无信号的收盘根才推，失败外抛。"""
     from app.ingest.trading_window import is_hourly_collection_allowed
-    from app.notify import send_notify
 
     if not is_hourly_collection_allowed(label):
         return {"sent": False, "skip": "非交易时段静默"}
     if (summary.get("scan") or {}).get("n_unsent", 0):
-        return {"sent": False, "skip": "本根有待推信号，信号消息即通知"}
-    if _brief_seen(label):
-        return {"sent": False, "skip": "该收盘标签已推过（或去重表不可用）"}
-
-    title, content = build_brief(session, label, summary)
-    if not do_push:
-        return {"sent": False, "skip": "dry-run", "title": title,
-                "content_preview": content[:200]}
-
-    # 备用通道与交易信号共用同一配置项（CL-20261109-06 的教训：漏传 = 单点）。
-    # CL-20261110-06 仍 deferred：用户 22:00 明确暂不配 webhook，此处如实传空串。
-    fallback = getattr(get_settings().fusion, "fallback_webhook", "") or ""
-    ok, via = send_notify(title, content, fallback)
-    if not ok:
-        # 不写去重行 → 下一根收盘链/兜底扫描可重试；外抛让流水记 failed。
-        raise RuntimeError(
-            f"V5X 收盘简报 {label:%m-%d %H:%M} 推送失败（pushplus + fallback "
-            f"均未送达，via={via}）—— CL-20261110-06 单通道问题，未配 webhook")
-    _claim_brief(label)
-    logger.info(f"[v5x.brief] {label:%m-%d %H:%M} 已推送 via={via}")
-    return {"sent": True, "via": via, "key": _key(label), "title": title}
-
-
-#: 每小时简报去重键（与收盘简报 v5x_brief 区分，避免同小时双推）
-_KIND_HOURLY = "v5x_hourly_brief"
+        return {"sent": False, "skip": "本根有待推信号，信号消息即交易信息"}
+    return _push_pair(session, label, summary, kind=_KIND, do_push=do_push)
 
 
 def _brief_seen_kind(kind: str, key: str) -> bool:
@@ -252,44 +326,21 @@ def _close_brief_present_for_hour(session, label: datetime) -> bool:
         return False
 
 
+#: 每小时状态简报去重键（与收盘简报/交易信息区分）
+_KIND_HOURLY = "v5x_hourly_brief"
+
+
 def push_periodic_brief(session, label: datetime, summary: dict,
                         *, do_push: bool = True) -> dict[str, Any]:
-    """每交易小时一条状态确认（CL-20261111-01）。
+    """每交易小时推两条：交易信息（持仓/计划/累计盈亏）+ 系统状态。
 
-    与 ``push_close_brief`` 的区别：不因为「本根有待推信号」而静默——它是独立的
-    心跳类状态确认，保证用户**每个交易小时**都能收到一条「系统活着」的回执，
-    不论该小时有没有信号。收盘简报（无信号收盘根）仍按原设计保留。
-
-    与收盘简报协作去重：若同一小时已经有收盘简报（说明该小时已由更精确的收盘
-    标签覆盖），则不再重复推，避免同小时双推。
+    CL-20261128-03：原来是「一条状态简报塞满采集细节」，现在按用户要求分流。
+    与收盘简报、信号消息的去重仍按小时，避免同小时双推。
     """
-    from app.core.config import get_settings
     from app.ingest.trading_window import is_hourly_collection_allowed
-    from app.notify import send_notify
 
     if not is_hourly_collection_allowed(label):
         return {"sent": False, "skip": "非交易时段静默"}
     if _close_brief_present_for_hour(session, label):
         return {"sent": False, "skip": "同小时收盘简报已覆盖"}
-
-    hour_key = label.strftime("%Y-%m-%d %H:00")
-    if _brief_seen_kind(_KIND_HOURLY, hour_key):
-        return {"sent": False, "skip": "该小时简报已推过（或去重表不可用）"}
-
-    title, content = build_brief(session, label, summary)
-    if not do_push:
-        return {"sent": False, "skip": "dry-run", "title": title,
-                "content_preview": content[:200]}
-
-    # 备用通道与交易信号共用同一配置项（CL-20261109-06 的教训：漏传 = 单点）。
-    # CL-20261110-06 仍 deferred：用户明确暂不配 webhook，此处如实传空串。
-    fallback = getattr(get_settings().fusion, "fallback_webhook", "") or ""
-    ok, via = send_notify(title, content, fallback)
-    if not ok:
-        # 不写去重行 → 下一轮可重试；外抛让流水记 failed。
-        raise RuntimeError(
-            f"V5X 每小时简报 {hour_key} 推送失败（pushplus + fallback 均未送达，"
-            f"via={via}）—— CL-20261110-06 单通道问题，未配 webhook")
-    _claim_brief_kind(_KIND_HOURLY, hour_key)
-    logger.info(f"[v5x.brief] {hour_key} 已推送 via={via}")
-    return {"sent": True, "via": via, "key": hour_key, "title": title}
+    return _push_pair(session, label, summary, kind=_KIND_HOURLY, do_push=do_push)

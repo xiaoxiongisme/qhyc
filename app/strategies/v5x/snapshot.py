@@ -49,7 +49,56 @@ from app.strategies.v5x.live import _load, _replay_orders  # noqa: E402
 from app.strategies.v5x.params import config_from  # noqa: E402
 
 __all__ = ["theoretical_positions", "format_snapshot", "push_snapshot",
-           "latest_real_prices"]
+           "latest_real_prices", "PNL_SINCE", "pnl_since_sql",
+           "cumulative_signal_pnl", "format_positions"]
+
+#: CL-20261128-03：累计交易信号盈亏的统计起点（用户指定 2026-11-02）。
+#: 信号表 live 最早 11-09、replay 补录最早 11-05，取 11-02 才能覆盖整段策略期。
+PNL_SINCE = date(2026, 11, 2)
+
+
+def pnl_since_sql() -> str:
+    """累计盈亏 SQL 的单一真相；守卫用它做源码/行为对拍。"""
+    return (
+        "SELECT coalesce(sum(net_yuan), 0) FROM public.v5x_signal_log "
+        "WHERE bar_ts >= :since"
+    )
+
+
+def cumulative_signal_pnl(session, since: date | None = None) -> float | None:
+    """自 :data:`PNL_SINCE` 起全部交易信号的已实现盈亏（元）。
+
+    ``net_yuan`` 只有 CLOSE 行有值（实测 11-02 以来 33 条 CLOSE：live +965.64、
+    replay -1742.85，合计 -777.21）。**含回放补录**：用户口径是「交易信号」整体，
+    不按 source 拆分；若只算 live 会把 11-05/11-06 那段策略期抹掉。
+
+    查询失败返回 ``None``（文案省略该行），绝不降级成 0 冒充"没赚没亏"。
+    """
+    try:
+        v = session.execute(text(pnl_since_sql()),
+                            {"since": since or PNL_SINCE}).scalar()
+        return float(v or 0.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[v5x.snapshot] 累计信号盈亏查询失败（文案省略该行）: {0}: {1}".format(
+            type(exc).__name__, str(exc)[:120]))
+        return None
+
+
+def format_positions(rows: list[dict], *, max_rows: int = 20) -> list[str]:
+    """渲染用户版持仓清单（只有交易字段，不掺状态/采集信息）。"""
+    lines = ["当前持仓："]
+    if not rows:
+        lines.append("  空仓")
+        return lines
+    for i, r in enumerate(rows[:max_rows], 1):
+        d = "多" if r.get("dir") == "LONG" else "空"
+        lines.append(
+            f"  {i}、{r['symbol']}，方向：{d}，"
+            f"盈亏：{r['unrealized_yuan']:+,.0f}元，"
+            f"止损：{r['stop_real']:.1f}，持仓手数：{r['lots']:g}手")
+    if len(rows) > max_rows:
+        lines.append(f"  …另 {len(rows) - max_rows} 个略")
+    return lines
 
 
 def latest_real_prices(session, symbols: list[str]) -> dict[str, tuple[float, object]]:

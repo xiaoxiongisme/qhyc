@@ -736,16 +736,20 @@ def _apply_v5x_portfolio_brake(session, sigs: list["V5XSignal"]) -> tuple[str, d
 
 
 def format_message(sigs: list[V5XSignal], *, retry: bool = False,
-                   batch: str = "", brake_note: str = "") -> tuple[str, str]:
-    """生成推送标题与正文（价格一律真实合约价，BA 价附在括号里备查）。
+                   batch: str = "", brake_note: str = "",
+                   positions: list[dict] | None = None,
+                   cumulative: float | None = None) -> tuple[str, str]:
+    """生成**交易专用**推送标题与正文（CL-20261128-03）。
+
+    正文只有三段：当前持仓 / 交易计划 / 累计交易信号盈亏。扫描品种数、分钟覆盖、
+    采集轮次、分批与待补发、下一根收盘、口径脚注等**系统状态一律不进这条消息**，
+    由 :mod:`app.strategies.v5x.brief` 另发一条。
 
     Args:
-        retry: 这是「上一轮推送失败后的补发」而非本轮新信号。标题加标记、
-            正文加警示 —— 补发的是旧 bar，价格可能已经不可用，
-            不能让他当成刚出的信号去下单。
-        batch: 批次标签（CL-20261111-10）。用于区分「准点批」与「补发批」，
-            只进标题/正文，**不进 dedupe_key**（dedupe_key 必须全局唯一，
-            带上批次会让同一根 bar 的同一动作被推两次）。
+        positions: 理论持仓行（``theoretical_positions()['rows']``）；None 时不渲染该段，
+            保持纯函数历史调用（守卫/单测）行为不变。
+        cumulative: 自 2026-11-02 起的累计已实现盈亏；None 时省略该行，绝不降级成 0。
+        retry/batch/brake_note: 同旧版 —— 补发警示、批次标签、组合熔断警示。
     """
     n_open = sum(1 for s in sigs if s.action == "OPEN")
     n_close = sum(1 for s in sigs if s.action == "CLOSE")
@@ -754,15 +758,8 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
     btag = f"·{batch}" if batch else ""
     title = f"[V5X{btag}{tag}] {len(sigs)} 条信号（开{n_open}/加{n_add}/平{n_close}）"
 
-    # —— 动作 + 方向 → 中文（用户反馈原英文混排看不懂）——
-    action_cn = {
-        ("OPEN", "LONG"): "开多单",
-        ("OPEN", "SHORT"): "开空单",
-        ("ADD", "LONG"): "加多单",
-        ("ADD", "SHORT"): "加空单",
-        ("CLOSE", "LONG"): "平多单",
-        ("CLOSE", "SHORT"): "平空单",
-    }
+    # CL-20261128-03：动作/方向改为「方向：多/空 + 买入/平仓数量」的行内字段，
+    # 不再用「开多单/平空单」这种需二次翻译的标签（保留下方 reason/stop_kind 映射）。
     reason_cn = {"stop": "止损", "tp": "止盈"}
     # CL-20261124-05：stop 的三条来源必须分开显示，否则盈利锁盈单被误读成亏损止损。
     # 判定来自引擎离场那刻的 stop_kind（真实引用），不靠 net_yuan 反推——
@@ -772,8 +769,6 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
         "be": "保本止损（锁盈）",
         "initial": "初始止损",
     }
-    etype_cn = {"pb": "回踩", "bk": "突破"}
-    icon = {"OPEN": "🚨", "ADD": "➕", "CLOSE": "✅"}
 
     def _bt_str(bt) -> str:
         # 去掉时区后缀，只留本地时间（bar 2026-11-11 10:00:00+08:00 → 2026-11-11 10:00）
@@ -797,58 +792,57 @@ def format_message(sigs: list[V5XSignal], *, retry: bool = False,
             return sym
 
     lines: list[str] = []
+    if positions is not None:
+        from app.strategies.v5x.snapshot import format_positions
+        lines += format_positions(positions)
+        lines.append("")
+
     if brake_note:
-        # 熔断生效必须让用户一眼看到：format_message 只显示手数，
-        # 若不在正文顶部点明，scalar=0 时「手数：0」很容易被当成显示异常忽略。
+        # 熔断生效必须让用户一眼看到：scalar=0 时「数量 0」很容易被当成显示异常。
         lines.append(brake_note)
         lines.append("")
-    for s in sorted(sigs, key=lambda x: (x.action != "OPEN", x.symbol)):
-        label = action_cn.get((s.action, s.side), f"{s.action} {s.side}")
+
+    lines.append("交易计划：")
+    ordered = sorted(sigs, key=lambda x: (x.action != "OPEN", x.symbol))
+    if not ordered:
+        lines.append("  本时段无新增交易计划")
+    for i, s in enumerate(ordered, 1):
         cn = _cn(s.symbol)
-        # 品种中文名直接跟在代码后，一眼可读。
-        # ★ CL-20261112-12：本函数 docstring 一直承诺「BA 价附在括号里备查」，
-        #   但 CL-20261111-05 按用户反馈把 BA 参考价整行删掉后，实现与自身
-        #   文档 / test_v5x_t1_gate 契约脱节。这里恢复成**成交价行内括号备注**：
-        #   真实合约价始终是主价格，BA 价只作对账备查，不能被读成成交价；
-        #   不恢复「后复权参考 + 复权偏移」整行脚注，避免内部口径重新堆满正文。
-        lines.append(f"{icon.get(s.action, '•')} {label} {s.symbol}（{cn}）")
+        dr = "多" if s.side == "LONG" else "空"
+        # BA 价只作对账备查，真实价始终是主价格（CL-20261112-12）。
         try:
-            ba_ref = f"；后复权备查 {s.price_ba:,.2f}"
+            ba_ref = f"（后复权备查 {s.price_ba:,.2f}）"
         except (TypeError, ValueError):  # pragma: no cover - 备注异常不能拖垮推送
             ba_ref = ""
-        lines.append(f"   成交价：{s.price_real:,.2f}（合约价{ba_ref}）")
-        if s.stop_real is not None:
-            lines.append(f"   止损位：{s.stop_real:,.2f}")
+        ts_note = _bt_str(s.bar_ts)
         if s.action == "CLOSE":
             r = reason_cn.get((s.reason or "").lower(), s.reason or "未注明")
-            # 历史行 stop_kind 为空 → 回退原「止损」文案，保持向后兼容；
-            # 新行 stop 且带 kind → 用精确机制标签。
+            # CL-20261124-05：stop 的三种来源必须分开显示，不靠 net 反推。
             if (s.reason or "").lower() == "stop" and s.stop_kind:
                 r = stop_kind_cn.get(s.stop_kind, r)
-            lines.append(f"   离场原因：{r}")
-            # CL-20261112-06 P0-2：平仓手数此前完全不展示，熔断把它清零也无人察觉。
-            lines.append(f"   平仓手数：{s.lots:g}")
-            if s.net_yuan is not None:
-                lines.append(f"   本笔盈亏：{s.net_yuan:+,.0f} 元")
-        elif s.action == "OPEN":
-            lines.append(f"   入场路径：{etype_cn.get(s.etype, s.etype or '未注明')}")
-            lines.append(f"   手数：{s.lots:g}")
-        elif s.action == "ADD":
-            lines.append(f"   手数：{s.lots:g}")
-        lines.append(f"   信号时间：{_bt_str(s.bar_ts)}")
+            pnl = (f"，本笔盈亏：{s.net_yuan:+,.0f}元"
+                   if s.net_yuan is not None else "")
+            lines.append(
+                f"  {i}、{s.symbol}（{cn}），方向：{dr}，"
+                f"平仓点位：{s.price_real:,.2f}{ba_ref}，离场原因：{r}，"
+                f"平仓数量：{s.lots:g}手{pnl}，信号时间：{ts_note}")
+        else:
+            word = {"OPEN": "买入数量", "ADD": "加仓数量"}.get(s.action, "数量")
+            stop = (f"，止损点位：{s.stop_real:,.2f}"
+                    if s.stop_real is not None else "")
+            lines.append(
+                f"  {i}、{s.symbol}（{cn}），方向：{dr}，"
+                f"交易点位：{s.price_real:,.2f}{ba_ref}{stop}，"
+                f"{word}：{s.lots:g}手，信号时间：{ts_note}")
+
     if retry:
         lines.append("")
-        lines.append("⚠️ 补推：以上 bar 的收盘时刻早于本次推送（前一轮推送失败，已自动补发）。"
-                     "价格可能已不可用，请勿直接照此下单。")
-    if batch:
+        lines.append("⚠️ 补推：以上信号来自较早的 bar，价格可能已不可用，请勿直接照此下单。")
+    if cumulative is not None:
         lines.append("")
-        lines.append(f"📦 本批 = {batch}。"
-                     + ("首批为收盘即已就绪的品种；补发批为上游数据晚到、数据到齐后才发出的。"
-                        "补发批的信号在发出时 bar 已收盘一段时间，价格可能已变化。"))
+        lines.append(
+            f"自2026年11月2日以来，累计交易信号盈亏：{cumulative:+,.0f}元。")
     lines.append("")
-    # 口径详情（t-1 门控 / 真实价反解等内部记账口径）仍不写进正文，仅在
-    # v5x_signal_log 留档；但策略标识本身要让用户一眼可见（CL-20261112-12，
-    # test_v5x_t1_gate 的契约），不恢复冗长的「口径：」脚注。
     lines.append("⚠️ V5X.3 只出信号，不下单、不维护持仓；是否交易由你决定。")
     return title, "\n".join(lines)
 
@@ -934,8 +928,22 @@ def run_v5x_scan(session, *, now: datetime | None = None,
             f"如需双通道，在 config 里填企业微信/钉钉/飞书群机器人 URL。")
         _NO_FALLBACK_WARNED = True
 
+    # CL-20261128-03：交易消息带「当前持仓 + 累计信号盈亏」；这两段只作展示，
+    # 取数失败就省略对应行，绝不影响信号落库/送达标记。
+    positions: list[dict] | None = None
+    cumulative: float | None = None
+    try:
+        from app.strategies.v5x.snapshot import cumulative_signal_pnl, theoretical_positions
+
+        positions = (theoretical_positions(session).get("rows") or [])
+        cumulative = cumulative_signal_pnl(session)
+    except Exception as exc:  # noqa: BLE001 —— 展示降级，不阻断交易推送
+        logger.warning(f"[v5x.live] 交易消息持仓/累计盈亏取数失败（省略该段）: "
+                       f"{type(exc).__name__}: {exc}")
+
     title, content = format_message(unsent, retry=retry, batch=batch,
-                                   brake_note=brake_note)
+                                   brake_note=brake_note, positions=positions,
+                                   cumulative=cumulative)
     ok, via = send_notify(title, content, fallback)
     _mark_notify(session, unsent, ok, via)
     session.commit()
