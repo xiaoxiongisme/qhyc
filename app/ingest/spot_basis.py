@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date
 from typing import Any
 
@@ -24,6 +25,48 @@ from app.core import symbol_code as SC
 from app.core.logging import logger
 from app.ingest.blocked_varieties import is_blocked
 from app.models import SpotBasis
+
+
+#: akshare 映射字典未收录的上游新增品种（如「氢氧化锂」）统一占位码。
+#: 该码不在 akshare 的 vars_list 交集里，会被其自身过滤掉，不进入标准化结果。
+_AKSHARE_UNKNOWN_VARIETY_PLACEHOLDER = "__UNMAPPED__"
+
+
+@contextmanager
+def _akshare_unknown_variety_tolerant():
+    """临时容忍 akshare 品种字典缺项（CL-20261127-02）。
+
+    背景：akshare 1.18.94 的 ``_check_information()`` 对页面里每个中文品种调用
+    ``chinese_to_english()``，上游 2026 新增的「氢氧化锂」未收录进
+    ``symbol_var.chinese_list`` → ``chinese_list.index()`` 抛 ``ValueError`` →
+    整个接口重试 5 次后返回 0 行，已上市的 50 个品种一起断供。升到最新 1.20.70
+    仍未补该项，故本地兜底是唯一路径。
+
+    仅在调用期间给映射函数加一层包装：**已知品种行为完全不变**；仅未知品种
+    （``ValueError``/``KeyError``）返回占位码。``finally`` 恢复原函数，不留下
+    全局副作用。对拍实证：补丁后 11-27 采集 50 行、11-26 与库内逐字段逐位吻合。
+    """
+    import akshare.futures.futures_basis as fb  # type: ignore
+    import akshare.futures.symbol_var as sv  # type: ignore
+
+    orig_sv = sv.chinese_to_english
+    orig_fb = fb.chinese_to_english
+
+    def _tolerant(name):
+        try:
+            return orig_sv(name)
+        except (ValueError, KeyError):
+            logger.warning(
+                f"[spot_basis] akshare 品种字典未收录 {name!r}，占位跳过（CL-20261127-02）")
+            return _AKSHARE_UNKNOWN_VARIETY_PLACEHOLDER
+
+    sv.chinese_to_english = _tolerant
+    fb.chinese_to_english = _tolerant
+    try:
+        yield
+    finally:
+        sv.chinese_to_english = orig_sv
+        fb.chinese_to_english = orig_fb
 
 
 def _norm_contract(v, ref: date) -> str | None:
@@ -91,11 +134,13 @@ def fetch_spot_basis(
     }
     if products:
         args["vars_list"] = products
-    try:
-        df = ak.futures_spot_price_daily(**args)
-    except Exception as e:
-        logger.warning(f"[spot_basis] 接口失败: {e}")
-        return []
+    # CL-20261127-02：包一层未知品种兜底，已知品种行为不变，退出后恢复原函数。
+    with _akshare_unknown_variety_tolerant():
+        try:
+            df = ak.futures_spot_price_daily(**args)
+        except Exception as e:
+            logger.warning(f"[spot_basis] 接口失败: {e}")
+            return []
     if df is None or df.empty:
         return []
     rows: list[dict] = []

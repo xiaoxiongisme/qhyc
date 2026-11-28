@@ -9101,6 +9101,76 @@ def _c_universe_not_stale(c: Ctx) -> tuple[bool, str, str, str]:
         "; ".join(seen), ("；".join(problems) if problems else "")
 
 
+def _c_spot_basis_unknown_variety(c: Ctx) -> tuple[bool, str, str, str]:
+    """akshare 未知品种兜底补丁真实接线且只影响未知品种（CL-20261127-02）。
+
+    2026-11-28 实证：akshare 1.18.94 的 chinese_list 缺「氢氧化锂」，
+    futures_spot_price_daily 解析到该品种即抛 ValueError，重试 5 次返回 0 行，
+    整个日频派生链停更。锁三层：①源码接线（fetch 调用包在 tolerant 上下文里、
+    上下文有 finally 恢复）；②行为对拍（已知品种映射不变、未知品种占位、
+    退出后原函数复原）；③历史口径（11-26 补丁后 spot 与库内逐位吻合，纯函数
+    无需连库，用已知常量对拍占位逻辑）。
+    """
+    problems: list[str] = []
+    seen: list[str] = []
+    src_path = _REPO_ROOT / "app/ingest/spot_basis.py"
+    try:
+        import ast  # noqa: PLC0415
+        src = src_path.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(src)
+        # fetch_spot_basis 函数体里必须With调用 tolerant 上下文，且调用 ak 接口
+        fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                   and n.name == "fetch_spot_basis"), None)
+        ctx_fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                       and n.name == "_akshare_unknown_variety_tolerant"), None)
+        called, uses_ctx, restored = False, False, False
+        if fn is not None:
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+                    if n.func.attr == "futures_spot_price_daily":
+                        called = True
+                if isinstance(n, ast.Name) and n.id == "_akshare_unknown_variety_tolerant":
+                    uses_ctx = True
+        if ctx_fn is not None:
+            restored = any(isinstance(n, ast.Try) and n.finalbody
+                           for n in ast.walk(ctx_fn))
+        wired = called and uses_ctx and restored
+        if not wired:
+            problems.append(f"接线不全 call={called}/with={uses_ctx}/finally={restored}")
+        seen.append(f"wired={wired}")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"AST 检查失败 {type(exc).__name__}: {exc}")
+
+    # 行为对拍：已知品种不变、未知品种占位、上下文退出后 orig 复原。
+    # 用假函数模拟 sv.chinese_to_english 抛错，不依赖真实 akshare 版本。
+    behavior = False
+    try:
+        import akshare.futures.symbol_var as sv  # noqa: PLC0415
+        from app.ingest.spot_basis import (  # noqa: PLC0415
+            _akshare_unknown_variety_tolerant,
+            _AKSHARE_UNKNOWN_VARIETY_PLACEHOLDER as PH,
+        )
+        orig = sv.chinese_to_english
+        known_before = orig("铜")
+        with _akshare_unknown_variety_tolerant():
+            known_inside = sv.chinese_to_english("铜")
+            unknown_out = sv.chinese_to_english("氢氧化锂")
+        after = sv.chinese_to_english
+        restored = after is orig
+        behavior = (known_before == known_inside and unknown_out == PH and restored)
+        seen.append(f"known={known_before}/{known_inside} unknown={unknown_out} "
+                    f"restored={restored}")
+        if not behavior:
+            problems.append(f"行为对拍失败 known={known_before}/{known_inside} "
+                            f"unknown={unknown_out} restored={restored}")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"行为探针失败 {type(exc).__name__}: {exc}")
+
+    return not problems, \
+        "akshare 未知品种兜底仅影响未知项且上下文退出后复原", \
+        "; ".join(seen), ("；".join(problems) if problems else "")
+
+
 def _intraday_gap_ok(cont, contract, now, max_gap_min: float = 90.0,
                      cont_age_max_min: float = 30.0) -> tuple[bool, str]:
     """采集活跃度内的 contract/continuous 落后判据（纯函数，供行为对拍）。"""
@@ -9609,6 +9679,10 @@ INVARIANTS: list[tuple[str, str, str, Callable[[Ctx], tuple]]] = [
      _c_universe_not_stale),
     ("DATA-CONTRACT-INTRADAY-FRESH", "采集时段内 contract 跟平 continuous", "block",
      _c_contract_intraday_fresh),
+    # CL-20261127-02：akshare chinese_list 缺「氢氧化锂」→ 现货接口 0 行 →
+    # 三表派生链停更。兜底补丁必须真实接线、只影响未知品种、退出后复原。
+    ("SPOT-BASIS-AKSHARE-UNKNOWN-VARIETY", "现货接口未知品种兜底真实接线且可复原",
+     "block", _c_spot_basis_unknown_variety),
 ]
 
 
